@@ -1,0 +1,28 @@
+{
+  "runs": 2,
+  "graded_runs": 2,
+  "strict_successes": 0,
+  "strict_success_rate": 0.0,
+  "total_cost_usd": null,
+  "cost_per_success_usd": null,
+  "unknown_cost_runs": 2,
+  "false_completion_rate": null,
+  "tasks_with_false_completion": 0.0,
+  "constraint_violations": 0,
+  "duplicate_writes": 0,
+  "latency_s": {
+    "failed": {
+      "p50": 174.31331631250214,
+      "p95": 254.08060144368793
+    }
+  },
+  "mean_atomic_actions": 36.5,
+  "planner_calls": 4,
+  "scope": "Exactly two custom BrowserGym long tasks; not public benchmark scores. Code changed between attempts.",
+  "reports": [
+    "runs/pilot-jev-gym-01/catalog-24-0/report.json",
+    "runs/pilot-jev-gym-02/catalog-32-0/report.json"
+  ],
+  "known_input_tokens": 629988,
+  "known_output_tokens": 83011
+}

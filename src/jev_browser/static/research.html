@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="demo-token" content="__TOKEN__"><title>Jev LongSeq · Autoresearch</title>
+  <link rel="stylesheet" href="/research.css"><script src="/research.js" defer></script>
+</head>
+<body>
+<header><a class="brand" href="/research">Jev <span>LongSeq</span><b>/</b> Autoresearch</a><nav aria-label="主导航"><a href="/">Trace Studio ↗</a><span class="local">LOCAL RESEARCH</span></nav></header>
+<main>
+  <section class="intro"><div><p class="eyebrow">BENCHMARK → OBSERVE → IMPROVE</p><h1>每次改进，都经过对照。</h1><p>Codex 研究策略，DeepSeek + Jev 执行任务。以正确完成为前提，减少耗时与 tokens。</p></div><button id="start" class="primary">启动两轮研究 <span>↗</span></button></section>
+  <p id="request-status" role="status" aria-live="polite"></p><p id="error" role="alert" hidden></p>
+  <div class="layout">
+    <aside class="sidebar"><div class="section-label"><h2>研究记录</h2><button id="refresh" class="quiet">刷新</button></div><div id="studies"><p class="muted">正在读取研究记录…</p></div><div class="scope"><span class="eyebrow">THIS EXPERIMENT</span><h3>小规模，成对比较</h3><p id="scope-trials">2 个任务 × 2 轮配置<br>基线 → 分析 → 候选</p><p id="scope-budget">每任务最多 5 分钟<br>研究预算 60 万 tokens</p></div></aside>
+    <div class="content">
+      <section id="empty" class="panel empty"><span class="eyebrow">READY WHEN YOU ARE</span><h2>尚无研究记录</h2><p>启动后先检查公共网页与数据，再依次运行两个任务。所有失败与用量都会留在记录中。</p></section>
+      <div id="study" hidden>
+        <section class="panel study-head"><div><p id="study-id" class="eyebrow"></p><h2 id="study-title">WebArena · 两任务对照</h2><p id="model-line" class="muted"></p></div><span id="badge" class="badge"></span></section>
+        <section id="notice" class="notice" hidden><div><strong id="notice-title"></strong><p id="notice-text"></p><div id="missing" class="tags"></div></div><button id="retry" hidden>重试环境检查</button></section>
+        <section class="metrics" aria-label="研究指标">
+          <div><span>保留配置 · 完成任务</span><strong id="success">—</strong><small id="quality-note">等待独立判分</small></div>
+          <div><span>已完成轮次</span><strong id="trials-count">0 / 2</strong><small id="trial-note">基线 + 一个候选</small></div>
+          <div><span>已知 tokens · 全研究</span><strong id="tokens">0</strong><small id="token-note">DS / Jev / Codex</small></div>
+          <div><span>研究活跃时间</span><strong id="elapsed">—</strong><small id="call-note">暂无模型调用</small></div>
+        </section>
+        <ol id="pipeline" class="pipeline" aria-label="研究阶段"></ol>
+        <section class="panel"><div class="section-label"><div><p class="eyebrow">THE BENCHMARK</p><h2>两个跨页聚合任务</h2></div><span id="benchmark-label" class="muted">公共网页 · 独立判分</span></div><div id="tasks" class="task-cards"></div><p id="benchmark-scope" class="footnote"></p></section>
+        <section class="panel"><div class="section-label"><div><p class="eyebrow">PAIRED RUNS</p><h2>运行与结果</h2></div><span id="comparison-note" class="muted">同任务 · 同模型 · 同预算</span></div><div id="runs"></div></section>
+        <div class="bottom-grid">
+          <section class="panel"><p class="eyebrow">WHAT CHANGED</p><h2>改进记录</h2><div id="improvements"></div></section>
+          <section class="panel"><p class="eyebrow">CURRENT INCUMBENT</p><h2>当前保留配置</h2><dl id="profile" class="profile"></dl><p id="profile-note" class="footnote"></p><hr><h3>研究分析开销</h3><p id="research-usage" class="muted"></p><p class="footnote">Codex 订阅费用不折算成美元。失败调用与未知用量单独记录。</p></section>
+        </div>
+        <section id="preview" class="panel" hidden><div class="section-label"><h2>当前任务画面</h2><a id="trace-link" href="/">查看完整 trace ↗</a></div><img id="preview-image" alt="任务当前浏览器画面"><p id="preview-note" class="footnote"></p></section>
+        <details class="panel"><summary>研究设置与原始状态</summary><pre id="raw"></pre></details>
+      </div>
+    </div>
+  </div>
+  <footer>Jev LongSeq · 本地研究工作台 <span id="updated" role="status">每 2 秒更新</span></footer>
+</main>
+</body></html>

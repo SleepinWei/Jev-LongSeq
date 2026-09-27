@@ -1,0 +1,340 @@
+{
+  "before": {
+    "artifact_directory": "/Users/octopus/Documents/CodeProjects/Jev-LongSeq/runs/pilot-jev-gym-02/catalog-32-0",
+    "result": {
+      "task_id": "catalog-32",
+      "status": "failed",
+      "reason": "ValidationError: 1 validation error for Plan\ntype\n  Extra inputs are not permitted [type=extra_forbidden, input_value='json_object', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v",
+      "actions": 68,
+      "cycles": 70,
+      "planner_calls": 3,
+      "elapsed_s": 260.61084120802116,
+      "false_completions": 0,
+      "finish_requests": 0,
+      "grounding_rejections": 0,
+      "violations": [],
+      "subtask_lengths": [],
+      "strict_success": false
+    },
+    "grade": {
+      "expected": [
+        "item-001",
+        "item-004",
+        "item-009",
+        "item-014",
+        "item-016",
+        "item-021",
+        "item-026"
+      ],
+      "actual": [
+        "item-001"
+      ],
+      "duplicates": 0,
+      "violations": 0,
+      "visited": [
+        "item-001",
+        "item-002"
+      ],
+      "strict_success": false
+    },
+    "end_to_end_s": 262.9436331249308,
+    "reference_actions": 115,
+    "http": {
+      "jev": {
+        "attempts": 67,
+        "http_success": 67,
+        "known_input_tokens": 542018,
+        "known_output_tokens": 6337,
+        "unknown_usage_attempts": 0,
+        "latency_s": 27.591422792058438,
+        "requested_models": [
+          "jev-latest"
+        ],
+        "resolved_models": [
+          "jev-1.13.0"
+        ]
+      },
+      "planner": {
+        "attempts": 4,
+        "http_success": 3,
+        "known_input_tokens": 56052,
+        "known_output_tokens": 57449,
+        "unknown_usage_attempts": 1,
+        "latency_s": 187.63624824990984,
+        "requested_models": [
+          "deepseek-flash"
+        ],
+        "resolved_models": [
+          "deepseek-flash"
+        ]
+      }
+    },
+    "known_input_tokens": 598070,
+    "known_output_tokens": 63786,
+    "cost_usd": null,
+    "code_hash": "dce7b9acea379eb3e4d7bd292aebfe1c712ebc1075a08e67683155ce5f3754cd",
+    "fixture_hash": "5d9a7d3976e904e436aeec481fc65c2bf1fdbf14ac19fae3dc2842b3271c6c08",
+    "task_hash": "f1eea878d50217fd4056c5bed80354d3355b27ce04876106fd38bce424c695b4",
+    "recorded_entities": 1,
+    "auto_captures": 0,
+    "confirmed_writes": 1,
+    "replan_reasons": [],
+    "item002_policy_choices": {
+      "Back | ": 31
+    },
+    "operation_counts": {
+      "click": 67,
+      "extract_visible": 1
+    },
+    "logged_invalid_plan_count": 0
+  },
+  "recovery_connection_failure": {
+    "artifact_directory": "/Users/octopus/Documents/CodeProjects/Jev-LongSeq/runs/pilot-jev-gym-03-recovery/catalog-32-0",
+    "result": {
+      "task_id": "catalog-32",
+      "status": "failed",
+      "reason": "ConnectError: ",
+      "actions": 0,
+      "cycles": 1,
+      "planner_calls": 1,
+      "elapsed_s": 16.66157579096034,
+      "false_completions": 0,
+      "finish_requests": 0,
+      "grounding_rejections": 0,
+      "violations": [],
+      "subtask_lengths": [],
+      "strict_success": false
+    },
+    "grade": {
+      "expected": [
+        "item-001",
+        "item-004",
+        "item-009",
+        "item-014",
+        "item-016",
+        "item-021",
+        "item-026"
+      ],
+      "actual": [],
+      "duplicates": 0,
+      "violations": 0,
+      "visited": [],
+      "strict_success": false
+    },
+    "end_to_end_s": 18.859094916959293,
+    "reference_actions": 115,
+    "http": {
+      "planner": {
+        "attempts": 3,
+        "http_success": 0,
+        "known_input_tokens": 0,
+        "known_output_tokens": 0,
+        "unknown_usage_attempts": 3,
+        "latency_s": 16.561849373974837,
+        "requested_models": [
+          "deepseek-flash"
+        ],
+        "resolved_models": []
+      }
+    },
+    "known_input_tokens": 0,
+    "known_output_tokens": 0,
+    "cost_usd": null,
+    "code_hash": "9361bff4db2c55b63cbef8e80c5edca29a288824bf0787297be88f41611386d2",
+    "fixture_hash": "5d9a7d3976e904e436aeec481fc65c2bf1fdbf14ac19fae3dc2842b3271c6c08",
+    "task_hash": "4ca835c6326eefaf963334b3d61c3020f8c307db5680b2067e8551ddae26806c",
+    "recorded_entities": 0,
+    "auto_captures": 0,
+    "confirmed_writes": 0,
+    "replan_reasons": [
+      "initial"
+    ],
+    "item002_policy_choices": {},
+    "operation_counts": {},
+    "logged_invalid_plan_count": 0
+  },
+  "recovery_success": {
+    "artifact_directory": "/Users/octopus/Documents/CodeProjects/Jev-LongSeq/runs/pilot-jev-gym-04-recovery/catalog-32-0",
+    "result": {
+      "task_id": "catalog-32",
+      "status": "success",
+      "reason": "all trusted success predicates verified",
+      "actions": 116,
+      "cycles": 117,
+      "planner_calls": 2,
+      "elapsed_s": 192.27628137508873,
+      "false_completions": 0,
+      "finish_requests": 1,
+      "grounding_rejections": 0,
+      "violations": [],
+      "subtask_lengths": [
+        4,
+        3,
+        3,
+        5,
+        3,
+        4,
+        3,
+        3,
+        5,
+        3,
+        4,
+        3,
+        3,
+        5,
+        3,
+        6,
+        3,
+        3,
+        3,
+        3,
+        6,
+        3,
+        3,
+        3,
+        3,
+        6,
+        3,
+        3,
+        3,
+        3,
+        4,
+        3
+      ],
+      "strict_success": true
+    },
+    "grade": {
+      "expected": [
+        "item-001",
+        "item-004",
+        "item-009",
+        "item-014",
+        "item-016",
+        "item-021",
+        "item-026"
+      ],
+      "actual": [
+        "item-001",
+        "item-004",
+        "item-009",
+        "item-014",
+        "item-016",
+        "item-021",
+        "item-026"
+      ],
+      "duplicates": 0,
+      "violations": 0,
+      "visited": [
+        "item-001",
+        "item-002",
+        "item-003",
+        "item-004",
+        "item-005",
+        "item-006",
+        "item-007",
+        "item-008",
+        "item-009",
+        "item-010",
+        "item-011",
+        "item-012",
+        "item-013",
+        "item-014",
+        "item-015",
+        "item-016",
+        "item-017",
+        "item-018",
+        "item-019",
+        "item-020",
+        "item-021",
+        "item-022",
+        "item-023",
+        "item-024",
+        "item-025",
+        "item-026",
+        "item-027",
+        "item-028",
+        "item-029",
+        "item-030",
+        "item-031",
+        "item-032"
+      ],
+      "strict_success": true
+    },
+    "end_to_end_s": 194.66561483300757,
+    "reference_actions": 115,
+    "http": {
+      "jev": {
+        "attempts": 79,
+        "http_success": 78,
+        "known_input_tokens": 689270,
+        "known_output_tokens": 7858,
+        "unknown_usage_attempts": 1,
+        "latency_s": 37.104763709008694,
+        "requested_models": [
+          "jev-latest"
+        ],
+        "resolved_models": [
+          "jev-1.13.0"
+        ]
+      },
+      "planner": {
+        "attempts": 1,
+        "http_success": 1,
+        "known_input_tokens": 35174,
+        "known_output_tokens": 19192,
+        "unknown_usage_attempts": 0,
+        "latency_s": 57.679476041928865,
+        "requested_models": [
+          "deepseek-flash"
+        ],
+        "resolved_models": [
+          "deepseek-flash"
+        ]
+      },
+      "planner_repair": {
+        "attempts": 1,
+        "http_success": 1,
+        "known_input_tokens": 39625,
+        "known_output_tokens": 17458,
+        "unknown_usage_attempts": 0,
+        "latency_s": 44.324670500005595,
+        "requested_models": [
+          "deepseek-flash"
+        ],
+        "resolved_models": [
+          "deepseek-flash"
+        ]
+      }
+    },
+    "known_input_tokens": 764069,
+    "known_output_tokens": 44508,
+    "cost_usd": null,
+    "code_hash": "9361bff4db2c55b63cbef8e80c5edca29a288824bf0787297be88f41611386d2",
+    "fixture_hash": "5d9a7d3976e904e436aeec481fc65c2bf1fdbf14ac19fae3dc2842b3271c6c08",
+    "task_hash": "4ca835c6326eefaf963334b3d61c3020f8c307db5680b2067e8551ddae26806c",
+    "recorded_entities": 32,
+    "auto_captures": 32,
+    "confirmed_writes": 7,
+    "replan_reasons": [
+      "initial"
+    ],
+    "item002_policy_choices": {
+      "Back | ": 1
+    },
+    "operation_counts": {
+      "click": 77,
+      "extract_visible": 39
+    },
+    "logged_invalid_plan_count": 1
+  },
+  "scope": "One 32-record task configuration; two post-fix attempts, including a zero-action connection failure. Custom BrowserGym catalog, not public benchmark scores; no aggregate capability estimate.",
+  "post_fix_attempts": {
+    "count": 2,
+    "strict_successes": 1,
+    "total_end_to_end_s": 213.52470974996686,
+    "known_input_tokens": 764069,
+    "known_output_tokens": 44508,
+    "unknown_usage_attempts": 4,
+    "total_cost_usd": null
+  }
+}

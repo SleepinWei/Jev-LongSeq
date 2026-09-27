@@ -1,0 +1,6 @@
+[
+  {"confidence": 0.9, "success": true},
+  {"confidence": 0.7, "success": false},
+  {"confidence": 0.4, "success": true},
+  {"confidence": 0.2, "success": false}
+]

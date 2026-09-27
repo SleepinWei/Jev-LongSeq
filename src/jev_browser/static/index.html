@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="demo-token" content="__TOKEN__">
+  <title>Jev LongSeq · Trace Studio</title>
+  <link rel="stylesheet" href="/ultrafast.css"><link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header><a href="/" class="brand">Jev <span>LongSeq</span><i>/</i> Trace Studio</a>
+    <a class="button" href="/research">Autoresearch ↗</a><div class="local"><span class="dot"></span> LOCAL INSPECTOR</div></header>
+  <main>
+    <section class="intro"><div><p class="eyebrow">OBSERVE → PLAN → ACT → VERIFY</p>
+      <h1>输入任务，看见每一步。</h1>
+      <p>用 prompt 运行样例，实时查看浏览器画面、模型选择与执行结果。</p></div>
+      <button id="demo">运行规则演示</button></section>
+    <form id="prompt-form" class="prompt-panel">
+      <div class="prompt-options">
+        <label for="scenario">运行环境 <select id="scenario"><option value="web" selected>网页任务 · 当前 Chrome</option><option value="catalog">本地目录样例</option></select></label>
+        <label id="records-field" for="records" hidden>记录数 <input id="records" type="number" min="1" max="100" value="12" required disabled></label>
+        <label for="brain">规划模型 <select id="brain"><option value="api" selected>DeepSeek API</option><option value="codex">Codex · 当前登录</option></select></label>
+        <button id="example" type="button">填入示例 prompt</button>
+      </div>
+      <div id="url-field"><label for="start-url">起始网址（可选）</label><input id="start-url" type="url" placeholder="留空，根据 prompt 自动选择" maxlength="4096"></div>
+      <label for="prompt">任务 prompt</label>
+      <textarea id="prompt" rows="3" maxlength="8000" required aria-describedby="prompt-hint" placeholder="例如：打开 x.com，依次搜索 Spark Labs、Zhen Fund、Tibo Reset。"></textarea>
+      <div class="prompt-actions"><p id="prompt-hint">复用当前 Chrome 的登录状态；网址留空时根据 prompt 自动选择。任务标签页结束后保留，最多运行 5 分钟。</p><button id="launch" type="submit" class="primary">运行 prompt ↗</button></div>
+      <p id="launch-status" role="status" aria-live="polite"></p>
+      <p id="launch-error" role="alert" hidden></p>
+    </form>
+    <section class="run-picker"><label for="run">运行记录</label><select id="run"><option>正在读取…</option></select>
+      <button id="refresh">刷新记录</button><span class="hint">演示使用规则策略，不调用模型</span></section>
+    <div id="error" role="alert" hidden></div>
+    <p id="start-selection" role="status" hidden></p>
+    <section id="answer-panel" class="run-details" hidden><h2>运行结果</h2><p id="result-reason"></p><pre id="final-answer"></pre></section>
+    <section class="summary" aria-label="运行概况">
+      <div><span>任务结果</span><strong id="outcome">—</strong><small id="grade">等待记录</small></div>
+      <div><span>执行动作</span><strong id="actions">—</strong><small id="reference">—</small></div>
+      <div><span>实体覆盖</span><strong id="coverage">—</strong><small id="saved">—</small></div>
+      <div><span>总耗时</span><strong id="elapsed">—</strong><small id="models">—</small></div>
+    </section>
+    <div class="toolbar"><div class="status"><span class="dot" id="status-dot"></span><span id="status" role="status">正在加载运行记录</span></div>
+      <div class="controls"><label><input id="follow" type="checkbox" checked> 跟随最新</label>
+        <a id="download" class="button" download="trajectory.jsonl">导出轨迹 ↓</a></div></div>
+    <section class="workspace">
+      <div class="browser-panel">
+        <div class="browser-bar"><div class="traffic"><b></b><b></b><b></b></div><span id="url">等待网页</span><span id="preview-mode" class="live">REPLAY</span></div>
+        <div id="page-warning" role="alert" hidden></div>
+        <div class="viewport"><div class="empty" id="empty"><p class="empty-symbol">[ ↗ ]</p><h2>等待浏览器画面</h2><p id="empty-hint">选择一条运行记录，或启动本地演示。</p></div>
+          <img id="screenshot" alt="受控网页截图" hidden></div>
+        <div class="browser-footer"><span id="page-title">—</span><span id="frame-note">真实截图 · 只读预览</span></div>
+        <div class="playback"><button id="play" aria-label="播放或暂停回放">播放 1×</button>
+          <button id="previous" aria-label="上一个事件">←</button><input id="scrubber" type="range" min="0" max="0" value="0" aria-label="选择轨迹事件">
+          <button id="next" aria-label="下一个事件">→</button><span id="position">0 / 0</span></div>
+        <div class="selection"><span class="eyebrow">SELECTED EVENT</span><strong id="selected-title">—</strong><span id="selected-time">—</span></div>
+      </div>
+      <aside>
+        <div class="aside-header"><div><p class="eyebrow">DECISION INSPECTOR</p><h2 id="choice-title">等待决策</h2></div><span id="confidence">—</span></div>
+        <div class="tabs" role="tablist" aria-label="事件检查器">
+          <button role="tab" aria-selected="true" data-tab="choices">候选</button><button role="tab" aria-selected="false" data-tab="plan">规划</button>
+          <button role="tab" aria-selected="false" data-tab="facts">证据</button><button role="tab" aria-selected="false" data-tab="raw">详情</button>
+        </div><div id="inspector" role="tabpanel" aria-label="事件详情"></div>
+      </aside>
+    </section>
+    <section class="trace"><div class="trace-heading"><div><p class="eyebrow">THE EXECUTION TRAIL</p><h2>执行轨迹 <span id="step-count">—</span></h2></div>
+      <div class="trace-filters"><label for="filter">筛选</label><select id="filter"><option value="important">动作与关键事件</option><option value="all">全部事件</option><option value="action">动作</option><option value="plan">规划与恢复</option><option value="extraction">证据与读回</option></select>
+        <input id="search" type="search" placeholder="搜索实体、动作或错误" aria-label="搜索轨迹"></div></div>
+      <div class="trace-columns"><span>序号 / 时间</span><span>事件 / 对象</span><span>结果</span></div>
+      <div id="history" aria-label="轨迹事件列表"></div>
+    </section>
+    <details class="run-details"><summary>任务配置与调用统计</summary><p id="goal"></p><div id="usage"></div><pre id="manifest"></pre></details>
+    <footer>复用 Jev Ultrafast UI · 截图仅用于查看，不发送给模型 <span id="run-id"></span></footer>
+  </main>
+</body>
+</html>

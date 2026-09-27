@@ -1,0 +1,27 @@
+{
+  "source": "runs/pilot-jev-gym-02/catalog-32-0/trajectory.jsonl",
+  "verification": "offline replay only; no browser or model requests",
+  "item002_visible_text": "Record details\nEntity: item-002\nRating: 1\nPrice: 33\nSaved: no\nSave\nBack",
+  "item002_processed_before_explicit_extract": false,
+  "item002_processed_after_explicit_extract": true,
+  "item002_facts_after_extract": {
+    "Rating": "1",
+    "Price": "33",
+    "Saved": "no"
+  },
+  "detail_then_catalog_retained_page_notes": 1,
+  "detail_retained_after_catalog": false,
+  "action_counts": {
+    "Edit | item-001 Edit": 2,
+    "Save | ": 1,
+    "extract_visible": 1,
+    "Back | ": 33,
+    "Edit | item-002 Edit": 31
+  },
+  "jev_explicit_extract_choices": 0,
+  "item002_decisions": 31,
+  "item002_decisions_with_extract_candidate": 31,
+  "item002_selected_actions": {
+    "Back | ": 31
+  }
+}

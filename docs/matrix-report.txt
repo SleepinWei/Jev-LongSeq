@@ -1,0 +1,30 @@
+flat  n=  4 repeat=0 strict=True
+once  n=  4 repeat=0 strict=True
+event n=  4 repeat=0 strict=True
+flat  n= 12 repeat=0 strict=True
+once  n= 12 repeat=0 strict=True
+event n= 12 repeat=0 strict=True
+flat  n= 32 repeat=0 strict=True
+once  n= 32 repeat=0 strict=True
+event n= 32 repeat=0 strict=True
+{
+  "runs": 9,
+  "graded_runs": 9,
+  "strict_successes": 9,
+  "strict_success_rate": 1.0,
+  "total_cost_usd": null,
+  "cost_per_success_usd": null,
+  "unknown_cost_runs": 9,
+  "false_completion_rate": 0.0,
+  "tasks_with_false_completion": 0.0,
+  "constraint_violations": 0,
+  "duplicate_writes": 0,
+  "latency_s": {
+    "success": {
+      "p50": 2.606072749942541,
+      "p95": 5.876830066437833
+    }
+  },
+  "mean_atomic_actions": 66.44444444444444,
+  "planner_calls": 6
+}
