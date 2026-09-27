@@ -13,6 +13,7 @@ const statuses = {success:"已完成", failed:"失败", budget_exhausted:"预算
 let state = null, currentId = "", selected = 0, tab = "choices", etag = "", loading = false;
 let live = null, playing = false, playbackStart = 0, playbackTime = 0, lastImage = "", pendingId = "";
 let submitting = false, launcherBusy = false, watchedLaunch = "";
+let frameMetadata = null;
 const n = value => Number.isFinite(value) ? value.toLocaleString() : "—";
 const seconds = value => Number.isFinite(value) ? `${value.toFixed(1)} s` : "—";
 const endpoint = (path, extra={}) => `/api/${path}?${new URLSearchParams({id:currentId, ...extra})}`;
@@ -37,6 +38,7 @@ async function selectRun(id) {
   stop(); currentId = id; pendingId = ""; state = null; etag = ""; live = null; lastImage = "";
   $("page-warning").hidden=true;
   $("screenshot").hidden=true; $("empty").hidden=false;
+  frameMetadata=null; renderTargets();
   $("follow").checked = true;
   history.replaceState(null, "", `?${new URLSearchParams({run:id})}`);
   await update();
@@ -60,7 +62,7 @@ async function update() {
     const incoming = await get(endpoint("live"));
     if (id !== currentId) return;
     live = incoming;
-    if (live.active && $("follow").checked) showImage("live", live.time);
+    if (live.active && $("follow").checked) showImage(live.frame_index != null ? String(live.frame_index) : "live", live.time, live);
     else if (!playing) showFrame(state?.events[selected]?.at);
     updateStatus(); error("");
   } catch (e) { error(e.message); }
@@ -117,16 +119,22 @@ function title(event) {
 }
 function eventState() {
   let obs=null, decision=null, candidates=[], plan=null, action=null;
-  const facts = {}, done = new Set();
+  const facts = {}, done = new Set(), pages = new Map();
   for (const e of state.events.slice(0,selected+1)) {
-    if (e.observation) { obs=e.observation; decision=null; candidates=[]; }
+    if (e.observation) {
+      obs=e.observation; decision=null; candidates=[];
+      const tabs={...obs.tabs, [obs.tab_id]:obs.url};
+      for(const url of Object.values(tabs)) if(!pages.has(url)) pages.set(url,{url,observed:false,title:''});
+      for(const p of pages.values()) p.tabs=Object.entries(tabs).filter(([,url])=>url===p.url).map(([id])=>id);
+      Object.assign(pages.get(obs.url),{observed:true,title:obs.title});
+    }
     if (e.kind === "decision") { decision=e.decision; candidates=e.candidates; }
     if (e.kind === "action") { action=e.action; if (action.id.startsWith("internal-")) {decision=null; candidates=[];} }
     if (e.kind === "plan") { plan=e.plan; done.clear(); }
     if (e.kind === "subtask_completed") done.add(e.subtask_id);
     if (e.kind === "extraction") for (const f of e.facts) (facts[f.entity] ||= {})[f.field] = f;
   }
-  return {obs,decision,candidates,plan,facts,done,action};
+  return {obs,decision,candidates,plan,facts,done,action,pages:[...pages.values()]};
 }
 function renderSelection() {
   if (!state?.events.length) return;
@@ -149,15 +157,44 @@ function renderSelection() {
   if (tab === "plan") panel.innerHTML = s.plan ? s.plan.subtasks.map(c=>`<article class="plan-card ${s.done.has(c.id)?'complete':''}"><strong>${s.done.has(c.id)?'✓':'○'} ${escape(c.id)}</strong><p>${escape(c.objective)}</p><small>预算 ${c.max_actions} 动作 · 依赖 ${escape(c.depends_on.join(', ') || '无')}</small></article>`).join("") : '<p class="muted">尚未生成有效规划。</p>';
   if (tab === "facts") panel.innerHTML = Object.entries(s.facts).map(([entity,fields])=>`<article class="fact-card"><strong>${escape(entity)}</strong><dl>${Object.values(fields).map(f=>`<dt>${escape(f.field)}</dt><dd>${escape(f.value)}${f.valid?'':' · 无效'}</dd>`).join('')}</dl>${Object.values(fields).map(f=>`<small>${escape(f.source.quote)} · ${escape(f.source.pointer)}</small>`).join('')}</article>`).join('') || '<p class="muted">当前时间点尚未抽取证据。</p>';
   if (tab === "raw") { panel.innerHTML='<pre></pre>'; panel.firstChild.textContent=JSON.stringify(e,null,2); }
+  if (tab === "pages") panel.innerHTML=s.pages.map(p=>`<article class="fact-card"><strong>${escape(p.title || '尚未观察内容')}</strong><p>${p.url===s.obs?.url ? '当前页面 · ' : ''}${p.observed ? '已观察' : '仅打开'} · ${escape(p.tabs.length ? p.tabs.join(', ') : '已离开 / 关闭')}</p><small>${escape(p.url)}</small></article>`).join('') || '<p class="muted">尚未记录网页</p>';
   if (!live?.active || !$("follow").checked) showFrame(e.at);
   updateStatus();
   document.querySelectorAll('.event-row').forEach(el=>el.classList.toggle('selected',Number(el.dataset.index)===selected));
 }
-function showImage(frame, version="") {
+function renderTargets() {
+  const meta=frameMetadata, boxes=meta?.overlays || [], s=state?.events.length ? eventState() : {};
+  const chosen=s.candidates?.find(a=>a.id===s.decision?.choice) || s.action;
+  const selectedRef=chosen?.observation_id === meta?.observation_id ? chosen?.element_ref : null;
+  $("targets").replaceChildren();
+  for(const b of boxes) {
+    if(!b.rect || ![b.rect.x,b.rect.y,b.rect.w,b.rect.h,meta.width,meta.height].every(Number.isFinite) || meta.width<=0 || meta.height<=0) continue;
+    const box=document.createElement('div'), label=document.createElement('span');
+    box.className=`target ${b.editable ? 'editable' : ''} ${b.id===selectedRef ? 'selected' : ''}`;
+    box.title=b.label || '';
+    // Property assignments work with the inspector's strict style-src CSP.
+    box.style.left=`${100*b.rect.x/meta.width}%`; box.style.top=`${100*b.rect.y/meta.height}%`;
+    box.style.width=`${100*b.rect.w/meta.width}%`; box.style.height=`${100*b.rect.h/meta.height}%`;
+    label.textContent=`${b.id}${b.editable ? ' 输入' : ''}`;
+    box.append(label); $("targets").append(box);
+  }
+  $("targets").hidden=!$("overlays").checked || !boxes.length;
+  $("dom-status").textContent=meta?.observation_id ? `${boxes.length} 个元素 · 编号对应观察记录` : '此帧未记录 DOM 标注';
+}
+function showImage(frame, version="", metadata=null) {
   const url = endpoint("image", {frame, v:version});
-  if (url === lastImage) return;
-  lastImage=url; $("screenshot").src=url; $("screenshot").hidden=false; $("empty").hidden=true;
-  $("frame-note").textContent = frame === "live" ? `实时截图 · ${new Date(version*1000).toLocaleTimeString()}` : frame === "final" ? "最终截图 · 无可用过程画面" : `录制截图 · ${new Date(state.frames[frame].time*1000).toLocaleTimeString()}`;
+  if (url === lastImage) { renderTargets(); return; }
+  const meta=metadata || state.frames[frame] || {};
+  lastImage=url; frameMetadata=null; renderTargets();
+  $("screenshot").onload=()=>{
+    if(lastImage!==url) return;
+    frameMetadata=meta;
+    const w=meta.width || $("screenshot").naturalWidth, h=meta.height || $("screenshot").naturalHeight;
+    $("screenshot").parentElement.style.aspectRatio=`${w}/${h}`;
+    renderTargets();
+  };
+  $("screenshot").src=url; $("screenshot").hidden=false; $("empty").hidden=true;
+  $("frame-note").textContent = metadata ? `实时截图 · ${new Date(version*1000).toLocaleTimeString()}` : frame === "final" ? "最终截图 · 无可用过程画面" : `录制截图 · ${new Date(meta.time*1000).toLocaleTimeString()}`;
 }
 function showFrame(at) {
   if (!state) return;
@@ -169,6 +206,7 @@ function showFrame(at) {
     $("screenshot").hidden=true; $("empty").hidden=false;
     $("empty-hint").textContent=state.frames.length ? "此时间点尚未记录首帧，可前进查看。" : "等待实时截图或 trace.zip 完成写入。";
     lastImage="";
+    frameMetadata=null; renderTargets();
   }
 }
 function renderTrail() {
@@ -268,7 +306,8 @@ $("example").addEventListener('click',()=>{
   $("prompt").value=$("scenario").value==='web' ? '打开 example.com，告诉我页面标题和主要内容。' : '查看 item-001 的评分（Rating）和价格（Price），告诉我结果，不要保存或删除任何记录。';
   $("prompt").focus();
 });
-$("screenshot").addEventListener('error',()=>{lastImage=''; $("screenshot").hidden=true; $("empty").hidden=false; $("empty-hint").textContent='截图暂不可用，等待下一帧。';});
+$("overlays").addEventListener('change',renderTargets);
+$("screenshot").addEventListener('error',()=>{lastImage=''; frameMetadata=null; renderTargets(); $("screenshot").hidden=true; $("empty").hidden=false; $("empty-hint").textContent='截图暂不可用，等待下一帧。';});
 runs().catch(e=>error(e.message));
 launcherStatus();
 setInterval(launcherStatus,2000);

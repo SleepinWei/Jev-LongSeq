@@ -39,7 +39,13 @@ DYNAMIC_SYSTEM = (
     "Filling an input does not submit it. For sequential searches, submit the current query "
     "and observe its results before replacing it with the next query. A confirmed fill means "
     "the value is present, not that the search has been completed. "
+    "Confirm a search submission when the submitted query has visible results or an explicit "
+    "no-results message. Irrelevant results still confirm execution; relevance and reading are "
+    "separate work. A changed URL or empty results container alone does not confirm execution. "
     "request_replan asks the LLM brain to revise guidance when blocked. next_candidates shows "
+    "opened_pages records task tabs and previously observed pages. observed means page content "
+    "was seen, not that reading or the task is complete; an empty open_tab_ids means that URL "
+    "is no longer open. Use this record to avoid losing earlier sources or rereading them. "
     "more observed controls. request_finish asks for a fresh "
     "semantic completion review; this is a model assessment, not an independent benchmark grade."
 )
@@ -114,19 +120,22 @@ class ModelTransport:
             }
             network_started = {}
 
-            async def trace(event, info):
-                phase, outcome = event.split(".")[-2:]
+            async def trace(event, info, *, attempt_record=record, phase_started=network_started):
+                parts = event.split(".")
+                if len(parts) < 2:
+                    return
+                phase, outcome = parts[-2:]
                 if phase not in {"connect_tcp", "start_tls", "send_request_headers",
                                  "send_request_body", "receive_response_headers"}:
                     return
                 if outcome == "started":
-                    network_started[phase] = time.monotonic()
+                    phase_started[phase] = time.monotonic()
                 elif outcome in {"complete", "failed"}:
-                    duration = time.monotonic() - network_started.get(phase, time.monotonic())
-                    record.setdefault("network_phases", []).append(
+                    duration = time.monotonic() - phase_started.get(phase, time.monotonic())
+                    attempt_record.setdefault("network_phases", []).append(
                         {"phase": phase, "status": outcome, "duration_s": max(0, duration)})
                     if outcome == "failed":
-                        record["network_error_phase"] = phase
+                        attempt_record["network_error_phase"] = phase
             if self.observer:
                 self.observer.request_started(record)
             try:

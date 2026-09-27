@@ -11,13 +11,14 @@ from playwright.async_api import Error, TimeoutError, async_playwright
 from .candidates import allowed_url
 from .protocol import Action, Element, Observation, Operation, Receipt, Task, digest
 
-SELECTOR = ('a[href],button,input,textarea,select,[contenteditable="true"],'
+NATIVE_SELECTOR = ('a[href],button,input,textarea,select,summary,[contenteditable="true"],'
             '[role="button"],[role="link"],[role="textbox"],[role="combobox"],'
             '[role="checkbox"],[role="radio"],[role="tab"],[role="option"],[role="menuitem"]')
+SELECTOR = NATIVE_SELECTOR + ',div,span,img,svg,[onclick],[tabindex]'
 # Reads rendered DOM only. No application globals, hidden attributes or backend state.
 SNAPSHOT = r"""selector => {
   const visible = el => {
-    if (!el || el.closest('[hidden],[aria-hidden="true"],script,style,noscript')) return false;
+    if (!el || el.closest('[hidden],[inert],[aria-hidden="true"],script,style,noscript')) return false;
     for (let node = el; node; node = node.parentElement) {
       const style = getComputedStyle(node);
       if (style.opacity === '0' || style.visibility === 'hidden' || style.display === 'none') return false;
@@ -34,8 +35,38 @@ SNAPSHOT = r"""selector => {
     if (visible(n.parentElement) && n.textContent.trim()) lines.push(n.textContent.trim());
   }
   const modal = [...document.querySelectorAll('dialog[open],[role="dialog"]')].filter(visible);
+  const nativeSelector = __NATIVE_SELECTOR__, custom = new Set();
+  const iconName = el => [...el.querySelectorAll('img[alt],svg[aria-label],svg title')]
+    .filter(visible).map(n => n.getAttribute('alt') || n.getAttribute('aria-label') || n.textContent)
+    .filter(Boolean).join(' ');
+  // An icon without accessible text still has rendered asset/class hints. These
+  // are descriptive, untrusted labels, never permission or invented navigation.
+  const iconHint = el => {
+    if (el.matches('a[href],[role="link"]')) return '';
+    const icons = [el, ...[...el.querySelectorAll('img,svg,use')].slice(0, 8)];
+    const tokens = icons.map(n => [n.getAttribute('class'),
+      n.matches('img') ? n.getAttribute('src') : '',
+      n.matches('svg,use') ? n.getAttribute('href') || n.getAttribute('xlink:href') : '']
+      .filter(Boolean).join(' '))
+      .join(' ').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+    for (const word of ['search','submit','close','menu','next','previous','back','send','add','remove','delete']) {
+      if (new RegExp('(?:^|[^a-z])' + word + '(?=$|[^a-z])').test(tokens))
+        return word + ' (icon control)';
+    }
+    return '';
+  };
   const controls = [...document.querySelectorAll(selector)].map((el, index) => {
     if (!visible(el) || (modal.length && !modal.some(m => m.contains(el)))) return null;
+    if (!el.matches(nativeSelector)) {
+      if (el.closest(nativeSelector) || el.querySelector(nativeSelector)) return null;
+      const explicit = el.hasAttribute('onclick') || el.tabIndex >= 0;
+      if (!explicit && getComputedStyle(el).cursor !== 'pointer') return null;
+      for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+        if (custom.has(parent)) return null;
+      }
+      if (getComputedStyle(el).pointerEvents === 'none') return null;
+      custom.add(el);
+    }
     const tag = el.tagName.toLowerCase();
     const labelText = label => {
       const texts = [], walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
@@ -48,25 +79,43 @@ SNAPSHOT = r"""selector => {
     const labels = el.labels ? [...el.labels].filter(visible).map(labelText).join(' ') : '';
     const labelled = (el.getAttribute('aria-labelledby') || '').split(/\s+/)
       .map(id => document.getElementById(id)).filter(x => x && visible(x)).map(labelText).join(' ');
-    const name = labelled || el.getAttribute('aria-label') || labels || labelText(el) || el.getAttribute('placeholder') || '';
+    const name = labelled || el.getAttribute('aria-label') || labels || labelText(el) ||
+      el.getAttribute('alt') || iconName(el) || el.getAttribute('title') ||
+      el.getAttribute('placeholder') || iconHint(el) || '';
     const inputRoles = {checkbox:'checkbox',radio:'radio',button:'button',submit:'button',reset:'button',range:'slider',file:'button'};
     const role = el.getAttribute('role') || (tag === 'input' ? (inputRoles[el.type] || 'textbox') :
-      ({a:'link',button:'button',textarea:'textbox',select:'combobox'}[tag] || 'textbox'));
+      ({a:'link',button:'button',summary:'button',textarea:'textbox',select:'combobox'}[tag] ||
+       (custom.has(el) ? 'button' : 'textbox')));
     const editable = !el.readOnly && (tag === 'textarea' || el.isContentEditable ||
       (tag === 'input' && ['text','search','email','url','tel','password','number'].includes(el.type)));
     const row = el.closest('tr,[role="row"],fieldset,form');
     return {index, role, name:name.trim(), value:el.type === 'password' ? '[redacted]' : (el.value || ''),
-      enabled:!el.disabled && el.getAttribute('aria-disabled') !== 'true',
+      enabled:!el.matches(':disabled') && !el.closest('[aria-disabled="true"]'),
       editable, selectable:tag === 'select',
       checked: ['checkbox','radio'].includes(role) ? (el.checked ?? el.getAttribute('aria-checked') === 'true') : null,
       context:row ? labelText(row) : '', href:tag === 'a' ? el.href : null,
       options:tag === 'select' ? [...el.options].filter(x => !x.disabled && !x.hidden).map(x => x.value) : []};
   }).filter(Boolean);
+  const nodes = document.querySelectorAll(selector);
+  for (const c of controls) {
+    if (c.role !== 'button' || !/^(search(?: \(icon control\))?|搜索|搜尋)$/i.test(c.name)) continue;
+    for (let scope = nodes[c.index].parentElement; scope && scope !== document.body; scope = scope.parentElement) {
+      const fields = controls.filter(f => f.editable && scope.contains(nodes[f.index]));
+      if (fields.length > 1) break;
+      if (fields.length === 1) {
+        const field = nodes[fields[0].index];
+        if (field.type === 'password') break;
+        c.search_query = fields[0].value;
+        c.search_scope = field.id || field.getAttribute('name') || fields[0].name;
+        break;
+      }
+    }
+  }
   return {url:location.href,title:document.title,text:lines.join('\n'),controls,
     visible_frames:[...document.querySelectorAll('iframe,frame')].filter(visible).length,
     dialogs:modal.map(x => x.innerText),loading:document.readyState === 'loading' ||
       [...document.querySelectorAll('[aria-busy="true"]')].some(visible)};
-}"""
+}""".replace('__NATIVE_SELECTOR__', json.dumps(NATIVE_SELECTOR))
 
 # Capture rendered state and the corresponding DOM nodes in one browser turn.
 # Keep one remote object, resolving only the node actually chosen for an action.
@@ -105,6 +154,7 @@ class PlaywrightBackend:
         self.navigation_status = {}
         self.snapshot_handle = None
         self.snapshot_raw = None
+        self.preview_binding = None
         self.search_refs = {}
         self.observer = None
 
@@ -128,7 +178,7 @@ class PlaywrightBackend:
             if self.live_preview and self.output:
                 from .preview import LivePreview
 
-                self.preview = LivePreview(self.output, self.capture_preview)
+                self.preview = LivePreview(self.output, self.capture_preview, archive=True)
                 self.preview.start()
             if self.task.start_url != "about:blank":
                 if not allowed_url(self.task.start_url, self.task):
@@ -151,6 +201,8 @@ class PlaywrightBackend:
             await route.abort("blockedbyclient")
 
     def _register(self, page):
+        if page in self.pages.values():
+            return
         self.pages[f"tab-{len(self.pages)}"] = page
         page.on("response", self._response)
         page.on("pageerror", lambda error: self.errors.append(f"page_error:{str(error)[:300]}"))
@@ -171,7 +223,40 @@ class PlaywrightBackend:
         await self.page.set_content(html, wait_until="domcontentloaded")
 
     async def capture_preview(self):
-        return await self.page.screenshot(type="jpeg", quality=65, timeout=2000), self.page.url
+        page, binding = self.page, self.preview_binding
+        before = await self._preview_geometry(binding)
+        image = await page.screenshot(type="jpeg", quality=65, timeout=2000)
+        after = await self._preview_geometry(binding)
+        # Never paint boxes from another document or from a moving layout onto a frame.
+        if before != after or page != self.page or binding != self.preview_binding:
+            after = {"overlays": []}
+        viewport = page.viewport_size or {"width": 1280, "height": 900}
+        return image, page.url, {**viewport, **after}
+
+    async def _preview_geometry(self, binding):
+        if not binding:
+            return {"overlays": []}
+        handle, obs = binding
+        try:
+            geometry = await handle.evaluate("""s => {
+              if (s.raw.url !== location.href) return {overlays:[]};
+              const overlays = [];
+              for (const c of s.raw.controls) {
+                const id = 'e' + c.index, node = s[id];
+                if (!node?.isConnected || !node.checkVisibility({checkOpacity:true,
+                    checkVisibilityCSS:true}) || node.closest('[aria-hidden="true"],[inert]')) continue;
+                const r = node.getBoundingClientRect();
+                if (r.width <= 0 || r.height <= 0 || r.bottom <= 0 || r.right <= 0 ||
+                    r.top >= innerHeight || r.left >= innerWidth) continue;
+                overlays.push({id, label:c.name, role:c.role, editable:c.editable,
+                  rect:{x:r.x,y:r.y,w:r.width,h:r.height}});
+              }
+              return {url:location.href,width:innerWidth,height:innerHeight,
+                scroll_x:scrollX,scroll_y:scrollY,overlays};
+            }""")
+            return {**geometry, "observation_id": obs.observation_id, "tab_id": obs.tab_id}
+        except Error:
+            return {"overlays": []}  # Navigation/disposal races are normal during preview.
 
     async def observe(self) -> Observation:
         for attempt in range(3):
@@ -198,7 +283,9 @@ class PlaywrightBackend:
         self.search_refs = captured["search"]
         elements = [Element(id=f"e{c['index']}", **{k: v for k, v in c.items() if k != "index"})
                     for c in raw["controls"]]
-        return self._observation(raw, elements)
+        obs = self._observation(raw, elements)
+        self.preview_binding = (self.snapshot_handle, obs)
+        return obs
 
     async def _measure(self, name, function, *args):
         if self.observer:
@@ -206,6 +293,7 @@ class PlaywrightBackend:
         return await function(*args)
 
     async def _release_handles(self):
+        self.preview_binding = None
         old_handles, snapshot = self.handles, self.snapshot_handle
         self.handles, self.snapshot_handle = {}, None
         for old in old_handles.values():
@@ -317,6 +405,7 @@ class PlaywrightBackend:
                 if target is None or target.is_closed() or not allowed_url(target.url, self.task):
                     return receipt("rejected", "unknown, closed or unauthorized tab")
                 self.page = target
+                await target.bring_to_front()
             elif op == Operation.OPEN_URL:
                 if not allowed_url(action.bound_value or "", self.task):
                     return receipt("rejected", "unauthorized URL")

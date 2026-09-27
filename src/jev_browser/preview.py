@@ -33,7 +33,9 @@ class LivePreview:
         try:
             while True:
                 try:
-                    image, url = await self.capture()
+                    captured = await self.capture()
+                    image, url = captured[:2]
+                    metadata = captured[2] if len(captured) > 2 else {}
                 except Exception as exc:
                     # Navigation or a busy renderer can interrupt a single frame.
                     # Keep sampling so the preview recovers with the task page.
@@ -41,16 +43,18 @@ class LivePreview:
                     await asyncio.sleep(0.5)
                     continue
                 self.write("live.jpg", image)
+                frame_time = time.time()
+                frame = {"width": 1280, "height": 900, **metadata, "time": frame_time}
                 if self.archive:
                     folder = self.output / "preview"
                     folder.mkdir(exist_ok=True)
                     resource = f"preview/{self.sequence:06d}.jpg"
                     self.write(resource, image)
                     with (self.output / "frames.jsonl").open("a") as stream:
-                        stream.write(json.dumps({"time": time.time(), "resource": resource,
-                                                 "width": 1280, "height": 900}) + "\n")
+                        stream.write(json.dumps({**frame, "resource": resource}) + "\n")
+                    frame["frame_index"] = self.sequence
                     self.sequence += 1
-                self.status(True, url=url)
+                self.status(True, **{**frame, "url": url})
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             raise

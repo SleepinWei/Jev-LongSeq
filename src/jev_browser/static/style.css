@@ -51,6 +51,9 @@ input[type=checkbox] { min-height:auto; accent-color:var(--green); }
 .workspace { grid-template-columns:minmax(0,1fr) 350px; align-items:stretch; }
 .viewport { aspect-ratio:1280/900; background:#eeefe9; }
 .viewport img { height:100%; object-fit:contain; }
+.dom-controls { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 16px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); }
+.dom-controls label { display:flex; align-items:center; gap:7px; }
+#targets[hidden] { display:none; }
 .browser-footer { font-size:11px; color:var(--muted); min-height:39px; }
 .browser-bar>span:nth-child(2) { color:var(--muted); font-size:12px; }
 .live { font-size:11px; font-weight:600; white-space:nowrap; }

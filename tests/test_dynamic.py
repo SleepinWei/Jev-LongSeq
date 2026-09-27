@@ -537,3 +537,90 @@ async def test_finish_review_receives_evidence_before_last_summary_cursor():
     memory.feedback['evidence_cursor'] = 1
     await JsonFeedback(Transport()).review(task(), observation(), memory,
                                            phase='finish', transition=None)
+
+
+@pytest.mark.parametrize('link', [True, False])
+async def test_pending_popup_can_be_inspected_before_click_confirmation(link):
+    source, destination = 'https://example.test/', 'https://example.test/next'
+
+    class Popup:
+        def __init__(self):
+            self.clicked = False
+            self.active = 'tab-0'
+            self.operations = []
+
+        async def observe(self):
+            tabs = {'tab-0': source, **({'tab-1': destination} if self.clicked else {})}
+            return Observation(observation_id=f'o{len(self.operations)}', document_version='v',
+                tab_id=self.active, url=tabs[self.active], tabs=tabs, http_status=200,
+                title='Source' if self.active == 'tab-0' else 'Article',
+                text='Unchanged source' if self.active == 'tab-0' else 'Article content',
+                elements=[Element(id='link', role='link' if link else 'button', name='Read article',
+                                  href=destination if link else None)])
+
+        async def execute(self, action):
+            self.operations.append(action.operation)
+            if action.operation == Operation.CLICK:
+                assert not self.clicked
+                self.clicked = True
+            elif action.operation == Operation.SWITCH_TAB:
+                assert agent.pending  # Switching observes; it does not confirm the click.
+                self.active = action.bound_value
+            return Receipt(action_id=action.id, status='ok')
+
+    class Policy:
+        async def choose(self, task, obs, memory, contract, candidates):
+            if backend.active == 'tab-1':
+                return Decision(choice=next(a.id for a in candidates if a.operation == Operation.FINISH),
+                                outcome='confirmed')
+            op = Operation.SWITCH_TAB if backend.clicked else Operation.CLICK
+            return Decision(choice=next(a.id for a in candidates if a.operation == op),
+                            outcome='pending' if backend.clicked else 'none')
+
+    class Brain:
+        async def review(self, *args, **kwargs):
+            return Feedback(next_goal='Read the opened article', complete=False)
+
+    backend = Popup()
+    definition = Task(id='popup', control_mode='dynamic', objective='Read the article',
+                      start_url=source, allowed_origins=['https://example.test'])
+    agent = DynamicController(definition, backend, Policy(), feedback=Brain(),
+                              budget=Budget(max_cycles=3))
+    result = await agent.run()
+    assert backend.operations == [Operation.CLICK, Operation.SWITCH_TAB]
+    assert backend.active == 'tab-1' and agent.pending is None
+    assert result.status != 'success'  # Navigating is not task completion.
+    registry = agent.memory.context()['opened_pages']
+    assert any(p['url'] == destination and p['observed'] for p in registry)
+
+
+def test_readback_switch_does_not_include_old_or_unauthorized_tabs():
+    definition = Task(id='popup', control_mode='dynamic', objective='Read',
+                      start_url='https://example.test/', allowed_origins=['https://example.test'])
+    agent = DynamicController(definition, None, None, feedback=None)
+    agent.pending = {'action': {'operation': Operation.CLICK},
+                     'before_tabs': {'tab-old': 'https://example.test/old'}}
+    obs = observation(tabs={'tab-old': 'https://example.test/old',
+                            'tab-other': 'https://outside.test/',
+                            'tab-new': 'https://example.test/new'})
+    assert agent.readback_tabs(obs) == {'tab-new': 'https://example.test/new'}
+    agent.pending['action']['operation'] = Operation.FILL
+    assert agent.readback_tabs(obs) == {}
+
+
+def test_page_registry_retains_sources_after_rolling_notes_expire():
+    memory = Memory()
+    memory.dynamic_mode = True
+    obs = observation(tabs={'tab-0': 'about:blank', 'tab-1': 'https://example.test/article'})
+    memory.observe(obs)
+    assert memory.page_registry['https://example.test/article']['observed'] is False
+    for i in range(30):
+        page = obs.model_copy(update={'url': f'https://example.test/{i}', 'title': f'Page {i}',
+                                      'text': f'Source {i}', 'tabs': {'tab-0': f'https://example.test/{i}'}})
+        memory.observe(page)
+    assert len(memory.page_notes) == 8
+    assert memory.page_registry['https://example.test/0']['excerpt'] == 'Source 0'
+    assert memory.page_registry['https://example.test/article']['open_tab_ids'] == []
+    context = memory.context()
+    assert context['opened_pages_truncated'] and len(context['opened_pages']) == 24
+    assert memory.export()['page_registry']['https://example.test/0']['observed']

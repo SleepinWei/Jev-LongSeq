@@ -163,6 +163,56 @@ def test_live_heartbeat_expires_and_terminal_result_wins(tmp_path):
     assert not store.live("sample")["active"]
 
 
+async def test_dom_overlay_geometry_under_strict_csp(tmp_path):
+    from playwright.async_api import async_playwright
+
+    run = run_folder(tmp_path)
+    (run / 'preview').mkdir()
+    frame = {'time': 1, 'resource': 'preview/000000.jpg', 'width': 1280, 'height': 900,
+             'observation_id': 'obs-1', 'overlays': [
+                 {'id': 'e7', 'label': '<img onerror=alert(1)>', 'editable': True,
+                  'rect': {'x': 128, 'y': 90, 'w': 256, 'h': 90}}]}
+    (run / 'frames.jsonl').write_text(json.dumps(frame) + '\n')
+    (run / 'trajectory.jsonl').write_text(json.dumps({
+        'time': '2026-09-27T09:00:00+00:00', 'kind': 'observation',
+        'observation': {'observation_id': 'obs-1', 'title': 'Test', 'url': 'about:blank',
+                        'tab_id': 'tab-0', 'tabs': {'tab-0': 'about:blank',
+                                                  'tab-1': 'https://example.test/article'}},
+    }) + '\n')
+    server = make_server(tmp_path, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch()
+            try:
+                page = await browser.new_page(viewport={'width': 1500, 'height': 1200})
+                await page.set_content('<h1>Preview</h1>')
+                await page.screenshot(path=str(run / frame['resource']), type='jpeg')
+                await page.goto(f'http://127.0.0.1:{server.server_port}/?run=sample')
+                target = page.locator('#targets .target')
+                await target.wait_for()
+                bounds = await target.bounding_box()
+                viewport = await page.locator('.viewport').bounding_box()
+                assert (bounds['x'] - viewport['x']) / viewport['width'] == pytest.approx(.1, abs=.002)
+                assert bounds['width'] / viewport['width'] == pytest.approx(.2, abs=.002)
+                assert (bounds['y'] - viewport['y']) / viewport['height'] == pytest.approx(.1, abs=.002)
+                assert await target.locator('span').inner_text() == 'e7 输入'
+                assert await target.locator('img').count() == 0
+                await page.locator('#overlays').uncheck()
+                assert await page.locator('#targets').is_hidden()
+                await page.locator('[data-tab="pages"]').click()
+                assert await page.locator('#inspector .fact-card').count() == 2
+                assert '仅打开 · tab-1' in await page.locator('#inspector').inner_text()
+                assert '当前页面 · 已观察 · tab-0' in await page.locator('#inspector').inner_text()
+            finally:
+                await browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
 def test_http_guards_cache_and_readonly_artifacts(tmp_path):
     run = run_folder(tmp_path)
     (run / "trajectory.jsonl").write_text('{"kind":"result"}\n')

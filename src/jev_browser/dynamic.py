@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, ValidationError
 
@@ -76,6 +77,11 @@ def semantic_key(obs: Observation) -> str:
 
 def action_key(action: Action, obs: Observation) -> str:
     element = next((e for e in obs.elements if e.id == action.element_ref), None)
+    if (action.operation == Operation.CLICK and element
+            and element.search_query is not None and element.search_scope):
+        url = urlsplit(obs.url)
+        return digest(["search_submit", obs.tab_id, url.scheme, url.netloc,
+                       element.search_scope, element.search_query])
     return digest(
         [
             semantic_key(obs),
@@ -120,6 +126,8 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None):
     for element in obs.elements:
         if not element.enabled or (element.href and not allowed_url(element.href, task)):
             continue
+        if element.search_query is not None and not element.search_query.strip():
+            continue  # Do not submit a rotating placeholder after an unsuccessful fill.
         description = f"{element.role}: {element.name} | {element.context} | value={element.value}"
         if not element.editable and not element.selectable:
             regular.append(make(Operation.CLICK, description, element_ref=element.id))
@@ -232,6 +240,9 @@ class JsonFeedback:
                         " hypotheses, not verified facts. Never infer completion from a click receipt."
                         " Assess last_transition using the fresh page: confirmed requires visible evidence"
                         " of the intended result; pending means wait for readback; unknown means stop."
+                        " For a search submission, judge only whether the submitted query produced"
+                        " visible results or an explicit no-results message. Irrelevant results still"
+                        " confirm execution; finding relevant evidence is subsequent research."
                         " With no unresolved mutation use last_outcome=none. Do not repeat submissions."
                         " complete requires evidence for EVERY part of the original goal, including"
                         " collection coverage and readback of writes. Include a useful answer."
@@ -430,6 +441,7 @@ class DynamicController(Controller):
             self.pending = {
                 "action": action.model_dump(),
                 "before": self.memory.view(obs),
+                "before_tabs": {**obs.tabs, obs.tab_id: obs.url},
                 "before_semantics": semantic_key(obs),
                 "waits": 0,
                 "key": key,
@@ -441,6 +453,16 @@ class DynamicController(Controller):
                 self.pending["expected_goal"] = (
                     f"The browser reaches the observed link destination {element.href!r}. "
                     "This confirms navigation only, not completion of the reading or original task."
+                )
+            if (action.operation == Operation.CLICK and element.search_query is not None
+                    and element.search_scope):
+                self.pending["search_query"] = element.search_query
+                self.pending["expected_goal"] = (
+                    f"The search for {element.search_query!r} has produced a visible results list "
+                    "or an explicit no-results message for that query. Confirm only this search "
+                    "submission, not whether results are relevant, sources have been read, or "
+                    "the research task is complete. A changed URL, filled input, spinner or empty "
+                    "results container alone is insufficient. Do not submit the same query again."
                 )
             if action.operation in {Operation.FILL, Operation.SELECT}:
                 self.pending["expected_goal"] = (
@@ -530,6 +552,20 @@ class DynamicController(Controller):
         self.log("transition_confirmed", key=key, basis=basis)
         return True
 
+    def readback_tabs(self, obs):
+        """New/changed task tabs can be observed while a click awaits readback."""
+        if not self.pending or self.pending["action"]["operation"] != Operation.CLICK:
+            return {}
+        before = self.pending.get("before_tabs", {})
+        return {tab: url for tab, url in obs.tabs.items()
+                if tab != obs.tab_id and before.get(tab) != url and allowed_url(url, self.task)}
+
+    async def switch_for_readback(self, obs, tab):
+        action = self.internal_action(obs, Operation.SWITCH_TAB)
+        action.bound_value = tab
+        action.description = "Inspect newly opened task tab to read back the pending click"
+        return await self.perform(action, obs)
+
     async def dynamic_loop(self):
         visits: dict[str, int] = {}
         previous_evidence = frozenset()
@@ -552,6 +588,14 @@ class DynamicController(Controller):
                     return self.result("needs_attention", reason)
                 continue
             loading = 0
+            # The opener may be unchanged even though its link opened successfully.
+            # Switch first and inspect the destination; never confirm from a tab URL alone.
+            destinations = [tab for tab, url in self.readback_tabs(obs).items()
+                            if url == self.pending.get("navigation_target")]
+            if len(destinations) == 1 and Operation.SWITCH_TAB in self.task.allowed_operations:
+                if reason := await self.switch_for_readback(obs, destinations[0]):
+                    return self.result("needs_attention", reason)
+                continue
             if (
                 self.pending
                 and self.pending.get("navigation_target") == obs.url
@@ -609,6 +653,11 @@ class DynamicController(Controller):
                 if selected is None:
                     return self.result("needs_attention", "policy returned unknown candidate")
                 if self.pending:
+                    if (selected.operation == Operation.SWITCH_TAB
+                            and selected.bound_value in self.readback_tabs(obs)):
+                        if reason := await self.perform(selected, obs):
+                            return self.result("needs_attention", reason)
+                        continue
                     outcome = decision.outcome
                     guidance_changed = False
                     if outcome in {None, "none", "unknown"}:
@@ -622,13 +671,28 @@ class DynamicController(Controller):
                             )
                     if not self.confirm_transition(outcome, obs, "jev_outcome_or_brain_review"):
                         self.pending["waits"] += 1
+                        if ("search_query" in self.pending
+                                and not self.pending.get("readback_reviewed")
+                                and self.pending["waits"] >= min(2, self.budget.readback_waits)):
+                            self.pending["readback_reviewed"] = True
+                            self.log("brain_requested", reason="search_readback")
+                            assessment = await self.review(obs, phase="search_readback")
+                            if self.confirm_transition(assessment.last_outcome, obs,
+                                                       "search_readback_review"):
+                                continue  # Re-decide using the revised guidance, never old choices.
+                            if assessment.last_outcome == "unknown":
+                                return self.result("needs_attention",
+                                                   "search outcome uncertain after review; no resubmission")
                         if self.pending["waits"] >= self.budget.readback_waits:
                             return self.result(
                                 "needs_attention", "readback unresolved; no resubmission"
                             )
-                        if reason := await self.perform(
-                            self.internal_action(obs, Operation.WAIT), obs
-                        ):
+                        waiting = self.internal_action(obs, Operation.WAIT)
+                        waiting.description = (
+                            f"Wait for search results: {self.pending['search_query']} "
+                            if "search_query" in self.pending else "Wait for action readback "
+                        ) + f"({self.pending['waits']}/{self.budget.readback_waits})"
+                        if reason := await self.perform(waiting, obs):
                             return self.result("needs_attention", reason)
                         continue  # discard proposed next action until readback is confirmed
                     if guidance_changed:

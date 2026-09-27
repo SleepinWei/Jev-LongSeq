@@ -50,6 +50,8 @@ class Element(Model):
     editable: bool = False
     selectable: bool = False
     checked: bool | None = None
+    search_query: str | None = None
+    search_scope: str | None = None
 
 
 class Observation(Model):

@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -139,6 +140,105 @@ async def test_transient_transport_failure_retries_and_preserves_unknown_cost():
     assert transport.ledger[0]["error"] == "ConnectError"
     assert transport.ledger[0]["cost_usd"] is None
     assert transport.ledger[-1]["input_tokens"] == 7
+
+
+@pytest.mark.parametrize("recover", [False, True])
+async def test_connection_phase_diagnostics_are_bounded_and_redacted(monkeypatch, recover):
+    attempts = 0
+
+    async def no_backoff(_seconds):
+        pass
+
+    monkeypatch.setattr("jev_browser.models.asyncio.sleep", no_backoff)
+
+    async def respond(request):
+        nonlocal attempts
+        attempts += 1
+        trace = request.extensions["trace"]
+        await trace("connection.connect_tcp.started", {"secret": "private-api-key"})
+        await trace("connection.connect_tcp.complete", {})
+        if recover and attempts == 2:
+            return httpx.Response(200, json={"usage": {"input_tokens": 2}})
+        await trace("connection.start_tls.started", {})
+        await trace("connection.start_tls.failed", {"exception": "private-error-detail"})
+        try:
+            raise EOFError("private-error-detail")
+        except EOFError as exc:
+            raise httpx.ConnectError("private-error-detail", request=request) from exc
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        transport = ModelTransport(
+            "https://model.test/private-path?token=private-token",
+            "private-api-key", "test-model", client=client,
+        )
+        if recover:
+            await transport.post({}, "jev")
+        else:
+            with pytest.raises(httpx.ConnectError) as caught:
+                await transport.post({}, "jev")
+            message = str(caught.value)
+            assert "model.test" in message and "start_tls after 3 attempts" in message
+            assert "private" not in message
+        await transport.aclose()
+        assert not client.is_closed
+    assert attempts == (2 if recover else 3)
+    assert len(transport.ledger) == attempts
+    failed = transport.ledger[:-1] if recover else transport.ledger
+    assert all(r["network_error_phase"] == "start_tls" for r in failed)
+    assert all(r["error_chain"] == ["ConnectError", "EOFError"] for r in failed)
+    assert all(r["cost_usd"] is None for r in failed)
+    assert all(r["endpoint_host"] == "model.test" for r in transport.ledger)
+    assert "private" not in json.dumps(transport.ledger)
+    if recover:
+        assert "network_error_phase" not in transport.ledger[-1]
+        assert len(transport.ledger[-1]["network_phases"]) == 1
+
+
+async def test_owned_client_reuses_connection_across_model_idle_gap():
+    connections = 0
+    handlers = set()
+
+    async def respond(reader, writer):
+        nonlocal connections
+        connections += 1
+        handlers.add(asyncio.current_task())
+        try:
+            while True:
+                headers = await reader.readuntil(b"\r\n\r\n")
+                length = next(
+                    int(line.split(b":", 1)[1]) for line in headers.split(b"\r\n")
+                    if line.lower().startswith(b"content-length:")
+                )
+                await reader.readexactly(length)
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                await writer.drain()
+        except asyncio.IncompleteReadError:
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            handlers.discard(asyncio.current_task())
+
+    server = await asyncio.start_server(respond, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    transport = ModelTransport(f"http://127.0.0.1:{port}", "test", "test", retries=0)
+    try:
+        async with asyncio.timeout(15):
+            await transport.post({}, "jev")
+            await asyncio.sleep(6)  # Exceeds HTTPX's default five-second idle expiry.
+            await transport.post({}, "jev")
+            assert connections == 1
+            assert any(p["phase"] == "connect_tcp"
+                       for p in transport.ledger[0]["network_phases"])
+            assert not any(p["phase"] == "connect_tcp"
+                           for p in transport.ledger[1]["network_phases"])
+    finally:
+        await transport.aclose()
+        server.close()
+        await server.wait_closed()
+        if handlers:
+            await asyncio.gather(*handlers)
+    assert transport.client is None
 
 
 async def test_unknown_model_choice_rejected():

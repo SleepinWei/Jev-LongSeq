@@ -33,6 +33,32 @@ async def test_preview_recovers_after_transient_capture_error(tmp_path):
         await preview.close()
 
 
+async def test_preview_archives_matching_frame_geometry(tmp_path):
+    metadata = {'width': 800, 'height': 600, 'observation_id': 'obs-1',
+                'overlays': [{'id': 'e12', 'label': '搜索', 'rect': {'x': 30, 'y': 10,
+                                                                    'w': 20, 'h': 20}}]}
+
+    async def capture():
+        return b'frame with boxes', 'https://session.example/', metadata
+
+    preview = LivePreview(tmp_path, capture, archive=True)
+    preview.start()
+    try:
+        for _ in range(30):
+            if (tmp_path / 'frames.jsonl').exists():
+                break
+            await asyncio.sleep(.05)
+        frame = json.loads((tmp_path / 'frames.jsonl').read_text().splitlines()[0])
+        live = json.loads((tmp_path / 'live.json').read_text())
+        assert live['frame_index'] == 0
+        assert live['time'] == frame['time']
+        assert frame['width'] == 800 and frame['height'] == 600
+        assert frame['overlays'] == live['overlays'] == metadata['overlays']
+        assert (tmp_path / frame['resource']).read_bytes() == b'frame with boxes'
+    finally:
+        await preview.close()
+
+
 async def test_chrome_reuses_session_and_preserves_user_tabs(tmp_path, monkeypatch):
     daemon = pytest.importorskip("browser_harness.daemon")
     profile = tmp_path / "profile"
@@ -92,3 +118,55 @@ def test_chrome_replay_rejects_external_paths(tmp_path, resource):
     (run / "frames.jsonl").write_text(json.dumps({"resource": resource}) + "\n")
     with pytest.raises(ValueError):
         Store(run.parent).image("task", "0")
+
+
+async def test_task_popup_is_registered_switchable_and_preview_follows(tmp_path, monkeypatch):
+    from jev_browser.dynamic import generate_dynamic
+    from jev_browser.protocol import Operation
+
+    daemon = pytest.importorskip('browser_harness.daemon')
+    profile = tmp_path / 'profile'
+    definition = Task(id='popup', objective='Read linked article', control_mode='dynamic',
+                      start_url='https://session.example/', allowed_origins=['https://session.example'])
+
+    async def serve(route):
+        body = ('<title>Article</title><h1>Article content</h1>'
+                if route.request.url.endswith('/article') else
+                '<a href="/article" target="_blank">Read article</a>')
+        await route.fulfill(body=body, content_type='text/html')
+
+    class LocalChrome(ChromeBackend):
+        async def _route(self, route):
+            await serve(route)
+
+    async with async_playwright() as pw:
+        context = await pw.chromium.launch_persistent_context(
+            str(profile), headless=True, args=['--remote-debugging-port=0'])
+        try:
+            await context.route('**/*', serve)
+            port = (profile / 'DevToolsActivePort').read_text().splitlines()[0]
+            monkeypatch.setattr(daemon, 'get_ws_url', lambda: f'http://127.0.0.1:{port}')
+            original = context.pages[0]
+            async with LocalChrome(definition) as backend:
+                obs = await backend.observe()
+                click = next(a for a in generate_dynamic(obs, definition)
+                             if a.operation == Operation.CLICK)
+                async with backend.page.expect_popup() as opened:
+                    assert (await backend.execute(click)).status == 'ok'
+                popup = await opened.value
+                await popup.wait_for_load_state('domcontentloaded')
+                obs = await backend.observe()
+                switch = next(a for a in generate_dynamic(obs, definition)
+                              if a.operation == Operation.SWITCH_TAB)
+                assert (await backend.execute(switch)).status == 'ok'
+                destination = await backend.observe()
+                assert destination.tab_id != obs.tab_id
+                assert destination.title == 'Article'
+                assert len(destination.tabs) == 2  # Never includes unrelated user tabs.
+                _, url, metadata = await backend.capture_preview()
+                assert url.endswith('/article')
+                assert metadata['observation_id'] == destination.observation_id
+                assert len(backend.pages) == 2
+            assert not original.is_closed() and not popup.is_closed()
+        finally:
+            await context.close()

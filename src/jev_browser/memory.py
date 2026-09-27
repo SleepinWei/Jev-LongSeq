@@ -33,6 +33,7 @@ class Memory:
         self.confirmed_writes: set[str] = set()
         self.events: list[dict[str, Any]] = []
         self.page_notes: dict[str, dict] = {}
+        self.page_registry: dict[str, dict] = {}
         self.observed_entities: set[str] = set()
         self.evidence: dict[str, dict] = {}
         self.feedback: dict[str, Any] = {}
@@ -40,6 +41,20 @@ class Memory:
         self.recent_evidence_limit = 4
 
     def observe(self, obs: Observation, extraction: Extraction | None = None) -> None:
+        tabs = {**obs.tabs, obs.tab_id: obs.url}
+        for url in dict.fromkeys(tabs.values()):
+            record = self.page_registry.setdefault(url, {
+                "url": url, "title": "", "observed": False,
+                "opened_from": obs.url if url != obs.url else None,
+                "first_seen": obs.captured_at,
+            })
+            record["last_seen"] = obs.captured_at
+        for url, record in self.page_registry.items():
+            record["open_tab_ids"] = [tab for tab, target in tabs.items() if target == url]
+        current = self.page_registry.pop(obs.url)
+        current.update(title=obs.title, observed=True, last_observation_id=obs.observation_id,
+                       excerpt=obs.text[:240])
+        self.page_registry[obs.url] = current
         entry = self.visits.setdefault(obs.url, {"observations": 0, "extracted_versions": []})
         entry["observations"] += 1
         entry["last_version"] = obs.document_version
@@ -197,7 +212,11 @@ class Memory:
 
     def context(self, entities: list[str] | None = None, limit: int = 100) -> dict:
         if self.dynamic_mode:
+            pages = list(self.page_registry.values())[-24:]
             return {
+                "opened_pages": pages,
+                "opened_pages_total": len(self.page_registry),
+                "opened_pages_truncated": len(self.page_registry) > len(pages),
                 "brain_guidance": self.feedback.get("next_goal", ""),
                 "working_memory": self.feedback.get("working_memory", ""),
                 "pending_writes": [
@@ -243,6 +262,7 @@ class Memory:
             **self.context(list(self.facts), limit=len(self.facts)),
             "history": [f.model_dump() for f in self.history],
             "visits": self.visits,
+            "page_registry": self.page_registry,
             "conflicts": self.conflicts,
             "observed_urls": sorted(self.observed_urls),
             "confirmed_writes": sorted(self.confirmed_writes),
