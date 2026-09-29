@@ -12,6 +12,7 @@ from pathlib import Path
 from .evaluation import efficiency_profile
 from .observability import read_jsonl
 from .protocol import digest
+from .research_evidence import conclusions
 
 
 def frozen_source(root):
@@ -134,6 +135,11 @@ def study_data(store, study_id):
     calls = read_jsonl(store.file(root, "researcher/model-calls.jsonl"))
     result["research_usage"] = efficiency_profile(calls, actions=0, elapsed_s=0)["total"]
     result["preflight"] = read(store.file(root, "preflight.json"), state.get("preflight"))
+    result["conclusions"] = read(store.file(root, "conclusions.json"))
+    if not result["conclusions"]:
+        analyses = {t["id"]: read(store.file(root, f"{t['directory']}/observability.json"), {})
+                    for t in state.get("trials", []) if t["status"] == "complete"}
+        result["conclusions"] = conclusions({**state, "budget": result["budget"]}, analyses)
     return result
 
 
@@ -143,6 +149,12 @@ def launch_research(store, body):
     mode = body.get("mode", "new")
     if mode not in {"new", "resume"}:
         raise ValueError("未知研究操作")
+    max_trials = body.get("max_trials", 2)
+    metric = body.get("metric", "tokens")
+    if type(max_trials) is not int or not 2 <= max_trials <= 6:
+        raise ValueError("研究轮数须为 2–6（包含基线）")
+    if not isinstance(metric, str) or metric not in {"tokens", "latency"}:
+        raise ValueError("请选择 tokens 或 latency 研究目标")
     with store.lock:
         if store.child and store.child.poll() is None:
             raise RuntimeError("已有任务正在运行，请等待完成")
@@ -161,6 +173,11 @@ def launch_research(store, body):
             study_id = f"autoresearch-public-web-{time.time_ns()}"
             output = store.root / study_id
         suite = prior.get("config", {}).get("suite", "webarena") if mode == "resume" else "public-web"
+        if mode == "resume":
+            max_trials = prior.get("limits", {}).get("max_trials", 2)
+            metric = prior.get("config", {}).get("metric", "tokens")
+        study_seconds = (prior.get("limits", {}).get("study_seconds", 600 * max_trials + 300)
+                         if mode == "resume" else 600 * max_trials + 300)
         if suite not in {"webarena", "public-web"}:
             raise ValueError("该研究类型请通过 CLI 恢复")
         command = [
@@ -180,11 +197,13 @@ def launch_research(store, body):
             "--codex-effort",
             "high",
             "--max-trials",
-            "2",
+            str(max_trials),
+            "--metric",
+            metric,
             "--max-seconds",
             "300",
             "--study-seconds",
-            "1500",
+            str(study_seconds),
             "--max-actions",
             "150",
             "--max-model-attempts",

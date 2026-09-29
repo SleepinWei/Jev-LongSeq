@@ -287,10 +287,10 @@ class PlaywrightBackend:
         self.preview_binding = (self.snapshot_handle, obs)
         return obs
 
-    async def _measure(self, name, function, *args):
+    async def _measure(self, name, function, *args, **kwargs):
         if self.observer:
-            return await self.observer.measure(name, function, *args)
-        return await function(*args)
+            return await self.observer.measure(name, function, *args, **kwargs)
+        return await function(*args, **kwargs)
 
     async def _release_handles(self):
         self.preview_binding = None

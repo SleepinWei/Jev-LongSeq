@@ -130,3 +130,45 @@ async def test_dom_binds_only_unambiguous_search_and_does_not_name_links_from_ur
         await browser.page.locator('textarea').fill('Aeron')
         fresh = await browser.observe()
         assert action_key(click(fresh), fresh) != before
+
+
+@pytest.mark.parametrize('grace,expected_reviews', [(0, 1), (3, 0)])
+async def test_fast_pending_cycles_wait_before_brain_escalation(monkeypatch, grace, expected_reviews):
+    from jev_browser.protocol import AgentTuning
+
+    monkeypatch.setattr('jev_browser.dynamic.time.monotonic', lambda: 100.0)
+
+    class Backend:
+        reads = 0
+        clicks = 0
+
+        async def observe(self):
+            self.reads += 1
+            return observation(text='Results' if self.reads >= 4 else 'Still preparing')
+
+        async def execute(self, action):
+            if action.operation == Operation.CLICK:
+                self.clicks += 1
+            return Receipt(action_id=action.id, status='ok')
+
+    class Policy:
+        async def choose(self, task, obs, memory, contract, candidates):
+            operation = Operation.CLICK if backend.clicks == 0 else Operation.WAIT
+            return Decision(choice=next(a.id for a in candidates if a.operation == operation),
+                            outcome='confirmed' if obs.text == 'Results' else 'pending')
+
+    class Brain:
+        phases = []
+
+        async def review(self, *args, phase, **kwargs):
+            self.phases.append(phase)
+            return Feedback(next_goal='Read search results', last_outcome='pending')
+
+    backend, brain = Backend(), Brain()
+    agent = DynamicController(definition(), backend, Policy(), feedback=brain,
+                              tuning=AgentTuning(search_readback_grace_s=grace),
+                              budget=Budget(max_cycles=4, readback_waits=5))
+    await agent.run()
+    assert backend.clicks == 1
+    assert brain.phases.count('search_readback') == expected_reviews
+    assert not agent.pending

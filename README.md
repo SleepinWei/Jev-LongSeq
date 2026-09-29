@@ -54,6 +54,11 @@ uv run ruff check src tests
 
 复用 Jev Ultrafast 的本地 HTTP 服务模式、浏览器画面/侧栏/轨迹布局和样式。无前端构建步骤，无新增运行依赖；来源与 MIT 许可保留在 `src/jev_browser/static/`。
 
+Trace Studio 顶部导航统一提供 LongSeq、Ultrafast 和 Autoresearch。三个工作区在同一
+页面内切换，保留各自的草稿、所选记录、回看位置与展开状态；研究中的执行轨迹链接
+直接切换到 LongSeq。原有 `/`、`/ultrafast`、`/research` 地址仍支持直接访问和刷新，
+浏览器前进 / 后退可恢复对应视图。未显示的工作区暂停常规轮询，后台任务继续执行。
+
 ```bash
 # 读取已有 runs/，包括历史失败和成功的真实模型任务
 uv run jev-trace --runs runs --port 8767 --env-file /path/to/your.env
@@ -235,3 +240,36 @@ autoresearch 分析器的 Codex 返回的实际 input/output/cached-input tokens
 - 任务规则是业务权限配置，不是针对任意恶意网页脚本的完整安全沙箱；网页自身行为仍需在授权测试环境审查。
 
 原始设计保存在 `docs/BROWSER-ARCHITECTURE.zh-CN.md`、`docs/BENCHMARK.zh-CN.md`。`docs/REFERENCE-VERIFICATION.md` 是用户提供的历史记录，**不是本项目重新运行的结果**。
+
+### 原始 Ultrafast 对比视图
+
+Studio 顶部的「原始 Ultrafast」打开 `/ultrafast`。输入 prompt 即可执行本地
+`jev_ultrafast.Agent` 原生循环；只在 `TYPE_TEXT` 时调用原始文本辅助模型，不经过
+LongSeq 的规划、契约或恢复控制器。起始网址可指定，也可从 prompt 提取；没有网址时从
+Google 首页开始。可选择 LongSeq 历史记录复用任务与起始网址，对照动作、调用、状态及耗时。
+
+此可选视图需要原始源码及其运行依赖。默认寻找相邻的 `browseruse/jev-ultrafast`，
+也可在启动 Studio 时传 `--ultrafast-root /path/to/jev-ultrafast`，或设置
+`JEV_ULTRAFAST_ROOT`。优先使用该源码目录的 `.venv/bin/python`；
+`JEV_ULTRAFAST_PYTHON` 可指定解释器，否则回退到 Studio 的解释器（需安装原始框架依赖，
+包括 Browser Harness 和 `httpx[http2]`）。仍通过服务端 `--env-file` 读取
+`TYPESAFE_API_KEY`、`TEXT_MODEL_API_KEY` 和原始 `TEXT_MODEL_*` 配置。
+
+两种运行共用 Studio 的单任务锁。原始 Agent 最多运行 300 秒，保留上游自己的动作预算，
+正常结束关闭其任务标签页。记录单独存储于 `runs/ultrafast/<id>/`：任务与源码哈希、
+原生状态、逐轮快照及最后截图；不会混入 LongSeq 的轨迹格式。界面支持历史记录和 JSON 导出。
+原始截图是每轮观察时采样；LongSeq 使用连续预览。原生 `elapsed_ms` 不含首次观察，
+适配器总耗时包含连接、首次观察与记录；不要将不同计时口径直接视为性能结论。
+`DONE` 仅表示模型自报完成，界面不将它当成独立验证的成功。
+
+Ultrafast 预览复用原版编号 DOM 框、操作概率和按目标概率排序的元素列表；橙色框表示
+该 decision 选中的元素，悬停或点击候选与画面元素框可联动定位。通过 Decision 下拉框
+或决策轨迹逐条回看，也可跟随最新决策或切换到最新页面。新运行会在原生 `predict`
+返回后、执行动作前保存同一观察的截图、DOM 和 decision，不增加模型调用或页面观察。
+旧记录只能复用其已保存的 DOM / 模型请求；缺失的历史截图明确显示不可用，不把旧编号
+叠加到后续页面。额外保存截图及决策快照的时间计入运行耗时。
+
+Live Preview 下方的「执行记录 / 历史快照」提供缩略图、上一步 / 下一步和回到最新。
+点选快照会同步 Native Decision 与 DOM 框，并展示对应的实际动作、输入文本、决策耗时
+和页面变化；快照是动作选择前的观察，末尾「最终页面」为最后观察。回看时暂停跟随，
+也可聚焦缩略图后用左右方向键切换。未执行的决策单独标注，旧记录缺失的截图显示占位。

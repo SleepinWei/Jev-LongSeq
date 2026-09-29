@@ -264,6 +264,7 @@ class AgentTuning(Model):
     recent_evidence: int = Field(default=4, ge=1, le=8)
     excerpt_chars: int = Field(default=2400, ge=600, le=4000)
     prompt_variant: Literal["balanced", "compact", "coverage"] = "balanced"
+    search_readback_grace_s: float = Field(default=3.0, ge=0, le=10)
 
 
 class RunResult(Model):

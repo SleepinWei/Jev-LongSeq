@@ -108,3 +108,31 @@ async def test_compact_response_cannot_smuggle_completion():
         "next_goal": "Done", "working_memory": "Done", "complete": True})}}]}
     with pytest.raises(ValidationError):
         await JsonFeedback(transport).review(task, obs, Memory(), phase="initial", transition=None)
+
+
+async def test_finish_review_retains_evidence_and_omits_redundant_memory():
+    task, obs = setup()
+    memory = Memory()
+    memory.feedback['working_memory'] = 'Remember the earlier sources'
+    memory.evidence['early'] = {'source': {'url': 'https://example.test/', 'quote': 'earlier'}}
+
+    def respond(request):
+        payload = json.loads(request.content)
+        state = json.loads(payload['messages'][-1]['content'])
+        fields = state['schema']['properties']
+        assert 'working_memory' not in fields
+        assert {'complete', 'notes', 'answer', 'last_outcome', 'next_goal'} <= fields.keys()
+        assert state['sourced_evidence_archive'] == [
+            {'url': 'https://example.test/', 'quote': 'earlier'}]
+        assert 'current_visible_evidence' in state
+        return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps({
+            'next_goal': 'Done', 'notes': [{'quote': 'Untrusted'}],
+            'complete': True, 'answer': 'Sources summarized'})}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        brain = JsonFeedback(ModelTransport('https://model.test', 'test', 'test', client=client))
+        agent = DynamicController(task, AsyncMock(), None, feedback=brain)
+        agent.memory = memory
+        result = await agent.review(obs, phase='finish')
+    assert result.complete and result.answer == 'Sources summarized'
+    assert agent.memory.feedback['working_memory'] == 'Remember the earlier sources'

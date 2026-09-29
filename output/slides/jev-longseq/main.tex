@@ -1,0 +1,360 @@
+% !TEX program = xelatex
+\documentclass[aspectratio=169,11pt]{beamer}
+\usepackage[UTF8,fontset=fandol]{ctex}
+\usepackage{fontspec}
+\setsansfont{texgyreheros-regular.otf}[BoldFont=texgyreheros-bold.otf,ItalicFont=texgyreheros-italic.otf]
+\setmonofont{lmmono10-regular.otf}
+\usepackage{tikz,booktabs,tabularx,amsmath,multimedia}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,backgrounds}
+\definecolor{Ink}{HTML}{17392C}
+\definecolor{Green}{HTML}{26704D}
+\definecolor{Pale}{HTML}{EAF1E9}
+\definecolor{Paper}{HTML}{F8F9F5}
+\definecolor{Muted}{HTML}{626E65}
+\definecolor{Line}{HTML}{CCD9CE}
+\definecolor{Orange}{HTML}{BF673A}
+\definecolor{Blue}{HTML}{3B657A}
+\setbeamercolor{normal text}{fg=Ink,bg=Paper}
+\setbeamercolor{structure}{fg=Green}
+\setbeamercolor{frametitle}{fg=Ink}
+\setbeamercolor{alerted text}{fg=Orange}
+\setbeamercolor{block title}{fg=Green,bg=Paper}
+\setbeamercolor{block body}{fg=Ink,bg=Paper}
+\setbeamerfont{frametitle}{size=\LARGE,series=\bfseries}
+\setbeamerfont{normal text}{size=\normalsize}
+\setbeamersize{text margin left=8mm,text margin right=8mm}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{itemize item}{\color{Green}\small\textbullet}
+\setbeamertemplate{itemize subitem}{\color{Green}\scriptsize\textbullet}
+\setbeamertemplate{frametitle}{\vspace{3mm}\insertframetitle\par\vspace{1mm}}
+\setbeamertemplate{footline}{\hspace{8mm}\color{Muted}\tiny Jev LongSeq\hfill\insertframenumber\,/\,\inserttotalframenumber\hspace{8mm}\vspace{3mm}}
+\setbeameroption{hide notes}
+\hypersetup{pdftitle={Jev LongSeq: 功能展示与系统设计},pdfauthor={Jev LongSeq},colorlinks=true,urlcolor=Green,linkcolor=Green}
+\newcommand{\src}[1]{\par\vfill{\fontsize{6.5}{8}\selectfont\color{Muted}依据：#1\par}}
+\newcommand{\lead}[1]{{\large\color{Green}#1}\par\vspace{3mm}}
+\newcommand{\key}[1]{\textbf{\color{Green}#1}}
+\newcommand{\gap}{\par\vspace{1.8mm}}
+\tikzset{box/.style={draw=Line,fill=white,rounded corners=2pt,align=center,inner sep=7pt,font=\small},jev/.style={box,draw=Green,fill=Green,text=white,very thick},brain/.style={box,draw=Blue,text=Blue},flow/.style={-{Stealth[length=2mm]},thick,draw=Green},hint/.style={font=\scriptsize,text=Muted,align=center},boundary/.style={draw=Line,dashed,rounded corners=3pt,inner sep=9pt}}
+\title{Jev LongSeq}
+\subtitle{浏览器长任务的功能展示与系统设计}
+\date{2026 年 9 月}
+\begin{document}
+
+% 01
+\begin{frame}[plain]
+\vspace{8mm}
+{\small\color{Green}BROWSER AGENT}\par\vspace{6mm}
+{\fontsize{36}{40}\selectfont\bfseries Jev LongSeq}\par\vspace{4mm}
+{\LARGE 浏览器长任务的功能展示与系统设计}\par\vspace{8mm}
+{\large Jev 负责连续动作选择\par\vspace{2mm}Agent harness 负责执行、读回与恢复}\par
+\vfill
+{\small\color{Muted}基于项目实现与真实运行记录\hfill 2026.09}
+\note{本演示面向开发者和技术评审，约 10--15 分钟。项目核心是将阶段推理、动作选择与确定性执行拆开。演示中的小红书案例来自保存的真实历史记录，传闻内容不代表经过事实核查。}
+\end{frame}
+
+% 02
+\begin{frame}{长任务中的两个控制频率}
+\lead{阶段目标变化慢，网页状态变化快}
+\begin{columns}[T,onlytextwidth]
+\column{.47\textwidth}
+\textbf{需要持续处理的变化}\gap
+\begin{itemize}\setlength\itemsep{3mm}
+\item 分页、弹窗、重绘会改变可用控件
+\item 输入、提交、结果出现是不同状态
+\item 跨页任务需要保存进度与来源
+\end{itemize}
+\column{.47\textwidth}
+\textbf{项目采用的职责分工}\gap
+\begin{itemize}\setlength\itemsep{3mm}
+\item \key{LLM} 提供阶段指导与工作记忆
+\item \key{Jev} 根据当前状态选择下一步
+\item \key{Harness} 执行动作并检查结果
+\end{itemize}
+\end{columns}
+\gap\gap
+{\color{Muted}设计目标是减少逐步生成式推理；实际效率仍需同质量的完整任务对照。}
+\src{docs/DYNAMIC-AGENT.zh-CN.md；dynamic.py；models.py}
+\note{不要把稀疏调用解释为固定每十二步才调用大脑，也不要把职责分离直接解释为已经获得加速。阶段窗口是触发上限，异常可以更早触发大脑。}
+\end{frame}
+
+% 03
+\begin{frame}{功能入口：自然语言驱动网页任务}
+\begin{columns}[T,onlytextwidth]
+\column{.40\textwidth}
+\lead{在 Trace Studio 输入目标}
+\begin{enumerate}\setlength\itemsep{3mm}
+\item 选择 Chrome 与模型
+\item 输入 prompt，起始网址可留空
+\item 运行后跟随画面与事件
+\end{enumerate}
+\gap
+{\small 复用登录状态，新建任务标签页。\par\gap 也支持 CLI、本地目录样例与独立 Playwright 后端。}
+\column{.57\textwidth}
+\includegraphics[width=\linewidth,trim=0 420 0 20,clip]{assets/prompt-ui.png}
+\end{columns}
+\src{README.md；inspector.py；chrome.py。右图为真实界面的任务输入区域。}
+\note{默认界面使用 DeepSeek API 大脑与 Jev 策略。起始网址选择依次考虑手工地址、prompt 中的地址和模型判断。Chrome 需要开放本机远程调试；连接失败时不会偷偷回退到未登录的空会话。}
+\end{frame}
+
+% 04
+\begin{frame}{功能示例：小红书上的 OpenAI Aeon 传闻}
+\begin{columns}[T,onlytextwidth]
+\column{.56\textwidth}
+\includegraphics[width=\linewidth,height=5.4cm,keepaspectratio]{assets/xhs-results.png}
+\column{.40\textwidth}
+{\small\color{Muted}任务 prompt}\par
+\key{在小红书上找一下 openai aeon 的 rumor}\gap
+\small
+输入关键词、提交搜索，读取笔记列表并形成回答。\gap
+\begin{tabular}{@{}lr@{}}\toprule
+端到端耗时 & 41.5 s\\
+动作尝试 & 5\\
+Jev 请求 & 6\\
+阶段指导 / 完成复核 & 1 / 1\\\bottomrule
+\end{tabular}\gap
+{\footnotesize 历史实跑，2026-09-27 18:30。\par 列表信息已读取，笔记正文与传闻细节尚未核实。}
+\end{columns}
+\src{ui-prompt-1790505025723049000/task/report.json。语义复核通过，strict\_success=null；单次示例不代表性能基准。}
+\note{任务实际保存的目标为“在 小红书上找 openai aeon 的 rumor”，与演示 prompt 同主题。五次动作尝试包含两次过期拒绝，不应称为五次有效网页操作。大脑两次是阶段指导与最终复核，另有两次输入助手及选址请求。41.5 秒是报告的端到端口径，不是控制器内的 27.3 秒。}
+\end{frame}
+
+% 05
+\begin{frame}{Trace Studio：把网页与决策放在同一条时间线上}
+\begin{columns}[T,onlytextwidth]
+\column{.68\textwidth}
+\includegraphics[width=\linewidth,height=5.55cm,keepaspectratio]{assets/trace-studio.png}
+\column{.28\textwidth}
+\small
+\key{真实页面}\par 实时截图与历史回放\gap
+\key{DOM 标注}\par 元素编号对应观察记录\gap
+\key{决策检查}\par 候选、规划、证据与详情\gap
+\key{执行轨迹}\par 按事件定位，支持导出
+\end{columns}
+\src{static/app.js；inspector.py；preview.py。截图只用于人类查看，当前决策协议不发送截图给模型。}
+\note{右侧候选显示模型当时能够选择的动作。画面上的 DOM 编号与观察绑定，便于将浏览器状态、模型选择和动作回执对应起来。小红书截图为真实历史回放。可在此切换到同目录 demo.mp4。}
+\end{frame}
+
+% 06
+\begin{frame}{系统总览：Jev 位于 harness 的决策循环中}
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm]
+\node[brain,text width=3cm] (brain) at (7,4.7) {LLM 大脑\\阶段指导\\工作记忆};
+\node[box,text width=2.15cm] (obs) at (1.3,2.75) {观察与来源\\可见 DOM\\页面状态};
+\node[box,text width=1.8cm] (cand) at (4.15,2.75) {候选构造\\控件能力};
+\node[jev,text width=2cm] (jev) at (7,2.75) {Jev Policy\\选择动作\\判断结果};
+\node[box,text width=2cm] (exec) at (10.4,2.75) {校验与执行\\动作 / 回执};
+\node[box,text width=6.8cm] (browser) at (5.85,.65) {浏览器后端：Chrome / Playwright / BrowserGym};
+\draw[flow] (obs)--(cand);\draw[flow] (cand)--(jev);\draw[flow] (jev)--(exec);
+\draw[flow] (exec.south)--++(0,-.65)-|(browser.east);
+\draw[flow] (browser.west)-| (obs.south);
+\draw[flow,draw=Blue] (brain.south)--(jev.north);
+\draw[flow,draw=Blue,dashed] (obs.north)|-node[hint,pos=.75,above]{初始 / 异常 / 阶段上限}(brain.west);
+\begin{scope}[on background layer]\node[boundary,fit=(obs)(cand)(jev)(exec)] {};\end{scope}
+\end{tikzpicture}
+\par\small Agent harness 管理状态、权限、预算、读回与日志。
+\src{dynamic.py；models.py；browser.py；chrome.py；gym\_backend.py。大脑反馈与 Jev 的动作建议均由控制器消费。}
+\note{这里的 agent harness 是项目的整个执行编排层。ChromeBackend 中引用的 browser-harness 包只负责发现本机 Chrome 调试入口，不能将这个依赖包与完整 agent harness 混为一谈。最终复核路径在后续页面展开。}
+\end{frame}
+
+% 07
+\begin{frame}{Jev 的核心接口：一次请求，两个选择问题}
+\lead{存在待确认动作时，同时询问 outcome 与 action}
+\begin{columns}[T,onlytextwidth]
+\column{.55\textwidth}
+\begin{tikzpicture}[node distance=4mm,box/.append style={inner sep=6pt}]
+\node[box,text width=6.3cm] (state) {目标 + 阶段指导 + 当前 DOM\\近期证据 + 待确认转移};
+\node[jev,text width=6.3cm,below=of state] (api) {TypeSafe \texttt{/v1/systemone}\\\texttt{questions.*.type = choice}};
+\node[box,text width=2.5cm,below left=6mm and -2.7cm of api] (out) {outcome\\confirmed / pending\\/ unknown};
+\node[box,text width=2.5cm,below right=6mm and -2.7cm of api] (act) {action\\当前候选的 ID\\及 confidence};
+\draw[flow] (state)--(api);\draw[flow] (api.south)--++(0,-.2)-|(out.north);\draw[flow] (api.south)--++(0,-.2)-|(act.north);
+\end{tikzpicture}
+\column{.40\textwidth}
+\small
+\key{Jev 的职责}\par
+从有限候选中选择，并判断上一步的可见结果。\gap
+\key{控制器的消费条件}\par
+上一步确认后，才消费下一动作；否则等待、请求大脑或停止。\gap
+\key{运行收益的来源}\par
+结果判断无需额外串行请求。Jev 可在两次大脑调用间连续推进。
+\end{columns}
+\src{models.py：JevPolicy.choose；dynamic.py：pending 分支。confidence 可记录，默认不启用阈值升级。}
+\note{两个问题装在同一个 HTTP 请求里，项目没有测量服务端如何并行计算两个头。应表述为一次请求两个选择问题，避免宣称已验证服务内部并行。Jev 不输出任意选择器或浏览器代码；框架执行候选绑定的真实操作。}
+\end{frame}
+
+% 08
+\begin{frame}{候选动作：把模型输出绑定到当前页面}
+\begin{columns}[T,onlytextwidth]
+\column{.53\textwidth}
+\lead{候选来自控件能力}
+\begin{tabularx}{\linewidth}{@{}lY@{}}\toprule
+页面能力 & 候选操作\\\midrule
+可点击元素 & click\\
+可编辑控件 & fill\\
+真实选项列表 & select\\
+页面与任务状态 & wait / scroll / back / switch tab\\
+控制操作 & 请求指导 / 请求完成 / 候选翻页\\\bottomrule
+\end{tabularx}
+\column{.43\textwidth}
+\lead{每个动作携带绑定信息}
+{\small\ttfamily observation\_id\par document\_version\par tab\_id + frame\_id\par element\_ref + bound\_value}\gap
+\small
+\key{输入值按需绑定}\par
+优先提供 prompt 中引用的原文候选；未绑定输入才调用 LLM 输入助手。\gap
+select 的值必须属于当前观察到的选项。
+\end{columns}
+\src{dynamic.py：generate\_dynamic / bind\_input；input\_bindings.py；protocol.py。候选默认上限 250，超出时可翻页。}
+\note{这里强调 grounding：动作引用必须属于当前 observation。模型负责选择哪一个控件，程序负责构造控件可以做哪些操作。引用文本候选只有用户使用引号明确给出原文时才会出现，不会自行推断所有自由文本的参数。}
+\end{frame}
+
+% 09
+\begin{frame}{调度设计：按事件调用大脑}
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm]
+\node[brain,text width=3.1cm] (b) at (2.2,4.1) {大脑更新阶段指导\\与工作记忆};
+\node[jev,text width=3.1cm] (j) at (8.6,4.1) {Jev 选择动作\\Harness 执行\\观察新状态};
+\node[box,text width=3.1cm] (f) at (8.6,1.8) {请求完成\\新观察 + 大脑复核};
+\node[box,text width=3.1cm] (s) at (2.2,1.8) {输出回答与来源\\保存结果和轨迹};
+\draw[flow] (b)--node[hint,above]{指导生效}(j);
+\draw[flow] (j.east)--++(.7,0)--++(0,.9)-|node[hint,pos=.25,above]{继续阶段}(j.north);
+\draw[flow,draw=Blue] (j.south west)--++(-.4,-.7)-|(b.south);
+\node[hint,fill=Paper,inner sep=1pt] at (4.9,2.6) {阶段上限 / 异常 / 求助};
+\draw[flow] (j)--(f);\draw[flow] (f)--node[hint,above]{复核通过}(s);
+\draw[flow,dashed] (f.east)--++(.7,0)|-node[hint,pos=.25,right]{未通过}(j.east);
+\end{tikzpicture}
+\par\small\color{Muted}默认阶段窗口为 12 个有效动作；异常可提前触发。新指导生效后重新决策。
+\src{dynamic.py：dynamic\_loop / review。完成复核使用新观察与完整来源证据归档。}
+\note{最终完成不能沿用旧观察直接提交。控制器会重新观察，确认没有待处理动作及加载状态，再调用语义复核。大脑改变指导后丢弃旧动作建议，防止按过时指导执行。}
+\end{frame}
+
+% 10
+\begin{frame}{Agent harness：模型建议进入执行前的检查}
+\small
+\begin{tabularx}{\textwidth}{@{}p{2.8cm}Yp{3.4cm}@{}}\toprule
+检查层 & 实现职责 & 不满足时\\\midrule
+任务边界 & 允许操作、导航来源、任务标签页范围 & 拒绝或停止\\[2mm]
+观察时效 & observation、文档版本、tab / frame 一致 & 重新观察\\[2mm]
+真实元素 & 节点仍连接，引用未被替换，控件上下文一致 & 返回 stale\\[2mm]
+执行预算 & 动作数、循环数、反馈调用数与总时限 & budget\_exhausted\\[2mm]
+结果读回 & 保留 pending，等待新观察确认效果 & 等待、升级或 needs\_attention\\\bottomrule
+\end{tabularx}
+\gap
+\key{动态模式的业务授权来自用户目标与约束。}\par
+\small 业务语义判断依赖模型；结构化模式另提供规则白名单、契约 DAG 与验收谓词。
+\src{browser.py：execute；dynamic.py；protocol.py；controller.py。搜索控件允许无关信息流变化，但仍检查目标与上下文。}
+\note{框架能确定元素真实存在、操作在候选中、预算未超限，但无法仅靠这些检查证明业务意图正确。动态模式没有旧结构化模式的业务写入白名单，不能混用两种模式的安全声明。Chrome 限制任务页的主框架导航来源，正常站点资源可走 CDN。}
+\end{frame}
+
+% 11
+\begin{frame}{读回状态机：不确定时保留 pending}
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm]
+\node[box,text width=2.1cm] (a) at (1.2,3.9) {校验通过};
+\node[box,text width=2.1cm] (p) at (4.25,3.9) {登记 pending\\派发一次};
+\node[jev,text width=2.1cm] (j) at (7.35,3.9) {新观察\\Jev 判断结果};
+\node[box,text width=2.1cm] (c) at (10.6,3.9) {confirmed\\继续下一步};
+\node[box,text width=2.3cm] (w) at (7.35,1.6) {pending\\等待并再观察};
+\node[brain,text width=2.3cm] (u) at (10.6,1.6) {unknown / 超限\\复核或停止};
+\draw[flow] (a)--(p);\draw[flow] (p)--(j);\draw[flow] (j)--(c);
+\draw[flow] (j)--(w);\draw[flow] (w.west)--++(-.45,0)|-(j.west);
+\draw[flow] (j.south east)-|(u.north);\draw[flow] (w)--(u);
+\end{tikzpicture}
+\par\small
+\key{搜索示例：}填入关键词的确认条件是输入值可见；提交搜索需出现结果或明确的无结果提示。
+\src{dynamic.py：perform / confirm\_transition / dynamic\_loop。过期或明确拒绝的动作可重新观察后决策。}
+\note{“派发一次”针对已登记的待确认状态变化，并不声称网站层面 exactly-once。没有可见结果时不会盲目重复提交。导航成功只表示到达页面，不能等同于读完页面或完成用户任务。}
+\end{frame}
+
+% 12
+\begin{frame}{记忆设计：短上下文与完整证据归档}
+\begin{columns}[T,onlytextwidth]
+\column{.46\textwidth}
+\lead{Jev 使用近期上下文}
+\begin{itemize}\setlength\itemsep{2.5mm}
+\item 大脑指导与压缩工作记忆
+\item 最近 4 段来源证据、3 个动作摘要
+\item 待确认转移与阶段执行进度
+\item 页面登记：URL、任务标签页与状态
+\end{itemize}
+\column{.49\textwidth}
+\lead{大脑与复核保留跨页信息}
+\begin{itemize}\setlength\itemsep{2.5mm}
+\item 阶段调用接收新增证据
+\item 完成复核接收完整来源归档
+\item URL 与摘录关联，原始观察留档
+\item “已观察页面”不等于“已完成阅读”
+\end{itemize}
+\end{columns}
+\gap
+{\color{Muted}\small 页面文本、证据与摘要始终是待解释的数据，不能改变任务目标或权限。}
+\src{memory.py：context；dynamic.py：JsonFeedback.review。窗口为默认配置，可由 AgentTuning 调整。}
+\note{完成复核不能只看到最后几页，否则容易丢失早期证据。项目显式传入 sourced_evidence_archive。完整归档仍是所保存的可见摘录，而不是网页全部内容；截断、摘要遗漏和噪声依然存在。}
+\end{frame}
+
+% 13
+\begin{frame}{可观测性与 autoresearch}
+\begin{columns}[T,onlytextwidth]
+\column{.45\textwidth}
+\lead{每次请求与动作均可追踪}
+\small
+\begin{tabularx}{\linewidth}{@{}lY@{}}\toprule
+轨迹 & 观察、候选、动作、回执\\[1.5mm]
+模型账本 & 尝试、重试、usage、延迟\\[1.5mm]
+Span & 浏览器与各模型的阶段耗时\\[1.5mm]
+关联标识 & run / cycle / span / call / attempt\\\bottomrule
+\end{tabularx}\gap
+未知用量单列；失败请求也进入账本。
+\column{.50\textwidth}
+\lead{研究循环只改一个参数}
+\begin{enumerate}\setlength\itemsep{2mm}
+\item 同任务执行基线，汇总诊断
+\item Codex 分析并提出单字段变更
+\item DS + Jev 执行候选配置
+\item 质量通过且可比，才判断收益
+\end{enumerate}
+\small 可调：阶段窗口、证据窗口、摘录长度、提示版本。
+\end{columns}
+\src{observability.py；autoresearch.py；researcher.py；docs/AUTORESEARCH.zh-CN.md。失败或不可比结果不记为优化。}
+\note{执行模型与研究模型分开：DS 与 Jev 执行任务，Codex 分析诊断。autoresearch 不修改源码、用户目标或判分器。默认 public-web 使用 Books to Scrape 两个任务类型，不是官方 WebArena 成绩。只有足够预算运行候选时才调用提案器。}
+\end{frame}
+
+% 14
+\begin{frame}{当前验证范围与下一步评估}
+\begin{columns}[T,onlytextwidth]
+\column{.48\textwidth}
+\lead{已经具备的执行链路}
+\begin{itemize}\setlength\itemsep{2.5mm}
+\item 自然语言任务与真实 DOM 候选
+\item Jev 动作 / 结果双问题请求
+\item 浏览器执行、读回与来源记忆
+\item Trace Studio 与自动对照框架
+\end{itemize}
+\column{.48\textwidth}
+\lead{尚需验证与扩展}
+\begin{itemize}\setlength\itemsep{2.5mm}
+\item 同质量完整任务上的延迟与成本
+\item 更长流程的覆盖和完成判断
+\item 网络、登录及连接故障的稳定性
+\item iframe / shadow DOM / 视觉操作
+\end{itemize}
+\end{columns}
+\gap
+\alert{现有小样本与中断试跑，尚不足以给出有效加速比、成本降幅或泛化成功率。}
+\src{README.md：当前边界；docs/DYNAMIC-EFFICIENCY-PILOT.zh-CN.md；真实 runs 记录。}
+\note{两次效率试跑都因连接问题未正常完成，处理工作量不同。稀疏模式推进更多记录说明链路能运行，但不能将此换算成有效加速比。独立 benchmark 判分与用户任务的语义成功是不同口径。未来评估应统一任务、后端、模型、预算与代码指纹。}
+\end{frame}
+
+% 15
+\begin{frame}{项目的核心设计}
+\vspace{2mm}
+{\LARGE\key{Jev：连续、受候选约束的决策}}\par\gap
+{\large 同次请求判断上一步结果，并选择下一步动作。}\par\vspace{6mm}
+{\LARGE\key{Harness：显式状态与可追踪执行}}\par\gap
+{\large 将真实引用、预算、读回、记忆和恢复放进控制循环。}\par\vspace{6mm}
+{\LARGE\key{LLM：按事件提供阶段指导}}\par\gap
+{\large 在异常、阶段边界与完成复核时参与推理。}\par
+\vfill
+\small\href{run:demo.mp4}{观看 Trace Studio Demo（74 秒）}\hspace{7mm}\texttt{uv run jev-trace --runs runs --port 8767}
+\note{演示包同目录包含 demo.mp4。部分 PDF 阅读器禁止运行外部视频链接，可直接打开视频文件。该视频已标注实时连接失败与同主题历史回放的来源。下一步讨论可围绕长任务评估、候选覆盖和 harness 恢复策略展开。}
+\end{frame}
+\end{document}

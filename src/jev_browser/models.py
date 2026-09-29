@@ -86,7 +86,7 @@ class ModelTransport:
         self.ledger: list[dict[str, Any]] = []
         self.observer = None
 
-    async def post(self, payload: dict, kind: str) -> dict:
+    def _client(self):
         if self.client is None:
             self.client = httpx.AsyncClient(
                 timeout=self.timeout_s, follow_redirects=False,
@@ -95,7 +95,38 @@ class ModelTransport:
                 limits=httpx.Limits(max_connections=8, max_keepalive_connections=4,
                                    keepalive_expiry=120),
             )
-        client = self.client
+        return self.client
+
+    async def preconnect(self):
+        """Warm the same connection pool without a model call or credentials.
+
+        Runs concurrently with browser setup. HTTP errors are expected at the
+        origin root; a failed warmup must not prevent the real model request.
+        This transport-only request is recorded separately, never as token usage.
+        """
+        origin = urlsplit(self.endpoint)
+        started = time.monotonic()
+        record = {"started_at": now(), "endpoint_host": origin.hostname,
+                  "kind": "connection_preparation", "model_inference": False}
+        try:
+            response = await self._client().get(
+                f"{origin.scheme}://{origin.netloc}/", timeout=5,
+                follow_redirects=False,
+            )
+            record["status"] = response.status_code
+        except httpx.HTTPError as exc:
+            record["error"] = type(exc).__name__
+        except asyncio.CancelledError:
+            record["error"] = "CancelledError"
+            raise
+        finally:
+            record["duration_s"] = time.monotonic() - started
+            if self.observer:
+                self.observer.append("network-preconnects.jsonl", record)
+        return record
+
+    async def post(self, payload: dict, kind: str) -> dict:
+        client = self._client()
         call_id = uuid.uuid4().hex
         sizes = payload_sizes(payload)
         for attempt in range(self.retries + 1):

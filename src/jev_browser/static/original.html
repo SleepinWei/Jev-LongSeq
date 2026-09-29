@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="demo-token" content="__TOKEN__">
+  <title>原始 JEV Ultrafast · Trace Studio</title>
+  <link rel="stylesheet" href="/ultrafast.css"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/original.css">
+  
+</head>
+<body>
+  
+  <main>
+    <section class="intro"><div><p class="eyebrow">ORIGINAL FRAMEWORK · BASELINE VIEW</p><h1>原始 JEV Ultrafast</h1><p>同一个 prompt，看看原始 Agent 怎么做。保留原生操作循环，直接对照 LongSeq。</p></div><span class="baseline-tag">PAGE → JEV → ACTION</span></section>
+    <form id="prompt-form" class="prompt-panel">
+      <div class="prompt-options"><span id="configuration">正在检查原始框架…</span><button id="example" type="button">填入示例 prompt</button></div>
+      <div id="url-field"><label for="start-url">起始网址（可选）</label><input id="start-url" type="url" maxlength="4096" placeholder="优先使用 prompt 中的网址，否则从 Google 首页开始"></div>
+      <label for="prompt">任务 prompt</label><textarea id="prompt" rows="3" required maxlength="8000" placeholder="例如：打开 https://example.com，查看页面标题后停止。"></textarea>
+      <div class="prompt-actions"><p id="prompt-hint">Jev 选择操作与目标，仅 TYPE_TEXT 调用文本模型。使用当前 Chrome 登录状态，原始框架结束后关闭任务标签页；最多运行 5 分钟。</p><button id="launch" type="submit" class="primary" disabled>运行原始 Ultrafast ↗</button></div>
+      <p id="launch-status" role="status" aria-live="polite"></p><p id="launch-error" role="alert" hidden></p>
+    </form>
+    <section class="run-picker"><label for="run">Ultrafast 记录</label><select id="run"><option value="">暂无记录</option></select><button id="refresh">刷新记录</button></section>
+    <div id="error" role="alert" hidden></div>
+    <section class="summary" aria-label="原始框架概况">
+      <div><span>原生状态</span><strong id="outcome">—</strong><small>DONE 仅为模型判断，未经独立判分</small></div>
+      <div><span>执行动作</span><strong id="actions">—</strong><small id="calls">等待运行</small></div>
+      <div><span>Agent 循环耗时</span><strong id="elapsed">—</strong><small>原生 elapsed_ms · 初次观察后计时</small></div>
+      <div><span>总耗时</span><strong id="wall">—</strong><small>含浏览器连接、初始观察与记录</small></div>
+    </section>
+    <div class="toolbar"><span id="status" role="status">选择一条记录，或输入 prompt 开始。</span><div class="controls"><button id="stop" disabled>停止任务</button><a id="export" class="button" hidden>导出原生记录 ↓</a></div></div>
+    <section class="workspace">
+      <div class="browser-panel"><div class="preview-heading"><h2>Live Preview</h2><span id="replay-position" role="status">等待执行记录</span></div><div class="browser-bar"><div class="traffic"><b></b><b></b><b></b></div><span id="url">等待网页</span><span id="preview-mode" class="live">SNAPSHOT</span></div>
+        <div class="viewport"><div class="empty" id="empty"><p class="empty-symbol">[ ↗ ]</p><h2>等待原始 Agent</h2><p><span id="empty-hint">运行后展示每轮观察的真实网页截图。</span></p></div><img id="screenshot" alt="Ultrafast 所选决策观察的网页截图" hidden><div id="targets" hidden aria-label="页面 DOM 元素框"></div></div>
+        <div class="dom-controls"><label><input id="overlays" type="checkbox" checked> 显示 DOM 元素框</label><span id="dom-status">等待页面元素</span></div>
+        <div class="decision-controls"><label for="decision-picker">Decision</label><select id="decision-picker"><option value="page">最新页面</option></select><label><input id="follow-decision" type="checkbox" checked> 跟随最新决策</label></div>
+        <section class="snapshot-history" aria-label="执行记录与历史快照">
+          <div class="snapshot-heading"><h3>执行记录 / 历史快照</h3><div class="snapshot-navigation"><button id="previous-snapshot" type="button" disabled>← 上一步</button><button id="next-snapshot" type="button" disabled>下一步 →</button><button id="return-live" type="button">回到最新</button></div></div>
+          <div id="snapshot-strip" class="snapshot-strip" aria-label="选择历史快照"><p class="muted">每次决策的页面快照会保留在这里。</p></div>
+          <div id="execution-detail" class="execution-detail" role="status">等待执行记录。</div>
+        </section>
+        <p id="context-note" class="aside-note" role="status"></p>
+        <div class="browser-footer"><span id="page-title">—</span><span>每轮观察截图 · 非连续录像</span></div>
+      </div>
+      <aside><div class="aside-header"><div><p class="eyebrow">NATIVE DECISION</p><h2 id="choice">等待决策</h2></div></div><div class="metrics"><div><span>模型耗时</span><strong id="latency">—</strong></div><div><span>目标置信度</span><strong id="target-confidence">—</strong></div><div><span>选择的操作</span><strong id="operation">—</strong></div></div><div id="inspector"><div id="operation-choices" class="operation-choices"></div><p class="distribution-label">DOM 候选<span id="ranking-note">Unranked</span></p><div id="choices" class="choices"></div></div></aside>
+    </section>
+    <section class="run-details"><div class="trace-heading"><div><p class="eyebrow">COMPARE WITH LONGSEQ</p><h2>对照已有运行</h2></div><a id="open-longseq" class="button" href="/">查看 LongSeq 轨迹</a></div>
+      <div class="comparison-picker"><label for="comparison">LongSeq 记录</label><select id="comparison"><option value="">选择一条 LongSeq 记录</option></select><button id="reuse" disabled>使用该记录的 prompt 和网址</button></div>
+      <p id="comparison-note" class="muted">选择相同任务的 LongSeq 记录，对照状态、动作数、调用数和总耗时。</p>
+      <div class="table-scroll"><table><thead><tr><th>指标</th><th>原始 Ultrafast</th><th>LongSeq</th></tr></thead><tbody id="comparison-body"></tbody></table></div>
+      <p class="muted">两侧截图采样、原生预算和计时起点不同；调用数展示成功返回并记录的调用。状态不等同于任务成功率。</p>
+    </section>
+    <section class="trace"><div class="trace-heading"><h2>原生决策轨迹</h2><span id="step-count" class="muted">0 个动作</span></div><div class="trace-columns"><span>序号 / 时间</span><span>操作 / 目标</span><span>模型耗时</span></div><div id="history"><p class="muted">暂无执行动作。</p></div></section>
+    <details class="run-details"><summary>任务与源码版本</summary><pre id="metadata"></pre></details>
+    <details class="run-details"><summary>最新页面文本与原生状态</summary><pre id="raw"></pre></details>
+    <footer>直接调用本地 jev_ultrafast.Agent · 截图不发送给模型<span id="run-id"></span></footer>
+  </main>
+</body>
+</html>

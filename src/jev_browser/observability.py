@@ -236,6 +236,16 @@ def analyze(report: dict, events: list[dict], spans: list[dict] | None = None) -
             "The page changed between observation and execution; this alone is not a grounding bug.",
             "Inspect correlated observation/action spans before changing browser synchronization.",
         )
+    if (result.get("status") and result.get("strict_success") is not True
+            and not failures and (calls or result.get("actions"))):
+        finding(
+            "task_incomplete", "high",
+            {"status": result["status"], "reason": str(result.get("reason", ""))[:500],
+             "actions": result.get("actions", 0),
+             "finish_requests": result.get("finish_requests", 0)},
+            "Task completion was not independently confirmed; low cost is not a quality gain.",
+            "Inspect this task's stopping condition and evidence coverage before optimizing efficiency.",
+        )
     return {
         "version": 1,
         "quality": {

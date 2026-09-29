@@ -401,6 +401,21 @@ def make_server(root, port=8767):
             try:
                 if url.path == "/api/runs":
                     return self.send(200, json.dumps(store.listing()))
+                if url.path.startswith("/api/ultrafast/"):
+                    from . import ultrafast
+
+                    if url.path == "/api/ultrafast/config":
+                        return self.send(200, json.dumps(ultrafast.configuration()))
+                    if url.path == "/api/ultrafast/runs":
+                        return self.send(200, json.dumps(ultrafast.listing(store)))
+                    if url.path == "/api/ultrafast/run":
+                        return self.send(200, json.dumps(ultrafast.data(store, run_id)))
+                    if url.path == "/api/ultrafast/decision":
+                        return self.send(200, json.dumps(ultrafast.decision_data(
+                            store, run_id, args.get("index", [""])[0])))
+                    if url.path == "/api/ultrafast/image":
+                        path = ultrafast.image_path(store, run_id, args.get("frame", ["latest"])[0])
+                        return self.send(200, path.read_bytes(), "image/jpeg")
                 if url.path == "/api/studies":
                     from .research_ui import studies
 
@@ -437,8 +452,17 @@ def make_server(root, port=8767):
                         "application/zip" if name.endswith(".zip") else "application/json",
                     )
                 files = {
-                    "/": ("index.html", "text/html"),
-                    "/research": ("research.html", "text/html"),
+                    "/": ("studio.html", "text/html"),
+                    "/ultrafast": ("studio.html", "text/html"),
+                    "/research": ("studio.html", "text/html"),
+                    "/views/longseq": ("index.html", "text/html"),
+                    "/views/ultrafast": ("original.html", "text/html"),
+                    "/views/research": ("research.html", "text/html"),
+                    "/studio.js": ("studio.js", "text/javascript"),
+                    "/studio.css": ("studio.css", "text/css"),
+                    "/studio-view.css": ("studio-view.css", "text/css"),
+                    "/original.js": ("original.js", "text/javascript"),
+                    "/original.css": ("original.css", "text/css"),
                     "/research.js": ("research.js", "text/javascript"),
                     "/research.css": ("research.css", "text/css"),
                     "/app.js": ("app.js", "text/javascript"),
@@ -448,9 +472,15 @@ def make_server(root, port=8767):
                 if url.path not in files:
                     return self.send(404, "Not found", "text/plain")
                 name, mime = files[url.path]
+                content = (STATIC / name).read_text()
+                if name == "studio.html":
+                    view = {"/": "index.html", "/ultrafast": "original.html", "/research": "research.html"}[url.path]
+                    template = (STATIC / view).read_text()
+                    # Inert template: each view mounts once under the shared navigation.
+                    content = content.replace("__VIEW_PATH__", url.path).replace("__VIEW_CONTENT__", template)
                 self.send(
                     200,
-                    (STATIC / name).read_text().replace("__TOKEN__", token),
+                    content.replace("__TOKEN__", token),
                     mime + "; charset=utf-8",
                 )
             except (ValueError, OSError, KeyError, zipfile.BadZipFile):
@@ -464,15 +494,25 @@ def make_server(root, port=8767):
                 or self.headers.get("Origin") not in (None, origin)
             ):
                 return self.send(403, json.dumps({"error": "请刷新本地页面后重试"}))
-            if self.path not in {"/api/demo", "/api/launch", "/api/research"}:
+            if self.path not in {"/api/demo", "/api/launch", "/api/research",
+                                 "/api/ultrafast/launch", "/api/ultrafast/stop"}:
                 return self.send(404, json.dumps({"error": "未知操作"}))
             try:
-                if self.path in {"/api/launch", "/api/research"}:
+                if self.path in {"/api/launch", "/api/research",
+                                 "/api/ultrafast/launch", "/api/ultrafast/stop"}:
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 < length <= 40000:
                         raise ValueError("请求内容为空或过长")
                     body = json.loads(self.rfile.read(length))
-                    if self.path == "/api/research":
+                    if self.path == "/api/ultrafast/stop":
+                        from .ultrafast import stop
+
+                        result = stop(store, body)
+                    elif self.path == "/api/ultrafast/launch":
+                        from .ultrafast import launch
+
+                        result = launch(store, body)
+                    elif self.path == "/api/research":
                         from .research_ui import launch_research
 
                         result = launch_research(store, body)
@@ -501,7 +541,10 @@ def main():
     parser.add_argument("--runs", default="runs")
     parser.add_argument("--port", type=int, default=8767)
     parser.add_argument("--env-file", help="Model configuration; credentials stay server-side")
+    parser.add_argument("--ultrafast-root", help="Optional original jev-ultrafast checkout")
     args = parser.parse_args()
+    if args.ultrafast_root:
+        os.environ["JEV_ULTRAFAST_ROOT"] = str(Path(args.ultrafast_root).expanduser().resolve())
     if args.env_file:
         from .config import load_env_file
 

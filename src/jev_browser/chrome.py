@@ -16,6 +16,9 @@ class ChromeBackend(PlaywrightBackend):
     """Reuse login state without copying cookies or tracing unrelated user tabs."""
 
     async def __aenter__(self):
+        return await self._measure("browser.setup", self._connect)
+
+    async def _connect(self):
         if self.task.sandbox:
             raise ValueError("本地样例请使用 Playwright；Chrome 会话仅用于网页任务")
         try:
@@ -25,25 +28,27 @@ class ChromeBackend(PlaywrightBackend):
         if not allowed_url(self.task.start_url, self.task):
             raise ValueError("start URL is outside allowed origins")
         # Same DevToolsActivePort / chrome://inspect discovery used by Browser Harness.
-        endpoint = await asyncio.to_thread(get_ws_url)
+        endpoint = await self._measure("browser.discover_cdp", asyncio.to_thread, get_ws_url)
         if urlsplit(endpoint).hostname not in {"127.0.0.1", "localhost", "::1"}:
             raise ValueError("Chrome 模式需要本机 Chrome 连接，不能使用远程浏览器")
-        self.pw = await async_playwright().start()
+        self.pw = await self._measure("browser.playwright_start", async_playwright().start)
         self.page = None
         try:
-            self.browser = await self.pw.chromium.connect_over_cdp(endpoint, timeout=30000)
+            self.browser = await self._measure("browser.connect_cdp",
+                self.pw.chromium.connect_over_cdp, endpoint, timeout=30000)
             self.browser_version = self.browser.version
             if not self.browser.contexts:
                 raise ValueError("Chrome 没有可用的已登录浏览器配置")
             self.context = self.browser.contexts[0]
-            self.page = await self.context.new_page()
-            await self._own_page(self.page)
+            self.page = await self._measure("browser.new_page", self.context.new_page)
+            await self._measure("browser.configure_page", self._own_page, self.page)
             if self.output:
                 self.output.mkdir(parents=True, exist_ok=True)
             if self.live_preview and self.output:
                 self.preview = LivePreview(self.output, self.capture_preview, archive=True)
                 self.preview.start()
-            await self.page.goto(self.task.start_url, wait_until="domcontentloaded", timeout=30000)
+            await self._measure("browser.initial_navigation", self.page.goto,
+                self.task.start_url, wait_until="domcontentloaded", timeout=30000)
             return self
         except BaseException:
             if self.preview:
@@ -74,6 +79,9 @@ class ChromeBackend(PlaywrightBackend):
             await route.abort("blockedbyclient")
 
     async def __aexit__(self, *_):
+        await self._measure("browser.teardown", self._disconnect)
+
+    async def _disconnect(self):
         if self.preview:
             await self.preview.close()
         try:

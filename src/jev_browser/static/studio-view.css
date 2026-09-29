@@ -1,0 +1,8 @@
+/* Shared visual tokens for all Studio views, after the view's own styles. */
+:host { display:block; color:#252523; font-family:InterVariable,Inter,system-ui,"PingFang SC",sans-serif; font-size:15px; line-height:1.6; --bg:#fafaf7; --text:#252523; --panel:#fff; --muted:#60665d; --line:rgb(0 0 0 / 9%); --green:#176743; --orange:#ed6738; --soft:#edf4e9; --danger:#a13226; --radius:9px; --amber:#8c551a; --amber-bg:#fff6e5; --red:#ad3328; --red-bg:#fff0ed; }
+main { max-width:1720px; margin:auto; padding:28px 4% 24px; }
+.intro { margin-bottom:22px; }
+h1 { font-size:clamp(26px,3vw,36px); font-weight:550; letter-spacing:-1px; }
+.panel { border-radius:9px; }
+a { color:var(--green); }
+@media(max-width:700px) { main { padding:24px 4%; } }

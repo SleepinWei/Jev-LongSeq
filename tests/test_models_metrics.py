@@ -296,3 +296,43 @@ def test_independent_calibration_paired_statistics_and_candidate_recall():
     assert pass_four({"t1": [True] * 4, "t2": [False] * 4}) == 0.5
     with pytest.raises(ValueError):
         pass_four({"t1": [True] * 3})
+
+
+async def test_preconnect_is_unauthenticated_and_separate_from_model_ledger(tmp_path):
+    from jev_browser.observability import Observer
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if request.method == 'GET':
+            assert request.url == 'https://model.test/'
+            assert 'authorization' not in request.headers
+            return httpx.Response(401)
+        return httpx.Response(200, json={'usage': {'input_tokens': 7, 'output_tokens': 2}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        model = ModelTransport('https://model.test/v1/chat/completions', 'private-key',
+                               'test', client=client)
+        model.observer = Observer(tmp_path)
+        assert (await model.preconnect())['status'] == 401
+        assert not model.ledger
+        await model.post({}, 'test')
+        assert len(model.ledger) == 1
+        assert model.client is client
+    assert [r.method for r in requests] == ['GET', 'POST']
+    warmups = (tmp_path / 'network-preconnects.jsonl').read_text()
+    assert 'private-key' not in warmups
+    assert not json.loads(warmups)['model_inference']
+
+
+async def test_preconnect_failure_does_not_prevent_model_request():
+    def respond(request):
+        if request.method == 'GET':
+            raise httpx.ConnectError('unavailable', request=request)
+        return httpx.Response(200, json={'choices': []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        model = ModelTransport('https://model.test/chat', 'test', 'test', client=client)
+        assert (await model.preconnect())['error'] == 'ConnectError'
+        assert await model.post({}, 'test') == {'choices': []}

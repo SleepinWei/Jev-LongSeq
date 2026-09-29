@@ -11,3 +11,7 @@ runs/
 dist/
 external/
 .nltk_data/
+.DS_Store
+.playwright-cli/
+# Generated recordings, screenshots and reports stay on the execution host.
+output/

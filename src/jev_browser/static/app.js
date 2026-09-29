@@ -1,7 +1,8 @@
+export function mount(root, {location, history, isActive}) {
 /* Browser Use / Jev Ultrafast (MIT) inspector helpers and rendering pattern,
  * adapted for LongSeq artifacts, timeline replay and continuous live screenshots.
  * See ULTRAFAST-LICENSE.txt. */
-const $ = (id) => document.getElementById(id);
+const $ = (id) => root.getElementById(id);
 const token = document.querySelector('meta[name="demo-token"]').content;
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"})[c]);
@@ -160,7 +161,7 @@ function renderSelection() {
   if (tab === "pages") panel.innerHTML=s.pages.map(p=>`<article class="fact-card"><strong>${escape(p.title || '尚未观察内容')}</strong><p>${p.url===s.obs?.url ? '当前页面 · ' : ''}${p.observed ? '已观察' : '仅打开'} · ${escape(p.tabs.length ? p.tabs.join(', ') : '已离开 / 关闭')}</p><small>${escape(p.url)}</small></article>`).join('') || '<p class="muted">尚未记录网页</p>';
   if (!live?.active || !$("follow").checked) showFrame(e.at);
   updateStatus();
-  document.querySelectorAll('.event-row').forEach(el=>el.classList.toggle('selected',Number(el.dataset.index)===selected));
+  root.querySelectorAll('.event-row').forEach(el=>el.classList.toggle('selected',Number(el.dataset.index)===selected));
 }
 function renderTargets() {
   const meta=frameMetadata, boxes=meta?.overlays || [], s=state?.events.length ? eventState() : {};
@@ -238,8 +239,8 @@ $("next").addEventListener('click',()=>seek(Math.min((state?.events.length || 1)
 $("history").addEventListener('click',e=>{const row=e.target.closest('[data-index]'); if(row) seek(Number(row.dataset.index));});
 $("filter").addEventListener('change',renderTrail); $("search").addEventListener('input',renderTrail);
 $("follow").addEventListener('change',()=>{stop(); if($("follow").checked && state) selected=state.events.length-1; renderSelection(); update();});
-document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{
-  tab=button.dataset.tab; document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b===button))); renderSelection();
+root.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{
+  tab=button.dataset.tab; root.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b===button))); renderSelection();
 }));
 $("play").addEventListener('click',()=>{
   if (!state?.events.length) return;
@@ -264,6 +265,10 @@ function launchButtons() {
 async function launcherStatus() {
   try {
     const data=await get('/api/launcher'); launcherBusy=data.running; launchButtons();
+    if(data.id?.startsWith('ultrafast/')) {
+      $("launch-status").textContent=data.running ? '原始 Ultrafast 正在运行，请切换到“原始 Ultrafast”视图查看。' : '原始 Ultrafast 已结束，可在其独立视图查看记录。';
+      return;
+    }
     if(data.running) $("launch-status").textContent=`正在执行 · ${data.id} · 可在下方查看实时轨迹`;
     else if(data.id && (watchedLaunch===data.id || !watchedLaunch)) {
       watchedLaunch=data.id;
@@ -310,6 +315,9 @@ $("overlays").addEventListener('change',renderTargets);
 $("screenshot").addEventListener('error',()=>{lastImage=''; frameMetadata=null; renderTargets(); $("screenshot").hidden=true; $("empty").hidden=false; $("empty-hint").textContent='截图暂不可用，等待下一帧。';});
 runs().catch(e=>error(e.message));
 launcherStatus();
-setInterval(launcherStatus,2000);
-setInterval(update,1000);
+setInterval(()=>{if(isActive()) launcherStatus();},2000);
+setInterval(()=>{if(isActive()) update();},1000);
 setInterval(()=>{if(pendingId) runs(pendingId).catch(e=>error(e.message));},2000);
+
+return {navigate: async url => { const id=url.searchParams.get("run"); if(id && id!==currentId) await runs(id); }, activate: () => {launcherStatus();update();}, deactivate:stop};
+}

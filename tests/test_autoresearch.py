@@ -277,3 +277,58 @@ async def test_researcher_failure_stops_without_changing_the_incumbent(tmp_path,
     assert state["stop_reason"] == "researcher_failed"
     assert state["incumbent"] == 0 and len(called) == 1
     assert json.loads((tmp_path / "best-profile.json").read_text()) == called[0]
+
+
+async def test_rejected_experiment_is_visible_to_the_next_analysis(tmp_path, monkeypatch):
+    seen = []
+
+    class Analyst:
+        def __init__(self, args, observer):
+            self.transport = self
+
+        async def propose(self, profile, analysis, tried, history):
+            seen.append((analysis, history))
+            return proposal(profile, analysis, tried)
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr("jev_browser.autoresearch.CodexResearcher", Analyst)
+    args = args_for(tmp_path)
+    args.max_trials = 3
+    runner, called = fake_runner([report(), report(tokens=200), report(tokens=50)])
+    assert await run_research(args, runner=runner) == 0
+    assert len(seen) == 2 and len(called) == 3
+    analysis, history = seen[1]
+    assert history[1]["selection"]["decision"] == "reject"
+    assert history[1]["measurements"]["known_input_tokens"] == 200
+    assert history[0]["measurements"]["end_to_end_s"] == 10
+    assert any(e["trial_id"] == 1 for e in analysis["evidence"])
+    record = json.loads((tmp_path / "researcher/analysis-002.json").read_text())
+    assert record["status"] == "complete" and record["history"][1]["quality"]["strict_success"]
+    conclusion = json.loads((tmp_path / "conclusions.json").read_text())
+    assert [e["outcome"] for e in conclusion["experiments"]] == [
+        "not_supported", "supported_in_this_comparison"]
+    assert conclusion["incumbent"] == 2
+    assert "未证明泛化" in conclusion["limitations"][0]
+    assert "token regression" in (tmp_path / "research.md").read_text()
+
+
+async def test_analyst_stop_explanation_survives_in_study_and_report(tmp_path, monkeypatch):
+    class Analyst:
+        def __init__(self, args, observer):
+            self.transport = self
+            self.last_advice = {"decision": "stop", "hypothesis": "Insufficient evidence for a new hypothesis."}
+
+        async def propose(self, *args):
+            return None
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr("jev_browser.autoresearch.CodexResearcher", Analyst)
+    runner, _ = fake_runner([report()])
+    await run_research(args_for(tmp_path), runner=runner)
+    study = json.loads((tmp_path / "study.json").read_text())
+    assert study["last_advice"]["decision"] == "stop"
+    assert "Insufficient evidence" in (tmp_path / "research.md").read_text()

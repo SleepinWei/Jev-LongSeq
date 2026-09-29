@@ -1,0 +1,204 @@
+% !TEX program = xelatex
+\documentclass[aspectratio=169,11pt]{beamer}
+\usepackage[UTF8,fontset=fandol]{ctex}
+\usepackage{fontspec}
+\setsansfont{texgyreheros-regular.otf}[BoldFont=texgyreheros-bold.otf,ItalicFont=texgyreheros-italic.otf]
+\setmonofont{lmmono10-regular.otf}
+\usepackage{tikz,booktabs,tabularx,amsmath,multimedia}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,backgrounds}
+\definecolor{Ink}{HTML}{17392C}
+\definecolor{Green}{HTML}{26704D}
+\definecolor{Pale}{HTML}{EAF1E9}
+\definecolor{Paper}{HTML}{F8F9F5}
+\definecolor{Muted}{HTML}{626E65}
+\definecolor{Line}{HTML}{CCD9CE}
+\definecolor{Orange}{HTML}{BF673A}
+\definecolor{Blue}{HTML}{3B657A}
+\setbeamercolor{normal text}{fg=Ink,bg=Paper}
+\setbeamercolor{structure}{fg=Green}
+\setbeamercolor{frametitle}{fg=Ink}
+\setbeamercolor{alerted text}{fg=Orange}
+\setbeamercolor{block title}{fg=Green,bg=Paper}
+\setbeamercolor{block body}{fg=Ink,bg=Paper}
+\setbeamerfont{frametitle}{size=\LARGE,series=\bfseries}
+\setbeamerfont{normal text}{size=\normalsize}
+\setbeamersize{text margin left=8mm,text margin right=8mm}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{itemize item}{\color{Green}\small\textbullet}
+\setbeamertemplate{itemize subitem}{\color{Green}\scriptsize\textbullet}
+\setbeamertemplate{frametitle}{\vspace{3mm}\insertframetitle\par\vspace{1mm}}
+\setbeamertemplate{footline}{\hspace{8mm}\color{Muted}\tiny Jev LongSeq\hfill\insertframenumber\,/\,\inserttotalframenumber\hspace{8mm}\vspace{3mm}}
+\setbeameroption{hide notes}
+\hypersetup{pdftitle={Jev LongSeq: Agent 设计与实测对比},pdfauthor={Jev LongSeq},colorlinks=true,urlcolor=Green,linkcolor=Green}
+\newcommand{\src}[1]{\par\vfill{\fontsize{6.5}{8}\selectfont\color{Muted}依据：#1\par}}
+\newcommand{\lead}[1]{{\large\color{Green}#1}\par\vspace{3mm}}
+\newcommand{\key}[1]{\textbf{\color{Green}#1}}
+\newcommand{\gap}{\par\vspace{1.8mm}}
+\tikzset{box/.style={draw=Line,fill=white,rounded corners=2pt,align=center,inner sep=7pt,font=\small},jev/.style={box,draw=Green,fill=Green,text=white,very thick},brain/.style={box,draw=Blue,text=Blue},flow/.style={-{Stealth[length=2mm]},thick,draw=Green},hint/.style={font=\scriptsize,text=Muted,align=center},boundary/.style={draw=Line,dashed,rounded corners=3pt,inner sep=9pt}}
+\title{Jev LongSeq}
+\subtitle{Agent 设计与实测对比}
+\date{2026 年 9 月}
+\begin{document}
+
+\begin{frame}[plain]
+\vspace{8mm}
+{\small\color{Green}BROWSER AGENT}\par\vspace{6mm}
+{\fontsize{36}{40}\selectfont\bfseries Jev LongSeq}\par\vspace{4mm}
+{\LARGE Agent 设计与实测对比}\par\vspace{8mm}
+{\large Jev 选择动作，DeepSeek 提供阶段指导\par\vspace{2mm}Harness 管理执行、读回与记忆}\par
+\vfill
+{\small\color{Muted}小红书 Staycation\hfill 2026.09.27}
+\note{约五到七分钟，随后播放用户准备的 demo。聚焦已实现的动态 agent 设计，以及本次纯 DeepSeek 和 Jev + DeepSeek 的单次实测。这里的 browser agent 使用可见 DOM 与候选动作，截图只供录制和人类检查。}
+\end{frame}
+
+\begin{frame}{Agent 架构：阶段指导与逐步决策}
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm]
+\node[brain,text width=3cm] (brain) at (7,4.7) {DeepSeek\\阶段指导\\工作记忆};
+\node[box,text width=2.15cm] (obs) at (1.3,2.75) {观察与来源\\可见 DOM\\页面状态};
+\node[box,text width=1.8cm] (cand) at (4.15,2.75) {候选构造\\控件能力};
+\node[jev,text width=2cm] (jev) at (7,2.75) {Jev Policy\\选择动作\\判断结果};
+\node[box,text width=2cm] (exec) at (10.4,2.75) {校验与执行\\动作 / 回执};
+\node[box,text width=6.8cm] (browser) at (5.85,.65) {浏览器后端：Chrome / Playwright / BrowserGym};
+\draw[flow] (obs)--(cand);\draw[flow] (cand)--(jev);\draw[flow] (jev)--(exec);
+\draw[flow] (exec.south)--++(0,-.65)-|(browser.east);
+\draw[flow] (browser.west)-| (obs.south);
+\draw[flow,draw=Blue] (brain.south)--(jev.north);
+\draw[flow,draw=Blue,dashed] (obs.north)|-node[hint,pos=.75,above]{初始 / 异常 / 阶段上限}(brain.west);
+\begin{scope}[on background layer]\node[boundary,fit=(obs)(cand)(jev)(exec)] {};\end{scope}
+\end{tikzpicture}
+\par\small Agent harness 管理状态、权限、预算、读回与日志。
+\src{dynamic.py；models.py；browser.py；chrome.py；gym\_backend.py。大脑反馈与 Jev 的动作建议均由控制器消费。}
+\note{这里的 agent harness 是项目的整个执行编排层。ChromeBackend 中引用的 browser-harness 包只负责发现本机 Chrome 调试入口，不能将这个依赖包与完整 agent harness 混为一谈。最终复核路径在后续页面展开。}
+\end{frame}
+
+\begin{frame}{Jev 接口：一次请求回答两个问题}
+\lead{存在待确认动作时，同时询问 outcome 与 action}
+\begin{columns}[T,onlytextwidth]
+\column{.55\textwidth}
+\begin{tikzpicture}[node distance=4mm,box/.append style={inner sep=6pt}]
+\node[box,text width=6.3cm] (state) {目标 + 阶段指导 + 当前 DOM\\近期证据 + 待确认转移};
+\node[jev,text width=6.3cm,below=of state] (api) {TypeSafe \texttt{/v1/systemone}\\\texttt{questions.*.type = choice}};
+\node[box,text width=2.5cm,below left=6mm and -2.7cm of api] (out) {outcome\\confirmed / pending\\/ unknown};
+\node[box,text width=2.5cm,below right=6mm and -2.7cm of api] (act) {action\\当前候选的 ID\\及 confidence};
+\draw[flow] (state)--(api);\draw[flow] (api.south)--++(0,-.2)-|(out.north);\draw[flow] (api.south)--++(0,-.2)-|(act.north);
+\end{tikzpicture}
+\column{.40\textwidth}
+\small
+\key{Jev 的职责}\par
+从有限候选中选择，并判断上一步的可见结果。\gap
+\key{控制器的消费条件}\par
+上一步确认后，才消费下一动作；否则等待、请求大脑或停止。\gap
+\key{减少串行调用}\par
+结果判断无需额外串行请求。Jev 可在两次大脑调用间连续推进。
+\end{columns}
+\src{models.py：JevPolicy.choose；dynamic.py：pending 分支。confidence 可记录，默认不启用阈值升级。}
+\note{两个问题装在同一个 HTTP 请求里，项目没有测量服务端如何并行计算两个头。应表述为一次请求两个选择问题，避免宣称已验证服务内部并行。Jev 不输出任意选择器或浏览器代码；框架执行候选绑定的真实操作。}
+\end{frame}
+
+\begin{frame}{执行与读回：动作绑定当前观察}
+\lead{Harness 校验候选，执行后等待新观察确认}
+\small
+\begin{tabularx}{\textwidth}{@{}p{2.5cm}Y>{\raggedright\arraybackslash}p{3.4cm}@{}}\toprule
+环节 & 绑定与检查 & 状态处理\\\midrule
+候选构造 & 可见控件生成 click / fill / select 等候选 & Jev 返回候选 ID\\[2.4mm]
+执行前校验 & 观察版本、tab / frame、元素引用与参数 & 过期则重新观察\\[2.4mm]
+动作派发 & 先登记 pending，再执行状态变更 & 结果未明时保留 pending\\[2.4mm]
+结果读回 & 新观察确认输入值、搜索结果或页面变化 & 确认后继续，否则等待或求助\\\bottomrule
+\end{tabularx}\par
+\vspace{3mm}
+\key{输入文本由 DS 按需生成，select 必须使用真实选项。}\par\gap
+搜索框有值只确认“已填写”；结果出现才确认“已提交搜索”。
+\src{dynamic.py：generate\_dynamic / bind\_input / perform / confirm\_transition；browser.py：execute。}
+\note{动作绑定 observation_id、document_version、tab_id、frame_id、element_ref 和 bound_value。所有点击保守地视为可能改变状态。pending 期间不盲目重复提交，过期或明确拒绝的动作可以重新观察后决策。这些机制不保证服务器 exactly-once，也不能代替模型对业务意图的判断。动态模式的授权来自用户目标和约束。}
+\end{frame}
+
+\begin{frame}{事件调度与来源记忆}
+\begin{columns}[T,onlytextwidth]
+\column{.46\textwidth}
+\lead{按事件调用 DeepSeek}
+\begin{itemize}\setlength\itemsep{3mm}
+\item 初始阶段生成指导
+\item 阶段上限、停滞或求助触发更新
+\item 请求完成时，用新观察复核
+\end{itemize}
+\vspace{4mm}
+\small 默认窗口为 12 个有效动作。\par\gap
+异常可提前触发，新指导生效后重新决策。
+\column{.49\textwidth}
+\lead{Jev 保持较短上下文}
+\begin{itemize}\setlength\itemsep{3mm}
+\item 阶段指导与压缩工作记忆
+\item 最近 4 段证据、3 个动作摘要
+\item 待确认状态与页面登记
+\end{itemize}
+\vspace{4mm}
+\small 完整来源摘录继续归档。\par\gap
+完成复核接收完整来源归档，保留跨页信息。
+\end{columns}
+\vspace{4mm}
+{\color{Muted}\small 页面文本和摘要属于数据，不能改写任务目标或权限。}
+\src{dynamic.py：dynamic\_loop / JsonFeedback.review；memory.py：context。}
+\note{阶段窗口是上限，不表示每十二步固定调用一次 DS。完整归档指运行实际保存的可见摘录，不是网页全部内容。阶段反馈和完成复核仍是模型判断。当前结果中的 success 是语义复核通过，不是独立事实核验。}
+\end{frame}
+
+\begin{frame}{对照设置：同一任务与执行框架}
+\lead{“在小红书上查找总结最近适合staycation的地方”}
+不限定城市，两边各自生成检索词。\par
+\vspace{3mm}
+\small
+\begin{tabularx}{\textwidth}{@{}p{3cm}YY@{}}\toprule
+组件 & 纯 DeepSeek & Jev + DeepSeek\\\midrule
+逐步候选决策 & DeepSeek / JsonPolicy & Jev / JevPolicy\\[2mm]
+指导、输入与总结 & DeepSeek & DeepSeek\\[2mm]
+执行与状态 & \multicolumn{2}{l}{同一 Chrome 登录、DOM、候选和记忆框架}\\[2mm]
+运行预算 & \multicolumn{2}{l}{480 秒、60 个动作、40 次反馈，阶段窗口 12}\\\bottomrule
+\end{tabularx}\par
+\vspace{3mm}
+两轮顺序运行，各开任务标签页。记录端到端时间与返回 usage。\par\gap
+\color{Muted}DS：deepseek-flash\qquad Jev：jev-1.13.0
+\src{examples/staycation\_run.py；runs/staycation-ds-vs-jev-20260927 中 pure-ds 与 jev-ds-verified。}
+\note{这里的纯 DS 是本项目 JsonPolicy 替换候选决策器，并非外部 Browser Use，也不是截图原生 agent。两边的任务 hash 一致，viewport 为 1280×900。纯 DS 搜索 staycation 适合的地方推荐，Jev + DS 搜索 适合staycation的地方 推荐。网页内容、启动耗时、请求缓存和网络状况未固定。原纯 DS 轮发生一次 TLS 重试；Jev 成功轮在网络恢复后运行。}
+\end{frame}
+
+\begin{frame}{本次实测：耗时与 API 等价费用}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrr@{}}\toprule
+指标 & 纯 DeepSeek & Jev + DeepSeek\\\midrule
+端到端耗时 & {\LARGE 64.57 s} & {\LARGE\textcolor{Green}{59.18 s}}\\[3mm]
+已知 API 等价费用 & {\LARGE \$0.03163} & {\LARGE\textcolor{Green}{\$0.01548}}\\[3mm]
+API 请求次数 & 12 & 12\\[1.5mm]
+未返回 usage 的请求 & 1 & 0\\\bottomrule
+\end{tabular*}\par
+\vspace{3mm}
+{\large\key{此样本少用 5.39 秒，已知费用低 51.1\%。}}\par\vspace{3mm}
+{\footnotesize 单次样本。纯 DS 含一次 TLS 重试，Jev 在网络恢复后运行；差异不能直接归因于架构。\par\gap
+Jev 另有三次失败。含失败累计 219.64 秒、已知费用 \$0.01727，缺失 usage 费用仍未知。}
+\src{两轮 report.json；此前 jev-ds、jev-ds-retry、jev-ds-recovery。费用按 2026-09-27 off-peak 官方单价折算，非账户账单。}
+\note{原始数字：纯 DS 64.574835 秒和已知费用 0.031625064 美元；Jev + DS 59.180802 秒和 0.015478554 美元。速度差 5.394033 秒，约 8.35\%；已知费用比 0.489439。纯 DS 总费用有一条无 usage 请求，不能将未知费用记零。Jev 成功轮七次 Jev 请求费用 0.004405212 美元，五次 DS 请求费用 0.011073342 美元。前三次 Jev 失败共 160.458646 秒、已知费用 0.001793916 美元。四次合计 219.639448 秒和已知费用 0.017272470 美元。计费使用 DS 未缓存输入 0.15、缓存输入 0.003、输出 0.60 美元/百万 token，Jev 输入 0.042 美元/百万 token、输出免费，保留缓存拆分。来源 https://api-docs.deepseek.com/quick_start/pricing/ 与 https://docs.typesafe.ai/models 。不含本机、站点 AI、诊断与剪辑费用。}
+\end{frame}
+
+\begin{frame}{结果质量与 Demo}
+\lead{两边形成相近的地点总结}
+杭州夕上·虎跑1934、宜兴雅达溪山凯悦臻选、苏州洲际、\par\gap
+宁波柏悦、新昌安岚等。
+\vspace{5mm}
+\begin{columns}[T,onlytextwidth]
+\column{.46\textwidth}
+\textbf{共同的信息来源}\gap
+\begin{itemize}\setlength\itemsep{2.5mm}
+\item 搜索列表与小红书内置 AI 摘要
+\item 都未逐篇打开笔记正文
+\item 都未核验最近性、房价和可订性
+\end{itemize}
+\column{.49\textwidth}
+\textbf{本次回答的区别}\gap
+Jev + DS 明确说明“上海”来自站点位置推测。\par\gap
+纯 DS 将站点的上海个性化内容直接写入了回答。
+\end{columns}
+\vspace{5mm}
+{\large\key{Demo：同一 Staycation 任务的双屏执行}}\par
+\src{两轮 report.json 的 final\_answer 与轨迹。success 为语义复核通过，strict\_success=null。}
+\note{随后播放用户准备的 demo 视频。站点分别显示 AI 总结 62 篇和 68 篇笔记，这不是 agent 实际阅读篇数，不作为覆盖能力指标。用户没有指定上海。单次结果不能给出泛化成功率，也不能证明两者事实准确性相同。视频建议使用成功版 staycation-comparison-recovered，并保留此前失败开销和网站 AI 摘要来源的说明。本 deck 不嵌入或替换用户的 demo 视频。}
+\end{frame}
+\end{document}

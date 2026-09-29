@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -46,6 +47,17 @@ class Feedback(Model):
 
 class InputValue(Model):
     value: str = Field(max_length=12000)
+
+
+class FinishReview(Model):
+    """Keep verification and evidence, without regenerating a finished working memory."""
+
+    next_goal: str = Field(max_length=1000)
+    notes: list[EvidenceNote] = Field(default_factory=list, max_length=12)
+    last_outcome: Literal["none", "confirmed", "pending", "unknown"] = "none"
+    complete: bool = False
+    answer: str = Field(default="", max_length=12000)
+    blockers: list[str] = Field(default_factory=list, max_length=8)
 
 
 class StageGuidance(Model):
@@ -193,6 +205,7 @@ class JsonFeedback:
             ],
         }
         if phase == "finish":
+            content["schema"] = FinishReview.model_json_schema()
             # Completion must see the full sourced notebook, not just a rolling
             # summary and the most recent pages. This remains untrusted evidence.
             content["sourced_evidence_archive"] = [
@@ -250,7 +263,11 @@ class JsonFeedback:
                         " observation and sourced notebook; distrust previous completion claims. If"
                         " evidence is incomplete, set complete=false and explain what remains."
                         " Do not emit complete=true while a mutation is pending or unknown.")
-                        + PROMPT_VARIANTS[self.tuning.prompt_variant],
+                        + PROMPT_VARIANTS[self.tuning.prompt_variant]
+                        + (" This is the final review: do not regenerate working_memory. "
+                           "Put the useful result in answer and only the necessary exact supporting "
+                           "quotes in notes. If incomplete, state remaining work in next_goal."
+                           if phase == "finish" else ""),
                     },
                     {"role": "user", "content": json.dumps(content, ensure_ascii=False)},
                 ],
@@ -261,6 +278,8 @@ class JsonFeedback:
         raw = data["choices"][0]["message"]["content"]
         if compact:
             return Feedback(**StageGuidance.model_validate_json(raw).model_dump())
+        # Accept the prior full schema too, avoiding a repair call solely for an
+        # optional working_memory field. Evidence/completion validation is unchanged.
         return Feedback.model_validate_json(raw)
 
     async def value(self, task, obs, memory, action):
@@ -312,6 +331,7 @@ class DynamicController(Controller):
         self.feedback_calls = 0
         self.consumed: set[str] = set()
         self.pending: dict | None = None
+        self.pending_started = 0.0
         self.last_transition: dict | None = None
         self.last_brain_action = 0
         self.effective_actions = 0
@@ -438,6 +458,7 @@ class DynamicController(Controller):
         if action.operation in MUTATIONS and key in self.consumed:
             return "identical mutation was already dispatched; no resubmission"
         if action.operation in MUTATIONS:
+            self.pending_started = time.monotonic()
             self.pending = {
                 "action": action.model_dump(),
                 "before": self.memory.view(obs),
@@ -673,7 +694,10 @@ class DynamicController(Controller):
                         self.pending["waits"] += 1
                         if ("search_query" in self.pending
                                 and not self.pending.get("readback_reviewed")
-                                and self.pending["waits"] >= min(2, self.budget.readback_waits)):
+                                and self.pending["waits"] >= min(2, self.budget.readback_waits)
+                                and (time.monotonic() - self.pending_started
+                                     >= self.tuning.search_readback_grace_s
+                                     or self.pending["waits"] >= self.budget.readback_waits)):
                             self.pending["readback_reviewed"] = True
                             self.log("brain_requested", reason="search_readback")
                             assessment = await self.review(obs, phase="search_readback")

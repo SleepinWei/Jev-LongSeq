@@ -10,5 +10,8 @@ Copyright (c) 2026 Browser Use. MIT license in `ULTRAFAST-LICENSE.txt`.
 
 LongSeq-specific additions: run discovery, typed trajectory inspection, archived
 Playwright screencast playback, continuous opt-in preview, verified result metrics
-and an offline rule-demo launcher. The source project is not modified or imported
-at runtime. No account credentials are copied into the UI.
+and an offline rule-demo launcher. The optional original Ultrafast view imports
+the local source project in an isolated worker without modifying it. Its DOM
+overlays and native decision ranking in `original.js` reuse the upstream
+rendering pattern and existing `ultrafast.css`, adding recorded decision context
+and linked element highlighting. No account credentials are copied into the UI.

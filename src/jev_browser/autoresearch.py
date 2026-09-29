@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .observability import Observer, ResourceLimit, save_analysis, write_json
 from .protocol import AgentTuning, digest, now
+from .research_evidence import experiment_memory, save_conclusions
 from .researcher import CodexResearcher
 
 
@@ -448,9 +449,7 @@ async def run_research(args, *, runner=None):
             state.update(status="blocked", stop_reason=f"{suite}_unavailable", updated_at=now())
             write_json(root / "study.json", state)
             write_json(root / "budget.json", previous_budget or {})
-            (root / "research.md").write_text(
-                f"# Autoresearch study\n\nBlocked: {suite} preflight unavailable. No benchmark or model calls started.\n"
-            )
+            save_conclusions(root, {**state, "budget": previous_budget or {}}, {})
             print(f"Research blocked by {suite} preflight: {root.resolve()}")
             return 2
         args._selected_tasks = preflight["selected_tasks"]
@@ -473,6 +472,8 @@ async def run_research(args, *, runner=None):
         for t in state["trials"]
         if t["status"] == "complete"
     }
+    analyses = {t["id"]: save_analysis(root / t["directory"], reports[t["id"]])
+                for t in state["trials"] if t["status"] == "complete"}
     tried = {digest(t["profile"]) for t in state["trials"]}
     stop = "trial_budget"
     gate.save()
@@ -486,10 +487,13 @@ async def run_research(args, *, runner=None):
             if index and change is None:
                 state.update(phase="analyzing", updated_at=now())
                 write_json(root / "study.json", state)
-                incumbent = reports[state["incumbent"]]
-                incumbent_analysis = save_analysis(
-                    root / state["trials"][state["incumbent"]]["directory"], incumbent
-                )
+                incumbent_analysis = analyses[state["incumbent"]]
+                history, evidence = experiment_memory(state["trials"], analyses, state["incumbent"])
+                observations = {**incumbent_analysis, "evidence": evidence}
+                analysis_record = {"trial_index": index, "incumbent": state["incumbent"],
+                                   "status": "analyzing", "history": history, "evidence": evidence}
+                analysis_path = root / "researcher" / f"analysis-{index:03}.json"
+                write_json(analysis_path, analysis_record)
                 research_observer.context.update(cycle=index, phase="research")
                 try:
                     async with asyncio.timeout(gate.remaining_seconds):
@@ -497,19 +501,24 @@ async def run_research(args, *, runner=None):
                             "research.propose",
                             researcher.propose,
                             AgentTuning.model_validate(state["best_profile"]),
-                            incumbent_analysis,
+                            observations,
                             tried,
-                            [
-                                {k: t.get(k) for k in ("id", "profile", "selection")}
-                                for t in state["trials"]
-                            ],
+                            history,
                         )
                 except ResourceLimit:
                     raise
                 except Exception as exc:
                     stop = "researcher_failed"
                     state["researcher_error"] = type(exc).__name__
+                    state["last_advice"] = {"decision": "error", "hypothesis": "分析器未返回有效提案，保留原配置。"}
+                    write_json(analysis_path, {**analysis_record, "status": "failed",
+                                               "error_type": type(exc).__name__})
                     break
+                state["last_advice"] = getattr(researcher, "last_advice", None) or {
+                    "decision": "try" if change else "stop",
+                    "hypothesis": (change or {}).get("hypothesis", "没有受现有证据支持的未尝试配置。")}
+                write_json(analysis_path, {**analysis_record, "status": "complete",
+                                           "advice": state["last_advice"]})
                 state["next_proposal"] = change
                 write_json(root / "study.json", state)
                 if change is None:
@@ -540,6 +549,7 @@ async def run_research(args, *, runner=None):
             print(f"Trial {index + 1}/{args.max_trials}: {profile.model_dump()}", flush=True)
             report = await runner(trial_args, count=args.records, output=output)
             analysis = save_analysis(output, report)
+            analyses[index] = analysis
             state.update(phase="evaluating", updated_at=now())
             write_json(root / "study.json", state)
             trial.update(status="complete", analysis="observability.json", result=report["result"])
@@ -570,7 +580,7 @@ async def run_research(args, *, runner=None):
             else:
                 write_json(root / "baseline-profile.json", state["best_profile"])
             write_json(root / "study.json", state)
-            gate.save()
+            save_conclusions(root, {**state, "budget": gate.save()}, analyses)
             print(
                 f"  {selection['decision']}: {selection['reason']}; status={report['result']['status']}",
                 flush=True,
@@ -601,27 +611,6 @@ async def run_research(args, *, runner=None):
             write_json(root / "next-proposal.json", state["next_proposal"])
         else:
             (root / "next-proposal.json").unlink(missing_ok=True)
-        lines = [
-            "# Autoresearch study",
-            "",
-            f"Stop: `{stop}`. Best validated: `{state['best_validated']}`.",
-            "",
-            "| Trial | Change | Decision | Strict success |",
-            "|---|---|---|---|",
-        ]
-        for trial in state["trials"]:
-            lines.append(
-                f"| {trial['id']} | {json.dumps((trial.get('proposal') or {}).get('change', 'baseline'))} | "
-                f"{trial.get('selection', {}).get('decision', trial['status'])} | {trial.get('result', {}).get('strict_success')} |"
-            )
-        lines.extend(
-            [
-                "",
-                "Kept changes are provisional pilot observations, not generalized benchmark claims.",
-                "The previous incumbent remains selected when a trial is rejected or inconclusive.",
-                "",
-            ]
-        )
-        (root / "research.md").write_text("\n".join(lines))
+        save_conclusions(root, state, analyses)
     print(f"Research artifacts: {root.resolve()}")
     return 0 if state["best_validated"] else 1

@@ -197,10 +197,15 @@ async def run_trial(args, *, count=None, output=None):
     write_json(output / "manifest.json", manifest)
     write_json(output / "task.json", task.model_dump(mode="json"))
     transports, grade, controller = [], {}, None
+    connection_tasks = []
     try:
         policy, planner, transports = adapters(args)
         for client in transports:
             client.observer = observer
+        if getattr(args, "preconnect", False):
+            connection_tasks = [asyncio.create_task(client.preconnect())
+                                for client in transports if isinstance(client, ModelTransport)]
+        manifest["preconnect"] = bool(connection_tasks)
         if args.command == "browse":
             from .start_page import resolve_start_page
 
@@ -251,6 +256,8 @@ async def run_trial(args, *, count=None, output=None):
             asyncio.timeout(max(0.001, args.max_seconds - (time.monotonic() - started))),
             backend as browser,
         ):
+            if connection_tasks:
+                await asyncio.gather(*connection_tasks)
             manifest["chromium"] = browser.browser_version
             if is_demo:
                 html = catalog_html(
@@ -326,6 +333,11 @@ async def run_trial(args, *, count=None, output=None):
         )
         if is_demo and not custom_goal:
             result.strict_success = False
+    for connection in connection_tasks:
+        if not connection.done():
+            connection.cancel()
+    if connection_tasks:
+        await asyncio.gather(*connection_tasks, return_exceptions=True)
     ledger = [record for client in transports for record in client.ledger]
     for client in transports:
         await client.aclose()
@@ -363,6 +375,8 @@ async def run_trial(args, *, count=None, output=None):
 
 
 def common(parser, *, demo):
+    parser.add_argument("--preconnect", action="store_true",
+                        help="Prepare model HTTP connections concurrently with browser setup")
     parser.add_argument(
         "--env-file", help="Explicit dotenv path; secrets are never copied to artifacts"
     )

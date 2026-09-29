@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="demo-token" content="__TOKEN__">
+  <title>Trace Studio · Jev LongSeq</title>
+  <link rel="stylesheet" href="/studio.css">
+  <script type="module" src="/studio.js"></script>
+</head>
+<body>
+  <header class="studio-header">
+    <a href="/" class="studio-brand" aria-label="Trace Studio 首页">Jev <span>LongSeq</span><i>/</i><strong>Trace Studio</strong></a>
+    <nav class="studio-nav" aria-label="Studio 视图">
+      <a href="/" data-view="longseq">LongSeq</a>
+      <a href="/ultrafast" data-view="ultrafast">Ultrafast</a>
+      <a href="/research" data-view="research">Autoresearch</a>
+    </nav>
+    <span class="studio-local">LOCAL STUDIO</span>
+  </header>
+  <p id="studio-status" role="status" hidden></p>
+  <div id="studio-views"></div>
+  <template id="initial-view" data-path="__VIEW_PATH__">__VIEW_CONTENT__</template>
+</body>
+</html>
