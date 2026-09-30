@@ -173,3 +173,11 @@ macmini 离线回放 fixed-04 的最终观察、memory、consumed 集和原模�
 macmini 定向回归 139 passed，Ruff 和 diff 空白检查通过。新端到端用例覆盖 stale 选项消失后指导更新、一次同值跳过、Clear → 重查 → 点击精确选项；没有同值派发或缓存复用，也未触发通用 no_progress 恢复。该脚本反馈用例验证调度机制，不代表完整任务业务评分。
 
 完整回归：macmini 426 passed、3 skipped。
+
+真实模型验证 `saas-longseq-business031-20261001-fixed-06/saas-bench-business_031`：Task、working_memory 与原 checkpoint 完全一致，恢复 78 条历史操作。两次 stale option/menuitem 失去原语义匹配时立即重新指导，另有两次新观察下的唯一目标重选；第一行负责人 stale 后成功选中 Rajesh Kumar，继续填写全部活动并提交离职单。全程 input_already_satisfied=0、input_reused=0，旧同值循环未复现。官方评分 4/15：离职单 docstatus=1、三条活动及负责人、供应商显示名和邮箱均通过。两次模型反馈格式错误分别为额外 phase 字段和非 JSON 输出，均经修复继续执行；无业务重复提交或 constraint violation。agent 约 581.9 秒，133 次动作，38 次反馈/输入调用；环境清理成功。
+
+本轮第四档压缩已实际触发，但供应商 Filter 下拉菜单打开后，新请求仍为 48,138 字节，超过硬上限 138 字节；保留 pending 并在请求发送前停止。新增无损共享编码：压力档位下将多数控件 role 提升到 `control_defaults`，将多数候选 operation 提升到 `candidate_defaults`，显式字段覆盖默认值。候选默认值只有净减少字节时启用；候选 ID、当前控件、精确值、操作能力、禁用/unchecked 状态及全部 memory 不改变。原 Action 仍供执行层使用。
+
+macmini 精确回放 fixed-06 最终请求：原始 112,525 字节，与现场一致；旧第四档 48,138 字节，新编码 43,880 字节。162 个候选逐项还原与旧投影完全一致，所有控件和全部 memory 均一致；0 次模型调用、0 次业务派发。诊断位于 `runs/diagnostics/context-fixed06-20261001/result.json`，保留旧投影实现以供比较。该编码定向回归 120 passed，Ruff 和 diff 空白检查通过；4/15 为此编码修复前的真实模型得分，编码修复后尚未再次整项跑分。
+
+共享编码后的完整回归：macmini 427 passed、3 skipped。

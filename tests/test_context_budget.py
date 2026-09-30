@@ -145,7 +145,14 @@ def test_emergency_pin_table_retains_all_refs_recent_facts_and_pending_state():
     assert view['pending_writes'] == payload['state']['untrusted_memory']['pending_writes']
     assert compact['state']['trusted_goal'] == task.objective
     assert compact['state']['hard_constraints'] == ['No replay']
-    assert compact['state']['untrusted_observation'] == normal['state']['untrusted_observation']
+    for name in ('normal', 'compact'):
+        view_obs = {'normal':normal, 'compact':compact}[name]['state']['untrusted_observation']
+        decoded = {key:{**view_obs['control_defaults'], **control}
+                   for key,control in view_obs['controls'].items()}
+        if name == 'normal':
+            normal_controls = decoded
+        else:
+            assert decoded == normal_controls
     assert compact['questions'] == payload['questions']
     projected, metrics = project_request(payload, max_bytes=wire_bytes(normal) - 1)
     assert metrics['level'] == 3 and metrics['after_bytes'] <= metrics['max_bytes']
@@ -351,3 +358,39 @@ def test_projection_preserves_runtime_errors_and_merges_exact_pins_with_provenan
     assert len(pins) == 1 and pins[0]['source']['quote'] == 'Record HR-007'
     assert pins[0]['additional_source_refs'] == [{'observation_id': 'later'}]
     assert memory.export() == saved
+
+
+def test_emergency_defaults_reconstruct_every_control_and_candidate_losslessly():
+    from jev_browser.context_budget import _pool
+
+    task, obs, memory = sample()
+    obs.elements += [Element(id=f'field{i}', role='textbox', name=f'Field {i}',
+                            value=f'Existing {i}', editable=True) for i in range(20)]
+    obs.elements += [Element(id='disabled', role='button', name='Save', enabled=False),
+                     Element(id='flag', role='checkbox', name='Consent', checked=False)]
+    candidates = generate_dynamic(obs, task)
+    options = {a.id:{'operation':a.operation,
+                     **({'target':a.element_ref} if a.element_ref else {'description':a.description}),
+                     **({'value':a.bound_value} if a.bound_value is not None else {})} for a in candidates}
+    payload = {'state':{'trusted_goal':task.objective, 'untrusted_observation':obs.model_dump(),
+                        'untrusted_memory':memory.context()},
+               'questions':{'action':{'criteria':options}}}
+    saved = copy.deepcopy(payload)
+    projected = _pool(payload, 3)
+    state = projected['state']
+    assert state['untrusted_observation']['control_defaults']['role'] == 'textbox'
+    assert state['candidate_defaults']['operation'] == 'fill'
+    for candidate_id, option in projected['questions']['action']['criteria'].items():
+        decoded = {**state['candidate_defaults'], **option}
+        if 'value_ref' in decoded:
+            decoded['value'] = state['literal_values'][decoded.pop('value_ref')]
+        assert decoded == options[candidate_id]
+    controls = state['untrusted_observation']['controls']
+    defaults = state['untrusted_observation']['control_defaults']
+    normal_obs = _pool(payload, 2)['state']['untrusted_observation']
+    for key,control in controls.items():
+        assert {**defaults, **control} == {**normal_obs['control_defaults'], **normal_obs['controls'][key]}
+    assert {**defaults, **controls['disabled']}['enabled'] is False
+    assert {**defaults, **controls['flag']}['checked'] is False
+    assert wire_bytes(projected) < wire_bytes(_pool(payload, 2))
+    assert payload == saved

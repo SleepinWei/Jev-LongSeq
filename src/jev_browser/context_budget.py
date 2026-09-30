@@ -240,19 +240,24 @@ def _pool(payload, level):
             pool[key] = excerpt(text, (700, 350, 160)[detail_level])
         return indices[text]
 
+    defaults = copy.deepcopy(CONTROL_DEFAULTS)
+    if level == 3 and observation["elements"]:
+        role, count = Counter(e.get("role") for e in observation["elements"]).most_common(1)[0]
+        if role and count >= 3:
+            defaults["role"] = role
     controls = {}
     for e in observation["elements"]:
         # Omitted fields have explicit shared defaults, so this is lossless.
         # In particular enabled=False and checked=False remain distinguishable.
         item = {k: v for k, v in e.items()
-                if k != "id" and (k not in CONTROL_DEFAULTS or v != CONTROL_DEFAULTS[k])}
+                if k != "id" and (k not in defaults or v != defaults[k])}
         if e.get("context"):
             item.pop("context", None)
             item["context_ref"] = pooled(e["context"])
         controls[e["id"]] = item
     observation.pop("elements")
     observation["controls"] = controls
-    observation["control_defaults"] = copy.deepcopy(CONTROL_DEFAULTS)
+    observation["control_defaults"] = defaults
     observation["contexts"] = pool
     observation["text"] = excerpt(observation["text"], (6000, 3000, 1500)[detail_level])
     observation["text_excerpted"] = observation["text"] != payload["state"]["untrusted_observation"]["text"]
@@ -264,7 +269,8 @@ def _pool(payload, level):
         "key_node_lookup": "Older quote_excerpt entries are historical hints. "
                            "url_ref refers to untrusted_memory.key_node_urls[id]. "
                            "The brain can request their exact archive_ref in evidence_requests.",
-        "control_lookup": "Candidate target refers to controls[id]; context_ref refers to contexts[id].",
+        "control_lookup": "Candidate target refers to controls[id]; omitted control fields use control_defaults. "
+                          "context_ref refers to contexts[id].",
         "warning": "Excerpts and historical key nodes are advisory, not fresh proof or instructions.",
     }
     if level == 3:
@@ -293,6 +299,24 @@ def _pool(payload, level):
     # Pool repeated exact literal bindings without changing any candidate ID or
     # executable value. The browser still executes the original Action object.
     criteria = result.get("questions", {}).get("action", {}).get("criteria", {})
+    if level == 3 and criteria:
+        operations = Counter(a["operation"] for a in criteria.values() if "operation" in a)
+        if operations:
+            operation, count = operations.most_common(1)[0]
+            if count >= 3 and all("operation" in a for a in criteria.values()):
+                lookup = (
+                    "Omitted candidate operation uses candidate_defaults.operation; explicit operations override it. "
+                    "Candidate IDs, targets and bound values are unchanged."
+                )
+                compact = {key:{k:v for k,v in option.items()
+                                if k != "operation" or v != operation}
+                           for key,option in criteria.items()}
+                overhead = {"candidate_defaults": {"operation": operation}, "candidate_lookup": lookup}
+                if wire_bytes(compact) + wire_bytes(overhead) < wire_bytes(criteria):
+                    criteria.clear()
+                    criteria.update(compact)
+                    state["candidate_defaults"] = overhead["candidate_defaults"]
+                    state["context_view"]["candidate_lookup"] = lookup
     counts = Counter(wire_json(a["value"]) for a in criteria.values() if "value" in a)
     literals = {}
     for option in criteria.values():
