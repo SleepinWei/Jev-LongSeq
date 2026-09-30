@@ -174,9 +174,14 @@ def action_key(action: Action, obs: Observation) -> str:
     )
 
 
-def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None):
+def input_slot_key(element, operation):
+    return digest([operation, element.model_dump(exclude={"id"})])
+
+
+def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppressed_inputs=None):
     """All candidates come from current DOM capabilities, never task-name matching."""
     consumed = consumed or set()
+    suppressed_inputs = suppressed_inputs or set()
     literals = list(quoted_inputs(task.objective))
 
     def make(op, description, **kw):
@@ -221,14 +226,19 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None):
                     regular.append(make(Operation.FILL,
                         "Fill with quoted user text " + json.dumps(literal["value"], ensure_ascii=False)
                         + " | " + description, element_ref=element.id, bound_value=literal["value"]))
-            regular.append(make(Operation.FILL, "Fill " + description, element_ref=element.id))
+            if input_slot_key(element, Operation.FILL) not in suppressed_inputs:
+                regular.append(make(Operation.FILL, "Fill " + description, element_ref=element.id))
+            if element.value and element.value != "[redacted]":
+                regular.append(make(Operation.FILL, "Clear " + description,
+                                    element_ref=element.id, bound_value=""))
         if element.selectable and element.options:
             for literal in literals:
                 if literal["value"] in element.options and literal["value"] != element.value:
                     regular.append(make(Operation.SELECT,
                         "Select quoted user text " + json.dumps(literal["value"], ensure_ascii=False)
                         + " | " + description, element_ref=element.id, bound_value=literal["value"]))
-            regular.append(make(Operation.SELECT, "Select " + description, element_ref=element.id))
+            if input_slot_key(element, Operation.SELECT) not in suppressed_inputs:
+                regular.append(make(Operation.SELECT, "Select " + description, element_ref=element.id))
     controls = [a for a in controls if a.operation in task.allowed_operations]
     regular = [
         a
@@ -491,6 +501,16 @@ class DynamicController(Controller):
         self.last_brain_attempt = 0
         self.input_retry = None
         self.stale_click = None
+        self.input_noop_scope = None
+        self.input_noops = {}
+
+    def input_suppression(self, obs):
+        scope = digest([semantic_key(obs), self.memory.feedback.get("next_goal"),
+                        self.memory.feedback.get("working_memory")])
+        if scope != self.input_noop_scope:
+            self.input_noop_scope = scope
+            self.input_noops = {}
+        return set(self.input_noops)
 
     def result(self, status, reason):
         result = super().result(status, reason)
@@ -741,6 +761,12 @@ class DynamicController(Controller):
                 and action.tab_id == obs.tab_id):
             self.log("input_already_satisfied", action=action.model_dump(),
                      scope="visible input value only; no linked resolution or persistence implied")
+            self.input_retry = None
+            self.input_suppression(obs)
+            self.input_noops[input_slot_key(element, action.operation)] = {
+                "operation": action.operation, "name": element.name, "value": element.value,
+                "meaning": "Same-value input was not dispatched; link resolution and business persistence remain unverified.",
+            }
             # Count the attempt for the loop budget, but dispatch no mutation.
             self.actions += 1
             return None
@@ -848,6 +874,14 @@ class DynamicController(Controller):
     async def bind_input(self, action, obs):
         element = next(e for e in obs.elements if e.id == action.element_ref)
         if action.bound_value is not None:
+            if (action.operation == Operation.FILL and action.bound_value == ""
+                    and element.editable and element.enabled and not element.read_only
+                    and element.value and element.value != "[redacted]"
+                    and action.description == f"Clear {element.role}: {element.name} | {element.context} | value={element.value}"):
+                self.input_retry = None
+                self.log("input_binding", action=action.model_dump(),
+                         source={"kind": "observed_input_reset", "scope": "visible input only"})
+                return
             source = next((b for b in quoted_inputs(self.task.objective)
                            if b["value"] == action.bound_value), None)
             if not source or (action.operation == Operation.SELECT
@@ -1176,6 +1210,8 @@ class DynamicController(Controller):
                 "actions_since_brain": self.effective_actions - self.last_brain_action,
                 "attempts_since_brain": self.actions - self.last_brain_attempt,
                 "actions_remaining": self.budget.max_actions - self.actions,
+                "same_value_inputs_suppressed": list(self.input_noops.values())
+                    if self.input_suppression(obs) else [],
             }
             if self.effective_actions - self.last_brain_action >= self.budget.brain_interval:
                 trigger = trigger or "stage_budget"
@@ -1195,8 +1231,16 @@ class DynamicController(Controller):
                     limit=self.budget.candidate_limit,
                     offset=offset,
                     consumed=self.consumed,
+                    suppressed_inputs=self.input_suppression(obs),
                 )
+                stale_target = self.stale_click
                 refreshed = self.refreshed_stale_click(obs, candidates)
+                if (stale_target and not refreshed
+                        and stale_target["element"]["role"] in {"option", "menuitem"}):
+                    self.log("stale_target_unavailable", target=stale_target["element"]["name"],
+                             action_dispatched=False, pending_preserved=bool(self.pending))
+                    trigger = "stale_target_changed"
+                    continue
                 decision = (Decision(choice=refreshed.id) if refreshed else
                             await self.observer.measure(
                                 "policy.choose", self.policy.choose, self.task, obs,

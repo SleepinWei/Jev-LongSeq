@@ -1395,3 +1395,131 @@ def test_stale_shortcut_cannot_be_reselected_as_an_ordinary_button():
     agent.stale_click = {'element':old.elements[0].model_dump(), 'attempts':1,
                         'url':old.url, 'tab_id':old.tab_id, 'title':old.title, 'dialogs':old.dialogs}
     assert agent.refreshed_stale_click(new, generate_dynamic(new, task())) is None
+
+
+async def test_same_value_input_clears_retry_cache_and_suppresses_only_unchanged_scope():
+    class Brain:
+        calls = 0
+        async def value(self, *args):
+            self.calls += 1
+            return 'Ada' if self.calls == 1 else 'Gold'
+
+    el = Element(id='name', role='textbox', name='Name', value='Ada', editable=True)
+    obs = observation(elements=[el])
+    brain = Brain()
+    agent = DynamicController(task(), None, None, feedback=brain)
+    action = next(a for a in generate_dynamic(obs, task())
+                  if a.operation == Operation.FILL and a.bound_value is None)
+    await agent.bind_input(action, obs)
+    assert agent.input_retry
+    await agent.perform(action, obs)
+    assert agent.input_retry is None and not agent.pending and not agent.consumed
+    candidates = generate_dynamic(obs, task(), suppressed_inputs=agent.input_suppression(obs))
+    assert not any(a.operation == Operation.FILL and a.bound_value is None for a in candidates)
+    clear = next(a for a in candidates if a.operation == Operation.FILL and a.bound_value == '')
+    await agent.bind_input(clear, obs)
+    assert brain.calls == 1  # Visible reset binds empty text without another value request.
+    assert any(e['kind'] == 'input_binding' and e.get('source', {}).get('kind') == 'observed_input_reset'
+               for e in agent.events)
+
+    fresh = obs.model_copy(update={'observation_id': 'o2'})
+    assert agent.input_suppression(fresh)  # New capture IDs do not reset suppression.
+    agent.memory.feedback['next_goal'] = 'Correct this field to Gold'
+    assert not agent.input_suppression(fresh)
+    action = next(a for a in generate_dynamic(fresh, task())
+                  if a.operation == Operation.FILL and a.bound_value is None)
+    await agent.bind_input(action, fresh)
+    assert brain.calls == 2 and action.bound_value == 'Gold'
+    await agent.perform(action.model_copy(update={'bound_value': 'Ada'}), fresh)
+    changed = fresh.model_copy(update={'elements': [el.model_copy(update={'value': 'Gold'})]})
+    assert not agent.input_suppression(changed)
+
+
+def test_clear_candidate_never_resets_hidden_password_or_read_only_field():
+    obs = observation(elements=[
+        Element(id='password', role='textbox', name='Password', value='[redacted]', editable=True),
+        Element(id='company', role='status', name='Company', value='Existing', read_only=True),
+        Element(id='disabled', role='textbox', name='Disabled', value='Existing', editable=True, enabled=False),
+    ])
+    assert not any(a.operation == Operation.FILL and a.bound_value == ''
+                   for a in generate_dynamic(obs, task()))
+
+
+async def test_disappeared_stale_option_recovers_with_reset_without_same_value_loop():
+    class Backend:
+        stale = False
+        committed = False
+        value = 'Rajesh Kumar'
+        observations = 0
+        dispatched = []
+        async def observe(self):
+            self.observations += 1
+            elements = [Element(id='name', role='textbox', name='Name', value='Ada', editable=True),
+                        Element(id='user', role='combobox', name='User', value=self.value, editable=True)]
+            if not self.committed:
+                options = ['Rajesh Kumar'] if not self.stale or self.value == 'Rajesh' else ['Create a new User', 'Advanced Search']
+                elements += [Element(id='option'+str(i), role='option', name=name) for i,name in enumerate(options)]
+            return observation(text='User committed' if self.committed else 'Pick a linked User',
+                               elements=elements).model_copy(update={'observation_id':f'o{self.observations}'})
+        async def execute(self, action):
+            self.dispatched.append((action.operation, action.element_ref, action.bound_value))
+            if action.operation == Operation.CLICK and not self.stale:
+                self.stale = True
+                return Receipt(action_id=action.id, status='stale')
+            if action.operation == Operation.FILL:
+                assert action.element_ref == 'user'
+                self.value = action.bound_value
+            elif action.operation == Operation.CLICK:
+                assert self.value == 'Rajesh' and action.element_ref == 'option0'
+                self.committed = True
+                self.value = 'rajesh@example.test'
+            return Receipt(action_id=action.id, status='ok')
+
+    class Policy:
+        tested_noop = False
+        async def choose(self, task, obs, memory, contract, candidates):
+            if not backend.stale:
+                chosen = next(a for a in candidates if a.operation == Operation.CLICK and a.element_ref == 'option0')
+            elif not self.tested_noop:
+                assert memory.feedback['next_goal'] == 'Reset User and query Rajesh'
+                self.tested_noop = True
+                chosen = next(a for a in candidates if a.operation == Operation.FILL and a.element_ref == 'name' and a.bound_value is None)
+            elif backend.committed:
+                chosen = next(a for a in candidates if a.operation == Operation.FINISH)
+            elif backend.value == 'Rajesh':
+                chosen = next(a for a in candidates if a.operation == Operation.CLICK and a.element_ref == 'option0')
+            else:
+                if backend.value == 'Rajesh Kumar':
+                    assert not any(a.operation == Operation.FILL and a.element_ref == 'name' and a.bound_value is None for a in candidates)
+                chosen = next(a for a in candidates if a.operation == Operation.FILL and a.element_ref == 'user'
+                              and a.bound_value == ('' if backend.value else None))
+            return Decision(choice=chosen.id, outcome='confirmed' if memory.pending_writes else 'none')
+
+    class Brain:
+        phases = []
+        values = 0
+        async def value(self, task, obs, memory, action):
+            self.values += 1
+            return 'Ada' if action.element_ref == 'name' else 'Rajesh'
+        async def review(self, task, obs, memory, *, phase, transition, **kw):
+            self.phases.append(phase)
+            if phase == 'stale_target_changed':
+                assert transition['receipt']['status'] == 'stale'
+                assert not memory.pending_writes
+            return Feedback(next_goal='Reset User and query Rajesh' if backend.stale else 'Select User',
+                            complete=backend.committed and phase == 'finish',
+                            answer='User committed' if backend.committed else '',
+                            notes=[EvidenceNote(quote=obs.text)])
+
+    backend, brain = Backend(), Brain()
+    goal = task().model_copy(update={'objective':'Preserve Name Ada; select linked User Rajesh Kumar.'})
+    agent = DynamicController(goal, backend, Policy(), feedback=brain,
+                              budget=Budget(max_cycles=20, no_progress_limit=3))
+    result = await agent.run()
+    assert result.status == 'success', result.reason
+    assert 'stale_target_changed' in brain.phases and 'no_progress' not in brain.phases
+    assert [v for op, _, v in backend.dispatched if op == Operation.FILL] == ['', 'Rajesh']
+    assert len(backend.dispatched) == 4 and brain.values == 2
+    assert sum(e['kind'] == 'input_already_satisfied' for e in agent.events) == 1
+    assert not any(e['kind'] == 'input_reused' for e in agent.events)
+    assert not agent.pending

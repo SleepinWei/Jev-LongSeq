@@ -161,3 +161,15 @@ flowchart LR
 macmini 离线回放 fixed-04 的最终观察、memory、consumed 集和原模型名：原始请求 104,711 字节，旧第三级投影 48,668 字节，与现场记录完全一致；新增第四档为 44,900 字节。139 个候选、pending、最近四个完整节点及完整 memory 档案均保持一致，0 次模型调用、0 次业务动作。诊断为 `runs/diagnostics/context-fixed04-20261001/result.json`。此回放验证请求可发送及档案完整性，未再次进行整项模型跑分；4/15 属于第四档修复前的 fixed-04。
 
 最终验证：macmini 完整回归 423 passed、3 skipped；表格严格列数断言补充后的预算模块测试 15 passed。Ruff 和 diff 空白检查通过，运行源码、测试、文档已同步 macmini。
+
+### 同值输入循环与 stale 选项恢复（2026-10-01）
+
+`fixed-05` 官方评分 0/15，停止于第一行 User 的未解析文本 `Rajesh Kumar`；Jev 最大请求 40,773 字节，无 context overflow 或 invalid_feedback，尚未到达第四档压缩的验证位置。负责人选项的点击在预检时 stale，随后当前 dropdown 仅有 Create a new User / Advanced Search。策略反复选已填的 Activity Name 和 User，15 次同值输入虽被跳过，却留下输入缓存，被后续调用误称为 undispatched stale retry。指导要求清空重查时，旧候选也没有明确的清空操作，输入 helper 仍返回原姓名。最后因恢复后相同页面再次出现而停止，环境已清理。
+
+- 同值输入不派发、不确认 Link 或业务提交，并立即清除输入重试缓存。仅在页面语义、控件状态和 next_goal/working_memory 均未变化时，屏蔽该控件已知无效的未绑定 fill/select；不同值的原任务文字候选、其他控件及清空候选仍保留。页面或指导变化后重新开放，当前抑制记录进入 execution_feedback。
+- 有非空可见值的启用可编辑控件增加 `Clear` fill 候选，明确绑定空字符串，作为观察到的输入重置能力；无需再请求模型猜测清空值。只读、禁用控件和 `[redacted]` 密码不提供该候选，原 Task 权限及业务提交保护保持不变。
+- stale 的 option/menuitem 无法在新页面按原完整语义唯一重选时，立即触发 `stale_target_changed` 反馈，不继续沿旧指导选择其他填充。未知派发结果仍停止，不能走此恢复路径；原同页同弹窗唯一选项重选保护保留。
+
+macmini 定向回归 139 passed，Ruff 和 diff 空白检查通过。新端到端用例覆盖 stale 选项消失后指导更新、一次同值跳过、Clear → 重查 → 点击精确选项；没有同值派发或缓存复用，也未触发通用 no_progress 恢复。该脚本反馈用例验证调度机制，不代表完整任务业务评分。
+
+完整回归：macmini 426 passed、3 skipped。
