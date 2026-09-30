@@ -48,10 +48,13 @@ class Element(Model):
     href: str | None = None
     options: list[str] = Field(default_factory=list)
     editable: bool = False
+    read_only: bool = False
+    required: bool = False
     selectable: bool = False
     checked: bool | None = None
     search_query: str | None = None
     search_scope: str | None = None
+    activation_key: Literal["Escape"] | None = None
 
 
 class Observation(Model):

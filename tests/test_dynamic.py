@@ -7,12 +7,16 @@ from pydantic import ValidationError
 from jev_browser.browser import PlaywrightBackend
 from jev_browser.controller import Controller
 from jev_browser.dynamic import (
+    WORKING_MEMORY_RECENT,
+    WORKING_MEMORY_TARGET,
+    WORKING_MEMORY_TRIGGER,
     DynamicController,
     EvidenceNote,
     Feedback,
     JsonFeedback,
     action_key,
     evidence_text,
+    feedback_json,
     generate_dynamic,
 )
 from jev_browser.evaluation import efficiency_profile
@@ -45,7 +49,7 @@ def observation(**kw):
         tab_id="tab-0",
         url="about:blank",
         title="Form",
-        text="A visible form",
+        text=kw.pop("text", "A visible form"),
         **kw,
     )
 
@@ -215,7 +219,8 @@ async def test_unknown_receipt_stops_with_pending_record():
 async def test_ungrounded_feedback_repairs_once_and_never_executes():
     class Hallucinating(FormFeedback):
         async def review(self, *args, **kwargs):
-            return Feedback(next_goal="Done", notes=[EvidenceNote(quote="Invented success")])
+            return Feedback(next_goal="Done", complete=True, answer="Done",
+                            notes=[EvidenceNote(quote="Invented success")])
 
     backend = UnknownBackend()
     agent = DynamicController(task(), backend, FirstClick(), feedback=Hallucinating())
@@ -225,6 +230,95 @@ async def test_ungrounded_feedback_repairs_once_and_never_executes():
     assert all(
         "Invented success" not in e["source"]["quote"] for e in agent.memory.evidence.values()
     )
+
+
+@pytest.mark.parametrize("outcome", ["none", "pending", "unknown"])
+async def test_nonconfirming_feedback_discards_bad_notes_without_repair(outcome):
+    class Brain:
+        calls = 0
+
+        async def review(self, *args, **kwargs):
+            self.calls += 1
+            return Feedback(next_goal="Inspect remaining work", last_outcome=outcome,
+                            notes=[EvidenceNote(quote="A visible form"),
+                                   EvidenceNote(quote="Invented successful write")])
+
+    brain = Brain()
+    agent = DynamicController(task(), None, None, feedback=brain)
+    feedback = await agent.review(observation(), phase="uncertain_outcome")
+    assert brain.calls == agent.feedback_calls == 1
+    assert feedback.last_outcome == outcome and not feedback.complete
+    assert [note.quote for note in feedback.notes] == ["A visible form"]
+    assert [e["source"]["quote"] for e in agent.memory.evidence.values()] == ["A visible form"]
+    event = next(e for e in agent.events if e["kind"] == "feedback_notes_discarded")
+    assert event["repair_call_skipped"]
+    assert event["diagnostic"][0]["loc"] == ["notes", 1, "quote"]
+    assert "Invented successful write" not in json.dumps(event)
+
+
+async def test_unknown_outcome_with_bad_note_stops_without_retrying_or_replaying():
+    class Backend(UnknownBackend):
+        async def execute(self, action):
+            self.dispatched += 1
+            return Receipt(action_id=action.id, status="ok")
+
+    class Policy(FirstClick):
+        async def choose(self, task, obs, memory, contract, candidates):
+            decision = await super().choose(task, obs, memory, contract, candidates)
+            decision.outcome = "unknown" if memory.pending_writes else "none"
+            return decision
+
+    class Brain:
+        async def review(self, *args, phase, **kwargs):
+            return Feedback(next_goal="Inspect before acting",
+                            last_outcome="unknown" if phase == "uncertain_outcome" else "none",
+                            notes=[EvidenceNote(quote="Invented success")])
+
+    backend = Backend()
+    agent = DynamicController(task(), backend, Policy(), feedback=Brain())
+    result = await agent.run()
+    assert result.status == "needs_attention" and "uncertain mutation" in result.reason
+    assert backend.dispatched == 1 and result.feedback_calls == 2  # Initial + outcome, no repair.
+    assert agent.memory.pending_writes
+    assert not agent.memory.confirmed_writes
+
+
+async def test_whitespace_quote_repair_archives_exact_observed_text_without_http_retry():
+    class Brain:
+        async def review(self, *args, **kwargs):
+            return Feedback(next_goal="Done", complete=True, answer="Observed form",
+                            notes=[EvidenceNote(quote="A visible form")])
+
+    obs = observation()
+    obs.text = "A\n visible\tform"
+    agent = DynamicController(task(), None, None, feedback=Brain())
+    feedback = await agent.review(obs, phase="finish")
+    assert agent.feedback_calls == 1 and feedback.complete
+    assert feedback.notes[0].quote == obs.text
+    assert next(iter(agent.memory.evidence.values()))["source"]["quote"] == obs.text
+    assert any(e["kind"] == "feedback_quote_normalized" for e in agent.events)
+
+
+async def test_confirmed_feedback_requires_grounding_and_gets_targeted_repair():
+    class Brain:
+        calls = 0
+
+        async def review(self, *args, diagnostic=None, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                assert diagnostic is None
+                return Feedback(next_goal="Continue", last_outcome="confirmed",
+                                notes=[EvidenceNote(quote="Old page evidence")])
+            assert diagnostic[0]["loc"] == ["notes", 0, "quote"]
+            assert diagnostic[0]["type"] == "quote_not_in_current_observation"
+            return Feedback(next_goal="Continue", last_outcome="confirmed",
+                            notes=[EvidenceNote(quote="A visible form")])
+
+    agent = DynamicController(task(), None, None, feedback=Brain())
+    feedback = await agent.review(observation())
+    assert agent.feedback_calls == 2
+    assert feedback.last_outcome == "confirmed"
+    assert feedback.notes[0].quote == "A visible form"
 
 
 async def test_fresh_finish_review_can_reject_prior_complete_claim():
@@ -299,7 +393,7 @@ async def test_feedback_wire_contract_and_call_ledger():
             response = {"value": "Ada"}
         elif content["phase"] == "step":
             assert "current_visible_evidence" not in content
-            assert set(content["schema"]["properties"]) == {"next_goal", "working_memory"}
+            assert set(content["schema"]["properties"]) == {"next_goal", "working_memory", "notes", "evidence_requests"}
             response = {"next_goal": "Inspect", "working_memory": "Nothing completed yet"}
         else:
             assert "current_visible_evidence" in content
@@ -326,6 +420,101 @@ async def test_feedback_wire_contract_and_call_ledger():
         "dynamic_finish",
         "dynamic_input",
     ]
+
+
+@pytest.mark.parametrize("phase", ["initial", "step", "finish"])
+async def test_feedback_accepts_long_memory_and_harmless_json_metadata(phase):
+    long_memory = "observed state\n" * 600
+    response = {"next_goal": "Inspect", "working_memory": long_memory, "type": "object"}
+
+    def respond(request):
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "```json\n" + json.dumps(response) + "\n```"}}],
+        })
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        brain = JsonFeedback(ModelTransport("https://model.test", "test", "test", client=client))
+        feedback = await brain.review(task(), observation(), Memory(), phase=phase, transition=None)
+    assert feedback.working_memory == long_memory
+    with pytest.raises(ValidationError):
+        Feedback.model_validate(feedback_json(json.dumps({**response, "action": "click"})))
+    with pytest.raises(ValidationError):
+        Feedback.model_validate(feedback_json(json.dumps({**response, "type": "execute"})))
+
+
+async def test_memory_compression_preserves_recent_tail_pending_and_evidence():
+    old = "old settled record\n" * 3000
+    recent = "recent unresolved item\n" * 300
+    text = old + recent
+
+    def respond(request):
+        payload = json.loads(request.content)
+        content = json.loads(payload["messages"][1]["content"])
+        assert content["trusted_goal"] == task().objective
+        assert "working_memory" not in content["untrusted_memory"]
+        assert content["recent_tail_retained"] == text[-WORKING_MEMORY_RECENT:]
+        assert content["untrusted_memory"]["pending_writes"][0]["expected_goal"] == "readback required"
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps({
+                "working_memory": "Earlier entities processed; current form still requires readback."
+            })}}], "usage": {"prompt_tokens": 20, "completion_tokens": 10},
+        })
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        transport = ModelTransport("https://model.test", "test", "test", client=client)
+        agent = DynamicController(task(), None, None, feedback=JsonFeedback(transport))
+        agent.memory.feedback["working_memory"] = text
+        agent.memory.evidence["old"] = {"source": {"url": "about:blank", "quote": "old evidence"}}
+        agent.memory.pending_writes["p"] = {
+            "action": {"operation": "click"}, "expected_goal": "readback required", "waits": 1,
+        }
+        result = await agent.compact_memory(observation(), text)
+        assert len(result) <= WORKING_MEMORY_TARGET
+        assert result.endswith(text[-WORKING_MEMORY_RECENT:])
+        assert "Earlier entities processed" in result
+        assert agent.memory.pending_writes["p"]["waits"] == 1
+        assert agent.memory.evidence["old"]["source"]["quote"] == "old evidence"
+        assert agent.feedback_calls == 1
+        assert text in agent.memory.working_memory_archive.values()
+        assert [r["kind"] for r in transport.ledger] == ["dynamic_memory_compression"]
+        profile = efficiency_profile(transport.ledger, actions=0, elapsed_s=1)
+        assert profile["by_component"]["brain"]["known_input_tokens"] == 20
+        assert profile["total"]["attempts"] == 1
+        assert await agent.compact_memory(observation(), result) == result
+        assert agent.feedback_calls == 1
+
+
+@pytest.mark.parametrize("failure", ["provider", "empty", "budget"])
+async def test_memory_compression_failure_keeps_newest_data_without_stopping(failure):
+    class Brain:
+        async def compress(self, *args):
+            if failure == "provider":
+                raise RuntimeError("provider unavailable")
+            return ""
+
+    agent = DynamicController(task(), None, None, feedback=Brain(), budget=Budget(max_feedback_calls=1))
+    if failure == "budget":
+        agent.feedback_calls = 1
+    text = "old\n" * WORKING_MEMORY_TRIGGER + "newest pending readback"
+    compacted = await agent.compact_memory(observation(), text)
+    assert compacted == text[-WORKING_MEMORY_TARGET:]
+    assert compacted.endswith("newest pending readback")
+    assert agent.feedback_calls == 1
+    assert agent.events[-1]["method"] == "recent_tail"
+
+
+async def test_oversized_feedback_is_compacted_before_policy_context():
+    text = "settled\n" * WORKING_MEMORY_TRIGGER + "current pending work"
+
+    class Brain:
+        async def review(self, *args, **kwargs):
+            return Feedback(next_goal="Continue", working_memory=text)
+
+    agent = DynamicController(task(), None, None, feedback=Brain())
+    feedback = await agent.review(observation())
+    assert feedback.working_memory == text[-WORKING_MEMORY_TARGET:]
+    assert agent.memory.context()["working_memory"] == feedback.working_memory
+    assert agent.events[-1]["feedback"]["working_memory"] == feedback.working_memory
 
 
 async def test_sparse_brain_matches_per_step_baseline_with_fewer_llm_calls():
@@ -407,6 +596,164 @@ async def test_stage_brain_confirmation_resolves_pending_before_next_policy_choi
     assert result.actions == 4
     assert any(e["kind"] == "transition_confirmed" and e["basis"] == "stage_brain_review"
                for e in agent.events)
+
+
+@pytest.mark.parametrize("changed", [True, False])
+async def test_readback_deadline_reviews_local_click_without_replaying(changed):
+    class Backend:
+        clicks = 0
+
+        async def observe(self):
+            closed = self.clicks and changed
+            return Observation(
+                observation_id="closed" if closed else "open", document_version="v1",
+                tab_id="tab-0", url="about:blank", title="Dialog",
+                text="Dialog closed" if closed else "Dialog open",
+                elements=[] if closed else [Element(id="close", role="button", name="Close")],
+            )
+
+        async def execute(self, action):
+            if action.operation == Operation.CLICK:
+                self.clicks += 1
+            return Receipt(action_id=action.id, status="ok")
+
+    class Policy:
+        async def choose(self, task, obs, memory, contract, candidates):
+            operation = Operation.FINISH if backend.clicks else Operation.CLICK
+            return Decision(choice=next(a.id for a in candidates if a.operation == operation),
+                            outcome="pending" if memory.pending_writes else "none")
+
+    class Brain:
+        async def review(self, task, obs, memory, *, phase, transition, diagnostic=None):
+            if transition and not transition.get("resolved"):
+                assert transition["stage_goal"] == "Read all remaining records after closing dialog"
+                assert transition["expected_goal"] != transition["stage_goal"]
+                assert "Close" in transition["expected_goal"]
+            return Feedback(
+                next_goal="Read all remaining records after closing dialog",
+                notes=[EvidenceNote(quote=obs.text)],
+                last_outcome="confirmed" if transition else "none",
+                complete=phase == "finish" and changed,
+                answer="Dialog closed" if phase == "finish" and changed else "",
+            )
+
+    backend = Backend()
+    agent = DynamicController(task(), backend, Policy(), feedback=Brain(),
+                              budget=Budget(readback_waits=2, no_progress_limit=100))
+    result = await agent.run()
+    assert backend.clicks == 1, result.reason
+    assert result.status == ("success" if changed else "needs_attention")
+    assert any(e["kind"] == "brain_requested" and e["reason"] == "action_readback"
+               for e in agent.events)
+    if not changed:
+        assert not any(e["kind"] == "transition_confirmed" for e in agent.events)
+    else:
+        assert any(e["kind"] == "transition_confirmed" and e["basis"] == "action_readback_review"
+                   for e in agent.events)
+
+
+@pytest.mark.parametrize("operation", [Operation.FILL, Operation.SELECT])
+async def test_same_value_input_can_be_confirmed_without_page_change(operation):
+    class Backend:
+        async def execute(self, action):
+            return Receipt(action_id=action.id, status="ok")
+
+    el = Element(id="user", role="combobox", name="User", value="Rajesh Kumar",
+                 editable=operation == Operation.FILL, selectable=operation == Operation.SELECT,
+                 options=["Rajesh Kumar"])
+    obs = observation(elements=[el])
+    agent = DynamicController(task(), Backend(), None, feedback=None)
+    action = next(a for a in generate_dynamic(obs, task()) if a.operation == operation)
+    action.bound_value = "Rajesh Kumar"
+    await agent.perform(action, obs)
+    assert agent.pending is None  # Same visible value is satisfied without another dispatch.
+    assert any(e["kind"] == "input_already_satisfied" for e in agent.events)
+    assert not agent.memory.pending_writes
+    assert not agent.memory.feedback.get("complete")  # Input readback is not task completion.
+
+
+async def test_same_state_confirmation_rejects_hidden_or_wrong_input_target():
+    class Backend:
+        async def execute(self, action):
+            return Receipt(action_id=action.id, status="ok")
+
+    obs = observation(elements=[Element(id="field", role="textbox", name="User",
+                                        value="[redacted]", editable=True)])
+    agent = DynamicController(task(), Backend(), None, feedback=None)
+    action = next(a for a in generate_dynamic(obs, task()) if a.operation == Operation.FILL)
+    action.bound_value = "[redacted]"
+    await agent.perform(action, obs)
+    assert not agent.confirm_transition("confirmed", obs, "test")
+    agent.pending["action"]["bound_value"] = "Rajesh Kumar"
+    assert not agent.confirm_transition("confirmed", obs, "test")
+
+
+@pytest.mark.parametrize("receipt_status", ["stale", "unknown"])
+async def test_stale_option_is_reselected_from_fresh_page_but_unknown_is_not_replayed(receipt_status):
+    class Backend:
+        attempts = 0
+        selected = False
+
+        async def observe(self):
+            return Observation(observation_id=f"o{self.attempts}", document_version="v1",
+                               tab_id="tab-0", url="about:blank", title="Users",
+                               text="User selected" if self.selected else "Pick Rajesh",
+                               elements=[] if self.selected else [Element(
+                                   id=f"user{self.attempts}", role="option", name="Rajesh Kumar")])
+
+        async def execute(self, action):
+            self.attempts += 1
+            if self.attempts == 1:
+                return Receipt(action_id=action.id, status=receipt_status)
+            assert action.element_ref == "user1"
+            self.selected = True
+            return Receipt(action_id=action.id, status="ok")
+
+    class Policy:
+        calls = 0
+
+        async def choose(self, task, obs, memory, contract, candidates):
+            self.calls += 1
+            if not backend.selected:
+                assert self.calls == 1  # Fresh retry preserves the undispatched choice.
+            op = Operation.FINISH if backend.selected else Operation.CLICK
+            return Decision(choice=next(a.id for a in candidates if a.operation == op),
+                            outcome="confirmed" if memory.pending_writes else "none")
+
+    class Brain:
+        async def review(self, task, obs, memory, **kw):
+            return Feedback(next_goal="Select Rajesh", complete=backend.selected,
+                            answer="User selected" if backend.selected else "",
+                            notes=[EvidenceNote(quote=obs.text)])
+
+    backend, policy = Backend(), Policy()
+    agent = DynamicController(task(), backend, policy, feedback=Brain())
+    result = await agent.run()
+    assert backend.attempts == (2 if receipt_status == "stale" else 1)
+    assert result.status == ("success" if receipt_status == "stale" else "needs_attention")
+    assert any(e["kind"] == "stale_click_reselected" for e in agent.events) == (receipt_status == "stale")
+
+
+@pytest.mark.parametrize("change", ["ambiguous", "tab", "url", "context", "dialog", "exhausted"])
+def test_stale_reselection_refuses_ambiguous_or_changed_page(change):
+    obs = observation(elements=[Element(id="new", role="option", name="Rajesh Kumar")])
+    agent = DynamicController(task(), None, None, feedback=None)
+    agent.stale_click = {"element": obs.elements[0].model_dump(), "attempts": 1,
+                         "url": obs.url, "tab_id": obs.tab_id,
+                         "title": obs.title, "dialogs": list(obs.dialogs)}
+    if change == "ambiguous":
+        obs.elements.append(obs.elements[0].model_copy(update={"id": "other"}))
+    elif change == "tab":
+        obs.tab_id = "tab-1"
+    elif change == "url":
+        obs.url = "https://another.example"
+    elif change == "context":
+        obs.elements[0].context = "Different record"
+    elif change == "dialog":
+        obs.dialogs = ["New editor"]
+    else:
+        agent.stale_click["attempts"] = 3
+    assert agent.refreshed_stale_click(obs, generate_dynamic(obs, task())) is None
 
 
 async def test_jev_outcome_and_next_action_share_one_http_request():
@@ -624,3 +971,427 @@ def test_page_registry_retains_sources_after_rolling_notes_expire():
     context = memory.context()
     assert context['opened_pages_truncated'] and len(context['opened_pages']) == 24
     assert memory.export()['page_registry']['https://example.test/0']['observed']
+
+
+@pytest.mark.parametrize('operation', [Operation.FILL, Operation.SELECT])
+async def test_fresh_exact_input_readback_resolves_without_model_pending_waits(operation):
+    class Backend:
+        calls = 0
+
+        async def execute(self, action):
+            self.calls += 1
+            return Receipt(action_id=action.id, status='ok')
+
+    field = Element(id='field', role='combobox', name='Employee', value='',
+                    editable=operation == Operation.FILL, selectable=operation == Operation.SELECT,
+                    options=['Ada'], context='Row 1')
+    obs = observation(elements=[field])
+    backend = Backend()
+    agent = DynamicController(task(), backend, None, feedback=None)
+    action = next(a for a in generate_dynamic(obs, task()) if a.operation == operation)
+    action.bound_value = 'Ada'
+    await agent.perform(action, obs)
+    fresh = obs.model_copy(deep=True)
+    fresh.observation_id = 'o2'
+    fresh.elements[0].value = 'Ada'
+    assert agent.confirm_visible_input(fresh)
+    assert not agent.pending and not agent.memory.pending_writes
+    assert backend.calls == 1
+    assert not agent.memory.feedback.get('complete')
+    # A same-value proposal is satisfied; it does not dispatch a second mutation.
+    action.observation_id = fresh.observation_id
+    await agent.perform(action, fresh)
+    assert backend.calls == 1
+
+
+@pytest.mark.parametrize('case', ['unknown', 'same_observation', 'wrong_id', 'wrong_row', 'password'])
+async def test_local_readback_does_not_confirm_ambiguous_hidden_or_unknown_input(case):
+    class Backend:
+        async def execute(self, action):
+            return Receipt(action_id=action.id, status='unknown' if case == 'unknown' else 'ok')
+
+    obs = observation(elements=[Element(id='field', role='textbox', name='Employee', editable=True,
+                                        context='Row 1')])
+    agent = DynamicController(task(), Backend(), None, feedback=None)
+    action = next(a for a in generate_dynamic(obs, task()) if a.operation == Operation.FILL)
+    action.bound_value = '[redacted]' if case == 'password' else 'Ada'
+    await agent.perform(action, obs)
+    fresh = obs.model_copy(deep=True)
+    fresh.observation_id = 'o2' if case != 'same_observation' else 'o1'
+    fresh.elements[0].value = action.bound_value
+    if case == 'wrong_id':
+        fresh.elements[0].id = 'replacement'
+    if case == 'wrong_row':
+        fresh.elements[0].context = 'Row 2'
+    assert not agent.confirm_visible_input(fresh)
+    assert agent.pending
+
+
+async def test_repeated_save_remains_blocked_and_runtime_failure_stops_before_models():
+    class Backend:
+        calls = 0
+
+        async def execute(self, action):
+            self.calls += 1
+            return Receipt(action_id=action.id, status='ok')
+
+    obs = observation(elements=[Element(id='save', role='button', name='Save')])
+    backend = Backend()
+    agent = DynamicController(task(), backend, None, feedback=None)
+    action = next(a for a in generate_dynamic(obs, task()) if a.operation == Operation.CLICK)
+    await agent.perform(action, obs)
+    assert 'no resubmission' in await agent.perform(action, obs)
+    assert backend.calls == 1
+    obs.elements.append(Element(id='company', role='status', name='Company', required=True,
+                               read_only=True, enabled=False))
+    obs.errors = ["page_error:Cannot read properties of undefined (reading 'fields_dict')"]
+    assert 'Company' in agent.blocked(obs)
+
+
+def archived_quote(agent, quote, *, key='old'):
+    agent.memory.evidence[key] = {
+        'verification': 'quote_grounded_only',
+        'source': {'url': 'about:blank', 'tab_id': 'tab-0', 'observation_id': 'old-page',
+                   'document_version': 'old-version', 'captured_at': 'old-time',
+                   'pointer': 'visible_observation', 'quote': quote}}
+
+
+async def test_confirmed_local_readback_keeps_current_proof_and_references_history_without_retry():
+    old = 'textbox Separation Begins On = 2026-06-30'
+    unknown = 'Invented settlement payment success'
+    question = 'Permanently Submit HR-EMP-SEP-2026-00001?'
+
+    class Brain:
+        async def review(self, *args, **kwargs):
+            return Feedback(next_goal='Click the affirmative button once, then inspect submission',
+                            last_outcome='confirmed', readback_quote=question,
+                            notes=[EvidenceNote(quote=old, critical=True),
+                                   EvidenceNote(quote=unknown, critical=True)])
+
+    agent = DynamicController(task(), None, None, feedback=Brain())
+    archived_quote(agent, old)
+    before = agent.memory.evidence['old'].copy()
+    obs = observation(dialogs=[question], elements=[Element(id='yes', role='button', name='Yes')])
+    feedback = await agent.review(obs, phase='action_readback')
+    assert agent.feedback_calls == 1 and feedback.last_outcome == 'confirmed'
+    assert [n.quote for n in feedback.notes] == [question]
+    assert agent.memory.evidence['old'] == before
+    assert not agent.memory.key_nodes  # A stale critical note is not pinned as current.
+    assert not any(e['source']['quote'] == unknown for e in agent.memory.evidence.values())
+    historical = next(e for e in agent.events if e['kind'] == 'feedback_historical_references')
+    assert not historical['promoted_to_current_evidence']
+    assert historical['references'][0]['historical_source']['observation_id'] == 'old-page'
+    assert not any(e['kind'] == 'invalid_feedback' for e in agent.events)
+
+
+async def test_historical_quote_alone_cannot_confirm_and_exhaustion_preserves_pending():
+    from jev_browser.dynamic import ReadbackUnresolved, semantic_key
+
+    old = 'textbox Separation Begins On = 2026-06-30'
+
+    class Brain:
+        async def review(self, *args, **kwargs):
+            return Feedback(next_goal='Need actual readback', last_outcome='confirmed',
+                            notes=[EvidenceNote(quote=old)])
+
+    obs = observation()
+    agent = DynamicController(task(), None, None, feedback=Brain())
+    archived_quote(agent, old)
+    agent.pending = {'key': 'pending', 'before_semantics': semantic_key(obs),
+                     'action': {'operation': Operation.CLICK}, 'waits': 0}
+    agent.memory.pending_writes['pending'] = agent.pending
+    with pytest.raises(ReadbackUnresolved):
+        await agent.review(obs, phase='action_readback')
+    assert agent.feedback_calls == 2
+    assert agent.pending and agent.memory.pending_writes
+    assert not agent.memory.confirmed_writes
+    assert agent.memory.feedback['last_outcome'] == 'unknown'
+    assert list(agent.memory.evidence) == ['old']
+
+
+async def test_completion_still_rejects_unknown_notes_even_with_current_readback_quote():
+    class Brain:
+        async def review(self, *args, **kwargs):
+            return Feedback(next_goal='Done', complete=True, answer='All done',
+                            readback_quote='A visible form',
+                            notes=[EvidenceNote(quote='Invented successful submission')])
+
+    agent = DynamicController(task(), None, None, feedback=Brain())
+    with pytest.raises(ValueError, match='schema/evidence'):
+        await agent.review(observation(), phase='finish')
+    assert agent.feedback_calls == 2 and not agent.memory.evidence
+
+
+@pytest.mark.parametrize('case', ['unknown', 'same_frame', 'existing_dialog', 'different_url',
+                                 'different_tab', 'wrong_question', 'error_popup', 'duplicate_yes'])
+async def test_confirmation_dialog_guard_rejects_ambiguous_or_unknown_effects(case):
+    class Backend:
+        async def execute(self, action):
+            return Receipt(action_id=action.id, status='unknown' if case == 'unknown' else 'ok')
+
+    before = observation(elements=[Element(id='submit', role='button', name='S u bmit')])
+    if case == 'existing_dialog':
+        before.dialogs = ['Already open']
+    agent = DynamicController(task(), Backend(), None, feedback=None)
+    action = next(a for a in generate_dynamic(before, task()) if a.operation == Operation.CLICK)
+    await agent.perform(action, before)
+    after = observation(dialogs=['Confirm\nPermanently Submit RECORD-1?\nNo Yes'],
+                        elements=[Element(id='yes', role='button', name='Yes'),
+                                  Element(id='no', role='button', name='No')])
+    after.observation_id = 'fresh'
+    if case == 'same_frame':
+        after.observation_id = before.observation_id
+    if case == 'different_url':
+        after.url = 'https://example.test/other'
+    if case == 'different_tab':
+        after.tab_id = 'other'
+    if case == 'wrong_question':
+        after.dialogs = ['Confirm\nPermanently Delete OTHER-1?\nNo Yes']
+    if case == 'error_popup':
+        after.errors = ['page_error:submit callback failed']
+    if case == 'duplicate_yes':
+        after.elements.append(Element(id='yes-2', role='button', name='Yes'))
+    assert not agent.confirm_visible_dialog(after)
+    assert agent.pending and not agent.memory.confirmed_writes
+
+
+async def test_native_dialog_first_frame_readback_never_confirms_the_affirmative_commit():
+    definition = task()
+    async with PlaywrightBackend(definition) as browser:
+        await browser.load_html('''<p>Draft</p><button onclick="document.querySelector('dialog').showModal()">S u bmit</button>
+            <dialog><p>Permanently Submit RECORD-1?</p><button>No</button>
+            <button onclick="window.commits=(window.commits||0)+1">Yes</button></dialog>''')
+        before = await browser.observe()
+        agent = DynamicController(definition, browser, None, feedback=None)
+        action = next(a for a in generate_dynamic(before, definition) if a.operation == Operation.CLICK)
+        await agent.perform(action, before)
+        fresh = await browser.observe()
+        assert [e.name for e in fresh.elements] == ['No', 'Yes']
+        assert agent.confirm_visible_dialog(fresh)
+        assert not agent.pending and agent.last_transition['confirmation_scope'] == 'dialog_opened'
+        assert not agent.last_transition['business_commit_confirmed']
+        assert not agent.memory.feedback.get('complete')
+        assert await browser.page.evaluate('window.commits || 0') == 0
+        assert agent.actions == 1 and not any(e['operation'] == Operation.WAIT for e in agent.memory.events)
+        yes = next(a for a in generate_dynamic(fresh, definition) if a.element_ref == fresh.elements[1].id)
+        await agent.perform(yes, fresh)
+        current = await browser.observe()
+        assert not agent.confirm_visible_dialog(current)  # Still-open dialog proves no commit.
+        assert agent.pending and await browser.page.evaluate('window.commits') == 1
+        assert 'observed_dialog_open_only' in [e['verification'] for e in agent.memory.evidence.values()]
+
+
+async def test_feedback_wire_separates_modal_scope_and_direct_readback_from_context_notes():
+    question = 'Permanently Submit RECORD-1?'
+
+    def respond(request):
+        payload = json.loads(request.content)
+        content = json.loads(payload['messages'][1]['content'])
+        assert content['evidence_contract']['interactive_scope'] == 'dialog'
+        assert content['evidence_contract']['historical_references_are_not_current_proof']
+        assert 'readback_quote' in content['schema']['properties']
+        assert 'Active dialog' in content['current_visible_evidence']
+        return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(
+            Feedback(next_goal='Inspect the confirmation', last_outcome='confirmed',
+                     readback_quote=question).model_dump())}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        brain = JsonFeedback(ModelTransport('https://test.example', 'test', 'test', client=client))
+        result = await brain.review(task(), observation(dialogs=[question]), Memory(),
+                                    phase='action_readback', transition={'resolved': False})
+    assert result.readback_quote == question
+
+
+@pytest.mark.parametrize('extra_control', ['yes', 'no', 'cancel', 'input'])
+def test_readback_inspection_cannot_dismiss_confirmation_or_editable_dialog(extra_control):
+    agent = DynamicController(task(), None, None, feedback=None)
+    obs = observation(dialogs=['Message'], elements=[Element(id='close', role='button', name='Close')])
+    agent.pending = {'key': 'original', 'dispatch_status': 'ok',
+                     'before': {'url': obs.url, 'tab_id': obs.tab_id}}
+    obs.elements.append(Element(id='other', role='textbox' if extra_control == 'input' else 'button',
+                                name=extra_control.title(), editable=extra_control == 'input'))
+    close = next(a for a in generate_dynamic(obs, task()) if a.element_ref == 'close')
+    assert not agent.readback_dialog_close(obs, close)
+
+
+@pytest.mark.parametrize('status', ['ok', 'stale', 'unknown'])
+async def test_readback_close_preserves_original_pending_and_never_replays_unknown(status):
+    class Backend:
+        calls = 0
+
+        async def execute(self, action):
+            self.calls += 1
+            return Receipt(action_id=action.id, status=status)
+
+    obs = observation(dialogs=['Message\nShared with users'],
+                      elements=[Element(id='close', role='button', name='close (icon control)')])
+    backend = Backend()
+    agent = DynamicController(task(), backend, None, feedback=None)
+    original = {'key': 'original', 'dispatch_status': 'ok',
+                'before': {'url': obs.url, 'tab_id': obs.tab_id},
+                'action': {'operation': Operation.CLICK, 'description': 'Click Yes'}}
+    agent.pending = original
+    agent.memory.pending_writes['original'] = original
+    close = next(a for a in generate_dynamic(obs, task()) if a.operation == Operation.CLICK)
+    reason = await agent.close_for_readback(obs, close)
+    assert agent.pending is original and agent.memory.pending_writes['original'] is original
+    assert not agent.memory.confirmed_writes
+    assert agent.memory.events[-1]['readback_for'] == 'original'
+    if status == 'unknown':
+        assert 'no resubmission' in reason
+        assert 'already dispatched' in await agent.close_for_readback(obs, close)
+        assert backend.calls == 1
+    else:
+        assert reason is None
+
+
+async def test_native_confirmation_message_inspection_and_business_commit_have_separate_outcomes():
+    definition = Task(id='dialog-chain', objective='Submit this document and read back its submitted state',
+                      control_mode='dynamic', sandbox=True)
+    html = '''<p id="state">Draft</p><button onclick="document.querySelector('#confirm').showModal()">Submit</button>
+        <dialog id="confirm"><p>Permanently Submit RECORD-1?</p><button>No</button>
+        <button onclick="document.querySelector('#state').textContent='Submitted';this.closest('dialog').close();
+                         document.querySelector('#message').showModal()">Yes</button></dialog>
+        <dialog id="message"><p>Shared with users</p><button onclick="this.closest('dialog').close()">Close</button></dialog>'''
+
+    class Policy:
+        async def choose(self, task, obs, memory, contract, candidates):
+            if obs.dialogs:
+                name = 'Close' if 'Shared with users' in obs.dialogs[0] else 'Yes'
+                ref = next(e.id for e in obs.elements if e.name == name)
+                chosen = next(a for a in candidates if a.element_ref == ref)
+                return Decision(choice=chosen.id, outcome='pending')
+            operation = Operation.FINISH if 'Submitted' in obs.text else Operation.CLICK
+            return Decision(choice=next(a.id for a in candidates if a.operation == operation),
+                            outcome='confirmed' if memory.pending_writes else 'none')
+
+    class Brain:
+        async def review(self, task, obs, memory, *, phase, transition, **kwargs):
+            complete = not obs.dialogs and 'Submitted' in obs.text
+            return Feedback(next_goal='Read the submitted state', complete=complete,
+                            answer='Submitted' if complete else '',
+                            notes=[EvidenceNote(quote='Submitted' if complete else 'Draft')])
+
+    async with PlaywrightBackend(definition) as browser:
+        await browser.load_html(html)
+        agent = DynamicController(definition, browser, Policy(), feedback=Brain())
+        result = await agent.run()
+    assert result.status == 'success', result.reason
+    assert result.actions == 3  # Submit, Yes, Close; no WAITs or resubmissions.
+    assert not agent.pending and not agent.memory.pending_writes
+    assert len(agent.memory.confirmed_writes) == 2  # The inspection close is never a business confirmation.
+    confirmations = [e for e in agent.events if e['kind'] == 'transition_confirmed']
+    assert [e['confirmation_scope'] for e in confirmations] == ['dialog_opened', 'business_commit']
+    close_event = next(e for e in agent.events if e['kind'] == 'dialog_closed_for_readback')
+    assert not close_event['original_action_confirmed']
+
+
+async def test_invalid_explicit_readback_cannot_be_replaced_by_incidental_current_note():
+    from jev_browser.dynamic import ReadbackUnresolved
+
+    class Brain:
+        async def review(self, *args, **kwargs):
+            return Feedback(next_goal='Inspect', last_outcome='confirmed',
+                            readback_quote='Invented successful write',
+                            notes=[EvidenceNote(quote='A visible form')])
+
+    agent = DynamicController(task(), None, None, feedback=Brain())
+    with pytest.raises(ReadbackUnresolved):
+        await agent.review(observation(), phase='action_readback')
+    assert agent.feedback_calls == 2 and not agent.memory.evidence
+
+
+async def test_exhausted_noncompletion_readback_is_attention_and_retains_unknown_operation():
+    class Backend(UnknownBackend):
+        async def execute(self, action):
+            self.dispatched += 1
+            return Receipt(action_id=action.id, status='ok')
+
+    class Brain:
+        async def review(self, *args, phase, **kwargs):
+            if phase == 'initial':
+                return Feedback(next_goal='Click once and inspect')
+            return Feedback(next_goal='Need proof', last_outcome='confirmed',
+                            notes=[EvidenceNote(quote='Invented success')])
+
+    backend = Backend()
+    agent = DynamicController(task(), backend, FirstClick(), feedback=Brain(),
+                              budget=Budget(readback_waits=1, no_progress_limit=100))
+    result = await agent.run()
+    assert result.status == 'needs_attention' and 'lacks current evidence' in result.reason
+    assert backend.dispatched == 1 and agent.pending and agent.memory.pending_writes
+    assert not agent.memory.confirmed_writes
+
+
+@pytest.mark.parametrize('receipt_status,changed,expected', [('ok',True,True),('ok',False,False),('unknown',True,False)])
+async def test_unknown_readback_refresh_is_bounded_and_never_confirms_or_replays(receipt_status, changed, expected):
+    from jev_browser.dynamic import semantic_key
+    before = observation(text='Command palette')
+    fresh = observation(text='Search Help' if changed else 'Command palette')
+    class Backend:
+        calls = 0
+        async def observe(self):
+            self.calls += 1
+            return fresh
+    backend = Backend()
+    agent = DynamicController(task(), backend, None, feedback=None)
+    agent.pending = {'key':'help', 'dispatch_status':receipt_status, 'before_semantics':semantic_key(before)}
+    agent.memory.pending_writes['help'] = agent.pending
+    agent.consumed.add('help')
+    original = agent.pending
+    assert await agent.refresh_unknown_readback(before) == expected
+    assert not await agent.refresh_unknown_readback(before)
+    assert backend.calls == int(receipt_status == 'ok')
+    assert agent.pending is original and agent.memory.pending_writes['help'] is original
+    assert agent.consumed == {'help'} and not agent.memory.confirmed_writes and not agent.memory.events
+
+
+async def test_async_help_arriving_during_unknown_review_is_reassessed_without_repeat():
+    class Backend:
+        stage = 0
+        actions = []
+        async def observe(self):
+            if self.stage == 0:
+                return observation(text='Command palette', elements=[Element(id='help',role='button',name='help (icon control)')]).model_copy(update={'observation_id':'before-help'})
+            if self.stage == 1:
+                return observation(text='Command palette loading', elements=[Element(id='help',role='button',name='help (icon control)')]).model_copy(update={'observation_id':'loading-help'})
+            if self.stage == 2:
+                return observation(text='Search Help',dialogs=['Search Help'],elements=[Element(id='close',role='button',name='Close')]).model_copy(update={'observation_id':'fresh-help'})
+            return observation(text='Help closed',elements=[])
+        async def execute(self, action):
+            self.actions.append(action.element_ref)
+            self.stage = 1 if action.element_ref == 'help' else 3
+            return Receipt(action_id=action.id,status='ok')
+    backend = Backend()
+    class Policy:
+        async def choose(self, task, obs, memory, contract, candidates):
+            if backend.stage == 3:
+                return Decision(choice=next(a.id for a in candidates if a.operation==Operation.FINISH),outcome='confirmed')
+            target = 'close' if backend.stage == 2 else 'help'
+            return Decision(choice=next(a.id for a in candidates if a.element_ref==target),
+                            outcome='confirmed' if backend.stage==2 else 'unknown')
+    class Brain:
+        async def review(self, task, obs, memory, *, phase, **kwargs):
+            if phase=='initial':
+                return Feedback(next_goal='Open help then close it')
+            if phase=='uncertain_outcome':
+                backend.stage = 2  # The asynchronous modal arrives during the slow model call.
+                return Feedback(next_goal='Inspect the fresh modal',last_outcome='unknown')
+            return Feedback(next_goal='Done', complete=True, answer='Help inspected and closed',
+                            notes=[EvidenceNote(quote='Help closed')])
+    agent = DynamicController(task(),backend,Policy(),feedback=Brain())
+    result = await agent.run()
+    assert result.status=='success', result.reason
+    assert backend.actions == ['help','close']
+    assert not agent.pending
+    assert any(e['kind']=='unknown_readback_refreshed' and e['changed'] and not e['action_confirmed'] for e in agent.events)
+
+
+def test_stale_shortcut_cannot_be_reselected_as_an_ordinary_button():
+    old = observation(elements=[Element(id='e1', role='button', name='Close dialog (Escape shortcut)',
+                                       context='esc to close', activation_key='Escape')])
+    new = observation(elements=[old.elements[0].model_copy(update={'activation_key':None})])
+    agent = DynamicController(task(), None, None, feedback=None)
+    agent.stale_click = {'element':old.elements[0].model_dump(), 'attempts':1,
+                        'url':old.url, 'tab_id':old.tab_id, 'title':old.title, 'dialogs':old.dialogs}
+    assert agent.refreshed_stale_click(new, generate_dynamic(new, task())) is None

@@ -9,7 +9,7 @@
 
 <main>
   <section class="intro"><div><p class="eyebrow">BENCHMARK → OBSERVE → IMPROVE</p><h1>Autoresearch</h1><p>Codex 研究策略，DeepSeek + Jev 执行任务。以正确完成为前提，减少耗时与 tokens。</p></div><button id="start" class="primary">启动研究 <span>↗</span></button></section>
-  <section class="panel experiment-options" aria-label="研究设置"><label for="max-trials">研究轮数 <select id="max-trials"><option value="2">2 轮 · 基线 + 1 个候选</option><option value="4">4 轮 · 连续迭代</option><option value="6">6 轮 · 连续迭代</option></select></label><label for="metric">优化目标 <select id="metric"><option value="tokens">减少 tokens</option><option value="latency">减少耗时</option></select></label><p id="launch-budget" class="footnote">整项研究共用 60 万已知 tokens、300 次模型尝试；候选未通过严格判分不保留。</p></section>
+  <section class="panel experiment-options" aria-label="研究设置"><label for="suite">任务集 <select id="suite"><option value="public-web">公共网页</option><option value="saas-bench">SaaS-Bench · Business</option></select></label><label for="max-trials">研究轮数 <select id="max-trials"><option value="2">2 轮 · 基线 + 1 个候选</option><option value="4">4 轮 · 连续迭代</option><option value="6">6 轮 · 连续迭代</option></select></label><label for="metric">优化目标 <select id="metric"><option value="tokens">减少 tokens</option><option value="latency">减少耗时</option></select></label><p id="launch-budget" class="footnote">整项研究共用 60 万已知 tokens、300 次模型尝试；候选未通过严格判分不保留。</p></section>
   <p id="request-status" role="status" aria-live="polite"></p><p id="error" role="alert" hidden></p>
   <div class="layout">
     <aside class="sidebar"><div class="section-label"><h2>研究记录</h2><button id="refresh" class="quiet">刷新</button></div><div id="studies"><p class="muted">正在读取研究记录…</p></div><div class="scope"><span class="eyebrow">THIS EXPERIMENT</span><h3>小规模，成对比较</h3><p id="scope-trials">2 个任务 × 2 轮配置<br>基线 → 分析 → 候选</p><p id="scope-budget">每任务最多 5 分钟<br>研究预算 60 万 tokens</p></div></aside>
@@ -25,7 +25,7 @@
           <div><span>研究活跃时间</span><strong id="elapsed">—</strong><small id="call-note">暂无模型调用</small></div>
         </section>
         <ol id="pipeline" class="pipeline" aria-label="研究阶段"></ol>
-        <section class="panel"><div class="section-label"><div><p class="eyebrow">THE BENCHMARK</p><h2>两个跨页聚合任务</h2></div><span id="benchmark-label" class="muted">公共网页 · 独立判分</span></div><div id="tasks" class="task-cards"></div><p id="benchmark-scope" class="footnote"></p></section>
+        <section class="panel"><div class="section-label"><div><p class="eyebrow">THE BENCHMARK</p><h2>对照任务</h2></div><span id="benchmark-label" class="muted">公共网页 · 独立判分</span></div><div id="tasks" class="task-cards"></div><p id="benchmark-scope" class="footnote"></p></section>
         <section class="panel"><div class="section-label"><div><p class="eyebrow">PAIRED RUNS</p><h2>运行与结果</h2></div><span id="comparison-note" class="muted">同任务 · 同模型 · 同预算</span></div><div id="runs"></div></section>
         <section class="panel" id="conclusions-panel"><p class="eyebrow">EVIDENCE → HYPOTHESIS → RESULT</p><h2>研究结论与实验记忆</h2><p id="conclusion-summary" class="muted"></p><div id="experiment-memory"></div><h3>下一步</h3><p id="next-step"></p><details><summary>查看可追溯证据 <span id="evidence-count"></span></summary><div id="research-evidence"></div></details></section>
         <div class="bottom-grid">

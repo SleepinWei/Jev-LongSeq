@@ -320,7 +320,10 @@ def experiment_config(args):
     return {
         **{k: getattr(args, k) for k in keys},
         "suite": getattr(args, "suite", "catalog"),
-        "task_ids": getattr(args, "task_ids", []),
+        "task_ids": (getattr(args, "saas_task_ids", []) if getattr(args, "suite", "") == "saas-bench"
+                     else getattr(args, "task_ids", [])),
+        "saas_root": getattr(args, "saas_root", ""),
+        "saas_slot": getattr(args, "saas_slot", 0),
         "seed": getattr(args, "seed", 0),
         "researcher": {
             "backend": "codex_cli",
@@ -359,7 +362,11 @@ async def run_research(args, *, runner=None):
         use_text_model_for_planner()
 
     suite = getattr(args, "suite", "catalog")
-    public = suite in {"webarena", "public-web"}
+    public = suite in {"webarena", "public-web", "saas-bench"}
+    if suite == "saas-bench":
+        if len(args.saas_task_ids) != 2 or len(set(args.saas_task_ids)) != 2:
+            raise ValueError("SaaS-Bench autoresearch requires two distinct tasks")
+        args.backend = "playwright"
     if suite == "public-web":
         if len(args.task_ids) != 2 or set(args.task_ids) != {50, 332}:
             raise ValueError("public-web requires the two task types 50 and 332")
@@ -441,7 +448,12 @@ async def run_research(args, *, runner=None):
         from .research_benchmark import run_pair
 
         check = check_public_web if suite == "public-web" else check_webarena
-        preflight = await check(args.task_ids)
+        if suite == "saas-bench":
+            from .saas_benchmark import check_saas
+
+            preflight = await check_saas(args)
+        else:
+            preflight = await check(args.task_ids)
         write_json(root / "preflight.json", preflight)
         state["preflight"] = preflight
         state["tasks"] = preflight["selected_tasks"]

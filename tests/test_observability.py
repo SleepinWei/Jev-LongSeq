@@ -85,7 +85,7 @@ def test_payload_sizes_are_utf8_bytes_not_estimated_tokens():
         "messages": [{"role": "user", "content": json.dumps({"目标": "中文"}, ensure_ascii=False)}]
     }
     sizes = payload_sizes(value)
-    assert sizes["total_bytes"] == len(json.dumps(value, ensure_ascii=False).encode())
+    assert sizes["total_bytes"] == len(httpx.Request('POST', 'https://example.test', json=value).content)
     assert sizes["state_sections_bytes"]["目标"] == len('"中文"'.encode())
     assert "tokens" not in sizes
 

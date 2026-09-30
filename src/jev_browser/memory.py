@@ -4,6 +4,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from .context_budget import history_view
 from .protocol import Contract, Extraction, Fact, Observation, Predicate, Source, Task, digest
 
 
@@ -30,6 +31,8 @@ class Memory:
         self.observed_urls: set[str] = set()
         self.tab_entities: dict[str, str] = {}
         self.pending_writes: dict[str, dict[str, Any]] = {}
+        self.interrupted_writes: dict[str, dict[str, Any]] = {}
+        self.resume_context: dict[str, Any] = {}
         self.confirmed_writes: set[str] = set()
         self.events: list[dict[str, Any]] = []
         self.page_notes: dict[str, dict] = {}
@@ -37,6 +40,8 @@ class Memory:
         self.observed_entities: set[str] = set()
         self.evidence: dict[str, dict] = {}
         self.feedback: dict[str, Any] = {}
+        self.key_nodes: dict[str, dict[str, Any]] = {}
+        self.working_memory_archive: dict[str, str] = {}
         self.dynamic_mode = False
         self.recent_evidence_limit = 4
 
@@ -213,33 +218,40 @@ class Memory:
     def context(self, entities: list[str] | None = None, limit: int = 100) -> dict:
         if self.dynamic_mode:
             pages = list(self.page_registry.values())[-24:]
+            history = history_view(self.events)
             return {
                 "opened_pages": pages,
                 "opened_pages_total": len(self.page_registry),
                 "opened_pages_truncated": len(self.page_registry) > len(pages),
                 "brain_guidance": self.feedback.get("next_goal", ""),
                 "working_memory": self.feedback.get("working_memory", ""),
+                "key_nodes": list(self.key_nodes.values()),
+                "blockers": self.feedback.get("blockers", []),
+                "history_for_context": history,
+                **({"resume": self.resume_context,
+                    "interrupted_operations": [
+                        {"description": p["action"]["description"],
+                         "operation": p["action"]["operation"],
+                         "disposition": "previous session ended; not confirmed; do not replay"}
+                        for p in self.interrupted_writes.values()
+                    ]} if self.resume_context else {}),
                 "pending_writes": [
                     {"action": {k: p["action"].get(k) for k in
                                 ("operation", "description", "bound_value")},
                      "before_excerpt": p.get("before_excerpt", ""),
-                     "expected_goal": p.get("expected_goal", ""), "waits": p["waits"]}
+                     "expected_goal": p.get("expected_goal", ""), "waits": p["waits"],
+                     "confirmation_scope": p.get("confirmation_scope", "action_effect"),
+                     "before_dialogs": p.get("before_dialogs", [])}
                     for p in self.pending_writes.values()
                 ],
-                "recent_events": [
-                    {"operation": e["operation"], "description": e["description"],
-                     "receipt": e["receipt"]["status"]} for e in self.events[-3:]
-                ],
+                "recent_events": history["recent"][-3:],
                 "recent_evidence": [
                     {"url": e["source"]["url"], "quote": e["source"]["quote"]}
                     for e in list(self.evidence.values())[-self.recent_evidence_limit:]
                 ],
                 "execution_feedback": self.feedback.get("execution_feedback", {}),
-                "actions_since_brain": [
-                    {"operation": e["operation"], "description": e["description"],
-                     "receipt": e["receipt"]["status"]}
-                    for e in self.events[self.feedback.get("action_cursor", 0):]
-                ],
+                "actions_since_brain": history_view(
+                    self.events[self.feedback.get("action_cursor", 0):])["recent"],
             }
         keys = entities or list(self.facts)[-limit:]
         context = {
@@ -269,7 +281,12 @@ class Memory:
             "observed_entities": sorted(self.observed_entities),
             **({"evidence_archive": self.evidence, "brain_feedback": self.feedback}
                if self.dynamic_mode else {}),
+            **({"key_nodes_archive": self.key_nodes,
+                "working_memory_archive": self.working_memory_archive,
+                "event_archive": self.events} if self.dynamic_mode else {}),
             **({"pending_writes": self.pending_writes} if self.dynamic_mode else {}),
+            **({"interrupted_writes": self.interrupted_writes,
+                "resume_context": self.resume_context} if self.resume_context else {}),
         }
 
 

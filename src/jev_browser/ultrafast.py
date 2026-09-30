@@ -75,9 +75,48 @@ def listing(store):
     root = store.root / "ultrafast"
     if root.resolve().parent != store.root:
         return []
-    return sorted([read_json(store.file(run_path(store, p.parent.name), "meta.json"))
-                   for p in root.glob("*/meta.json") if not p.parent.is_symlink()],
+    rows = []
+    for p in root.glob("*/meta.json"):
+        if p.parent.is_symlink():
+            continue
+        path = run_path(store, p.parent.name)
+        meta = read_json(store.file(path, "meta.json"))
+        benchmark = benchmark_data(store, meta, p.parent.name)
+        rows.append({**meta, **({"benchmark": {k: benchmark[k] for k in
+                      ("suite", "task_id", "status", "strict_success", "earned", "total")}}
+                      if benchmark else {})})
+    return sorted(rows,
                   key=lambda m: m.get("started_at", ""), reverse=True)
+
+
+def benchmark_data(store, meta, run_id):
+    """Project a bounded SaaS score; never follow a trace's arbitrary path."""
+    raw = meta.get("benchmark_output")
+    if not isinstance(raw, str):
+        return None
+    output = Path(raw).resolve()
+    if (not output.is_relative_to(store.root)
+            or not re.fullmatch(r"saas-bench-([a-z]+_[0-9]+)", output.name)):
+        return None
+    task_id = output.name.removeprefix("saas-bench-")
+    pending = {"suite": "saas-bench", "task_id": task_id, "status": "pending",
+               "strict_success": None, "score": None, "earned": None, "total": None,
+               "checks": [], "verifier_errors": [], "agent_status": None, "reason": ""}
+    report = read_json(store.file(output, "report.json"))
+    if not report:
+        return pending
+    manifest = report.get("manifest", {})
+    if (manifest.get("suite") != "saas-bench" or manifest.get("task_id") != task_id
+            or manifest.get("original_trace_id") != run_id):
+        return None
+    result, grade = report.get("result", {}), report.get("grade", {})
+    valid = grade.get("data_valid") is True
+    return {**pending, "status": "graded" if valid else "invalid",
+            "strict_success": result.get("strict_success") if valid else None,
+            "score": grade.get("score"), "earned": grade.get("earned"),
+            "total": grade.get("total"), "checks": grade.get("checks", []),
+            "verifier_errors": grade.get("verifier_errors", []),
+            "agent_status": result.get("status"), "reason": result.get("reason", "")}
 
 
 def data(store, run_id):
@@ -93,8 +132,12 @@ def data(store, run_id):
             connection_message = "等待 Chrome 授权：请在浏览器的“Allow remote debugging?”弹窗中选择是否允许。"
     if not active and state.get("status") not in TERMINAL:
         state.update(status="interrupted", error="运行进程已结束，保留最后记录。")
+    benchmark = benchmark_data(store, meta, run_id)
+    if benchmark:
+        benchmark["agent_status"] = state.get("status")
     return {"meta": meta, "state": state, "active": active,
             "timeline": timeline_data(store, path, state),
+            "benchmark": benchmark,
             "connection_message": connection_message}
 
 

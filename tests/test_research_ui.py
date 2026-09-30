@@ -223,7 +223,7 @@ async def test_research_ui_evidence_and_multiround_form(tmp_path, monkeypatch):
                 assert '45 分钟' in await page.locator('#launch-budget').inner_text()
                 await page.locator('#start').click()
                 await page.locator('#request-status').filter(has_text='已提交').wait_for()
-                assert submitted == [{'mode': 'new', 'id': 'memory-test', 'max_trials': 4, 'metric': 'latency'}]
+                assert submitted == [{'mode': 'new', 'id': 'memory-test', 'suite': 'public-web', 'max_trials': 4, 'metric': 'latency'}]
                 await page.set_viewport_size({'width': 480, 'height': 900})
                 assert await page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             finally:

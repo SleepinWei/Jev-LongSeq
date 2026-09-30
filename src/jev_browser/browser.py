@@ -9,12 +9,13 @@ from pathlib import Path
 from playwright.async_api import Error, TimeoutError, async_playwright
 
 from .candidates import allowed_url
+from .context_budget import error_view
 from .protocol import Action, Element, Observation, Operation, Receipt, Task, digest
 
 NATIVE_SELECTOR = ('a[href],button,input,textarea,select,summary,[contenteditable="true"],'
             '[role="button"],[role="link"],[role="textbox"],[role="combobox"],'
             '[role="checkbox"],[role="radio"],[role="tab"],[role="option"],[role="menuitem"]')
-SELECTOR = NATIVE_SELECTOR + ',div,span,img,svg,[onclick],[tabindex]'
+SELECTOR = NATIVE_SELECTOR + ',div,span,img,svg,kbd,[onclick],[tabindex],[aria-readonly="true"]'
 # Reads rendered DOM only. No application globals, hidden attributes or backend state.
 SNAPSHOT = r"""selector => {
   const visible = el => {
@@ -34,7 +35,21 @@ SNAPSHOT = r"""selector => {
     const n = walker.currentNode;
     if (visible(n.parentElement) && n.textContent.trim()) lines.push(n.textContent.trim());
   }
-  const modal = [...document.querySelectorAll('dialog[open],[role="dialog"]')].filter(visible);
+  const modalCandidates = [...document.querySelectorAll('dialog[open],[role="dialog"]')].filter(visible);
+  const zOrder = el => {
+    let z = 0;
+    for (let n = el; n; n = n.parentElement) {
+      const value = Number.parseInt(getComputedStyle(n).zIndex, 10);
+      if (Number.isFinite(value)) z = Math.max(z, value);
+    }
+    return z;
+  };
+  // Only the front dialog is interactive. A help dialog can cover a still
+  // rendered command palette; exposing both mixes their controls and evidence.
+  const front = modalCandidates.filter(m => !modalCandidates.some(n => n !== m && m.contains(n)))
+    .map((m, order) => ({m, order, z:zOrder(m)}))
+    .sort((a,b) => b.z-a.z || b.order-a.order)[0];
+  const modal = front ? [front.m] : [];
   const nativeSelector = __NATIVE_SELECTOR__, custom = new Set();
   const iconName = el => [...el.querySelectorAll('img[alt],svg[aria-label],svg title')]
     .filter(visible).map(n => n.getAttribute('alt') || n.getAttribute('aria-label') || n.textContent)
@@ -49,15 +64,16 @@ SNAPSHOT = r"""selector => {
       n.matches('svg,use') ? n.getAttribute('href') || n.getAttribute('xlink:href') : '']
       .filter(Boolean).join(' '))
       .join(' ').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
-    for (const word of ['search','submit','close','menu','next','previous','back','send','add','remove','delete']) {
+    for (const word of ['help','question','info','clear','close','search','submit','menu','next','previous','back','send','add','remove','delete']) {
       if (new RegExp('(?:^|[^a-z])' + word + '(?=$|[^a-z])').test(tokens))
-        return word + ' (icon control)';
+        return (word === 'question' ? 'help' : word) + ' (icon control)';
     }
     return '';
   };
   const controls = [...document.querySelectorAll(selector)].map((el, index) => {
     if (!visible(el) || (modal.length && !modal.some(m => m.contains(el)))) return null;
-    if (!el.matches(nativeSelector)) {
+    const display = el.matches('.control-value.like-disabled-input,[aria-readonly="true"]:not(input):not(textarea):not(select)');
+    if (!el.matches(nativeSelector) && !display) {
       if (el.closest(nativeSelector) || el.querySelector(nativeSelector)) return null;
       const explicit = el.hasAttribute('onclick') || el.tabIndex >= 0;
       if (!explicit && getComputedStyle(el).cursor !== 'pointer') return null;
@@ -77,26 +93,74 @@ SNAPSHOT = r"""selector => {
       return texts.filter(Boolean).join(' ');
     };
     const labels = el.labels ? [...el.labels].filter(visible).map(labelText).join(' ') : '';
+    // Some form libraries render a sibling label without `for`. Associate only
+    // a visible label in a scope containing this single visible field.
+    let implicitLabel = '';
+    if (el.matches('input,textarea,select,[contenteditable="true"]') && !labels) {
+      for (let scope = el.parentElement, depth = 0; scope && depth < 5; scope = scope.parentElement, depth++) {
+        const fields = [...scope.querySelectorAll('input,textarea,select,[contenteditable="true"]')].filter(visible);
+        if (fields.length > 1) break;
+        const scopeLabels = [...scope.querySelectorAll('label')].filter(visible);
+        if (fields.length === 1 && scopeLabels.length === 1) {
+          implicitLabel = labelText(scopeLabels[0]);
+          break;
+        }
+      }
+    }
+    if (display) {
+      const scope = el.closest('.frappe-control');
+      const label = scope && [...scope.querySelectorAll('label')].find(visible);
+      if (label) implicitLabel = labelText(label);
+    }
     const labelled = (el.getAttribute('aria-labelledby') || '').split(/\s+/)
       .map(id => document.getElementById(id)).filter(x => x && visible(x)).map(labelText).join(' ');
-    const name = labelled || el.getAttribute('aria-label') || labels || labelText(el) ||
+    const name = labelled || el.getAttribute('aria-label') || labels || implicitLabel || labelText(el) ||
       el.getAttribute('alt') || iconName(el) || el.getAttribute('title') ||
       el.getAttribute('placeholder') || iconHint(el) || '';
     const inputRoles = {checkbox:'checkbox',radio:'radio',button:'button',submit:'button',reset:'button',range:'slider',file:'button'};
-    const role = el.getAttribute('role') || (tag === 'input' ? (inputRoles[el.type] || 'textbox') :
+    const role = display ? 'status' : el.getAttribute('role') || (tag === 'input' ? (inputRoles[el.type] || 'textbox') :
       ({a:'link',button:'button',summary:'button',textarea:'textbox',select:'combobox'}[tag] ||
        (custom.has(el) ? 'button' : 'textbox')));
-    const editable = !el.readOnly && (tag === 'textarea' || el.isContentEditable ||
+    const readOnly = display || !!el.readOnly || el.getAttribute('aria-readonly') === 'true';
+    const editable = !readOnly && (tag === 'textarea' || el.isContentEditable ||
       (tag === 'input' && ['text','search','email','url','tel','password','number'].includes(el.type)));
-    const row = el.closest('tr,[role="row"],fieldset,form');
-    return {index, role, name:name.trim(), value:el.type === 'password' ? '[redacted]' : (el.value || ''),
-      enabled:!el.matches(':disabled') && !el.closest('[aria-disabled="true"]'),
-      editable, selectable:tag === 'select',
+    const row = el.closest('.grid-row,tr,[role="row"],fieldset,form');
+    const required = !!el.required || el.getAttribute('aria-required') === 'true' ||
+      /\*\s*$/.test(labels || implicitLabel) ||
+      [...(el.closest('.frappe-control') || el.parentElement).querySelectorAll('label')]
+        .some(label => visible(label) && getComputedStyle(label, '::after').content.replace(/["']/g, '') === '*');
+    return {index, role, name:name.trim().replace(/\s*\*$/, ''), value:el.type === 'password' ? (el.value ? '[redacted]' : '') : (display ? labelText(el) : el.value || ''),
+      enabled:!display && !el.matches(':disabled') && !el.closest('[aria-disabled="true"]'),
+      editable, read_only:readOnly, required, selectable:tag === 'select' && !readOnly,
       checked: ['checkbox','radio'].includes(role) ? (el.checked ?? el.getAttribute('aria-checked') === 'true') : null,
       context:row ? labelText(row) : '', href:tag === 'a' ? el.href : null,
       options:tag === 'select' ? [...el.options].filter(x => !x.disabled && !x.hidden).map(x => x.value) : []};
   }).filter(Boolean);
   const nodes = document.querySelectorAll(selector);
+  if (front) {
+    const fields = controls.filter(c => c.editable || c.selectable || ['checkbox','radio'].includes(c.role));
+    const searchOnly = fields.length === 1 && fields[0].editable && fields[0].enabled &&
+      (fields[0].role === 'combobox' || nodes[fields[0].index].type === 'search') &&
+      /search|搜索|搜尋/i.test(fields[0].name);
+    const confirmation = controls.some(c => c.role === 'button' &&
+      /^(yes|no|ok)$|^(confirm|cancel|submit|save|publish|approve|delete)|是|否|确认|确定|取消|提交|保存|删除/i.test(c.name.replace(/\s+/g,'')));
+    // Bind a rendered keyboard hint, not an invented general keyboard tool.
+    // Never offer dismissal for an editable business form or confirmation.
+    if (searchOnly && !confirmation) {
+      const hints = [...nodes].filter(el => visible(el) && front.m.contains(el) &&
+        el.matches('kbd,span') && /^(esc|escape)$/i.test(el.innerText.trim()) &&
+        /\besc(?:ape)?\s+to\s+close\b/i.test(el.parentElement.innerText.trim()));
+      const leaves = hints.filter(el => !hints.some(other => other !== el && el.contains(other)));
+      if (leaves.length === 1) {
+        const el = leaves[0], index = [...nodes].indexOf(el);
+        const existing = controls.findIndex(c => c.index === index);
+        if (existing >= 0) controls.splice(existing, 1);
+        controls.push({index, role:'button', name:'Close dialog (Escape shortcut)', value:'',
+          enabled:true, editable:false, read_only:false, required:false, selectable:false,
+          checked:null, context:el.parentElement.innerText, href:null, options:[], activation_key:'Escape'});
+      }
+    }
+  }
   for (const c of controls) {
     if (c.role !== 'button' || !/^(search(?: \(icon control\))?|搜索|搜尋)$/i.test(c.name)) continue;
     for (let scope = nodes[c.index].parentElement; scope && scope !== document.body; scope = scope.parentElement) {
@@ -145,6 +209,7 @@ class PlaywrightBackend:
     ):
         self.task, self.headless, self.timeout_ms, self.output = task, headless, timeout_ms, output
         self.errors: list[str] = []
+        self.recovered_error_count = 0
         self.pages = {}
         self.handles = {}
         self.last: Observation | None = None
@@ -316,7 +381,8 @@ class PlaywrightBackend:
             dialogs=raw["dialogs"],
             loading=raw["loading"],
             http_status=self.navigation_status.get(self.page, (None, None))[1],
-            errors=self.errors[-10:],
+            errors=error_view([e for i, e in enumerate(self.errors)
+                               if i >= self.recovered_error_count or not e.startswith("page_error:")]),
             challenge=any(s in text for s in ("verify you are human", "captcha", "access denied")),
             tabs={k: p.url for k, p in self.pages.items() if not p.is_closed()},
         )
@@ -325,7 +391,48 @@ class PlaywrightBackend:
         self.last = obs
         return obs
 
+    def acknowledge_runtime_recovery(self, obs):
+        """Retire only the already reconciled exceptions; the raw error archive stays intact."""
+        if not self.last or self.last.observation_id != obs.observation_id:
+            raise ValueError("runtime recovery must refer to the current observation")
+        self.recovered_error_count = len(self.errors)
+
     async def execute(self, action: Action) -> Receipt:
+        started = time.monotonic()
+        try:
+            return await self._execute_once(action)
+        except Error as exc:
+            if not any(message in str(exc) for message in (
+                "Execution context was destroyed", "Cannot find context")):
+                raise
+            # Only preflight errors escape _execute_once: its dispatch block
+            # already returns unknown for writes. No action has been dispatched
+            # here, so obtain a fresh observation rather than abort or replay.
+            return Receipt(action_id=action.id, status="stale",
+                           detail="navigation changed the document during action preflight",
+                           duration_s=time.monotonic() - started, write_key=action.write_key)
+
+    async def blur_input(self, obs, element_ref):
+        """One grounded native Tab for bounded draft recovery; never a hidden state write."""
+        if not self.last or obs.observation_id != self.last.observation_id:
+            return Receipt(action_id="resume-blur", status="stale")
+        element = next((e for e in obs.elements if e.id == element_ref), None)
+        if not element or not element.editable or not element.enabled:
+            return Receipt(action_id="resume-blur", status="rejected")
+        current = await self.page.evaluate(SNAPSHOT, SELECTOR)
+        if digest(current) != obs.document_version:
+            return Receipt(action_id="resume-blur", status="stale")
+        handle = (await self.snapshot_handle.get_property(element_ref)).as_element()
+        if not handle or not await handle.evaluate(
+                "el => el.isConnected && document.activeElement === el"):
+            return Receipt(action_id="resume-blur", status="rejected", detail="input is not focused")
+        try:
+            await handle.press("Tab", timeout=self.timeout_ms)
+            return Receipt(action_id="resume-blur", status="ok")
+        except Error as exc:
+            return Receipt(action_id="resume-blur", status="unknown", detail=str(exc)[:300])
+
+    async def _execute_once(self, action: Action) -> Receipt:
         started = time.monotonic()
 
         def receipt(status, detail=""):
@@ -387,10 +494,32 @@ class PlaywrightBackend:
                 # The controller observes the destination and loading state next.
                 # Do not wait for every image/resource before returning a link receipt.
                 element = next((e for e in self.last.elements if e.id == action.element_ref), None)
+                if element and element.activation_key == "Escape":
+                    # Bootstrap help can leave focus outside the palette. Its
+                    # advertised shortcut belongs to the sole observed search
+                    # field; native focus is part of activating that capability.
+                    fields = [e for e in self.last.elements if e.editable and e.enabled]
+                    if len(fields) != 1:
+                        return receipt("rejected", "Escape shortcut lost its unique search field")
+                    field = (await self.snapshot_handle.get_property(fields[0].id)).as_element()
+                    if field is None:
+                        return receipt("stale", "dialog search field was replaced")
+                    await field.focus()
+                    await self.page.keyboard.press("Escape")
+                    return receipt("ok", "activated observed Escape dialog shortcut")
                 await handle.click(timeout=self.timeout_ms, no_wait_after=bool(
                     element and element.role == "link" and element.href))
             elif op == Operation.FILL:
                 await handle.fill(action.bound_value, timeout=self.timeout_ms)
+                # Native text/date widgets often commit on change/blur. Leaving
+                # focus inside them can let a datepicker restore the old value.
+                # Link/autocomplete fields must retain focus for option selection.
+                element = next((e for e in self.last.elements if e.id == action.element_ref), None)
+                if (self.task.control_mode == "dynamic" and element.role != "combobox"
+                        and await handle.evaluate(
+                            "el => el instanceof HTMLInputElement && el.type !== 'search' "
+                            "&& document.activeElement === el")):
+                    await handle.press("Tab", timeout=self.timeout_ms)
             elif op == Operation.SELECT:
                 await handle.select_option(action.bound_value, timeout=self.timeout_ms)
             elif op == Operation.SCROLL:

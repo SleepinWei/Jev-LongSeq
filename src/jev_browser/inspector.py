@@ -169,8 +169,7 @@ class Store:
             manifest = read_json(self.file(path, "manifest.json"), {})
             report = read_json(self.file(path, "report.json"), {})
             outcome = report.get("result") or read_json(self.file(path, "result.json"), {})
-            result.append(
-                {
+            entry = {
                     "id": run_id,
                     "task_id": manifest.get("task_id", run_id),
                     "started_at": manifest.get("started_at", ""),
@@ -179,7 +178,14 @@ class Store:
                     "strict_success": outcome.get("strict_success"),
                     "actions": outcome.get("actions"),
                 }
-            )
+            if manifest.get("suite") == "saas-bench":
+                grade = report.get("grade", {})
+                entry["benchmark"] = {
+                    "data_valid": grade.get("data_valid"),
+                    "strict_success": outcome.get("strict_success"),
+                    "earned": grade.get("earned"), "total": grade.get("total"),
+                }
+            result.append(entry)
         return sorted(result, key=lambda r: r["started_at"], reverse=True)
 
     def frames(self, path):
@@ -462,6 +468,7 @@ def make_server(root, port=8767):
                     "/studio.css": ("studio.css", "text/css"),
                     "/studio-view.css": ("studio-view.css", "text/css"),
                     "/original.js": ("original.js", "text/javascript"),
+                    "/benchmark-ui.js": ("benchmark-ui.js", "text/javascript"),
                     "/original.css": ("original.css", "text/css"),
                     "/research.js": ("research.js", "text/javascript"),
                     "/research.css": ("research.css", "text/css"),

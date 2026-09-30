@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from pathlib import Path
 
+from .context_budget import wire_bytes
 from .evaluation import efficiency_profile, quantile
 from .protocol import now
 
@@ -37,8 +39,7 @@ def write_json(path: Path, value):
 def payload_sizes(payload: dict) -> dict:
     """Byte counts only, not token estimates or copies of potentially sensitive prompts."""
 
-    def size(value):
-        return len(json.dumps(value, ensure_ascii=False).encode())
+    size = wire_bytes
 
     content = payload.get("state")
     if content is None:
@@ -297,10 +298,14 @@ def save_analysis(output: Path, report: dict | None = None):
         result["task_observations"] = []
         for task_report in report["task_reports"]:
             task_id = task_report["manifest"]["task_id"]
-            if type(task_id) is not int:
-                raise ValueError("public task IDs must be integers")
             suite = task_report["manifest"].get("suite", "webarena")
-            if suite not in {"webarena", "public-web"}:
+            if suite == "saas-bench":
+                if not isinstance(task_id, str) or not re.fullmatch(r"[a-z]+_[0-9]+", task_id):
+                    raise ValueError("invalid SaaS-Bench task ID")
+            elif suite in {"webarena", "public-web"}:
+                if type(task_id) is not int:
+                    raise ValueError("public task IDs must be integers")
+            else:
                 raise ValueError("unrecognized public task suite")
             child = output / f"{suite}-{task_id}"
             observation = analyze(

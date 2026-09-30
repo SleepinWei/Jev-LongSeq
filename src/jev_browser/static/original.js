@@ -1,3 +1,5 @@
+import {renderBenchmark} from './benchmark-ui.js';
+
 export function mount(root, {location, history, isActive}) {
 /* Native element ranking and DOM overlays adapted from Jev Ultrafast (MIT).
  * See NOTICE.md and ULTRAFAST-LICENSE.txt. */
@@ -6,7 +8,7 @@ const token = document.querySelector('meta[name="demo-token"]').content;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const labels = {starting:'启动中',ready:'运行中',predicted:'已选择',done:'DONE · 自报完成',blocked:'BLOCKED',needs_input:'需要输入',noop:'NONE · 已暂停',error:'运行失败',timeout:'达到时限',interrupted:'已中断'};
 const sec = n => Number.isFinite(n) ? `${n.toFixed(2)} s` : '—';
-let current = new URLSearchParams(location.search).get('run') || '', state = {}, meta = {}, comparison = null;
+let current = new URLSearchParams(location.search).get('run') || '', state = {}, meta = {}, comparison = null, benchmark = null;
 let timeline = [], timelineKey = '', activeRun = false;
 let configured = false, busy = false, submitting = false, polling = false, imageVersion = '', exportUrl = '';
 async function get(path, options) {
@@ -42,7 +44,7 @@ function renderComparison() {
     ['Jev / 本地策略调用', state.decisions?.length ?? '—', report ? successfulCalls.filter(c=>['jev','llm_policy'].includes(c.kind)).length : '—'],
     ['文本辅助 / 规划等调用', state.text_calls?.length ?? '—', report ? successfulCalls.filter(c=>!['jev','llm_policy','connection_preparation'].includes(c.kind)).length : '—'],
     ['总耗时', sec(state.wall_elapsed_s), sec(report?.end_to_end_s ?? result?.elapsed_s)],
-    ['独立严格判分', '未判分', result?.strict_success == null ? '未判分' : result.strict_success ? '通过' : '未通过'],
+    ['独立严格判分', benchmark?.status==='invalid'?'评分无效':benchmark?.status==='graded'?(benchmark.strict_success===true?'通过':benchmark.strict_success===false?'未通过':'未判分'):'未判分', result?.strict_success == null ? '未判分' : result.strict_success ? '通过' : '未通过'],
   ];
   $('comparison-body').innerHTML = rows.map(row => `<tr>${row.map(v=>`<td>${esc(v)}</td>`).join('')}</tr>`).join('');
   if (comparison) {
@@ -52,6 +54,8 @@ function renderComparison() {
 }
 function render(data) {
   meta = data.meta; state = data.state; timeline = data.timeline || []; activeRun = data.active;
+  benchmark = data.benchmark || null;
+  renderBenchmark(root,benchmark);
   $('outcome').textContent = labels[state.status] || state.status || '—';
   $('actions').textContent = state.history?.length ?? '—';
   $('calls').textContent = `Jev ${state.decisions?.length ?? 0} 次 · 文本 ${state.text_calls?.length ?? 0} 次`;

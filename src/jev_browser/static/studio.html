@@ -15,10 +15,24 @@
       <a href="/ultrafast" data-view="ultrafast">Ultrafast</a>
       <a href="/research" data-view="research">Autoresearch</a>
     </nav>
+    <button id="records-toggle" class="records-toggle" type="button" aria-controls="record-sidebar" aria-expanded="true" aria-label="收起运行记录">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="2.5" y="3.5" width="19" height="17" rx="2"/><path d="M8 3.5v17M12 8h6M12 12h6M12 16h4"/></svg><span>运行记录</span>
+    </button>
+    <span id="studio-current" class="studio-current" aria-live="polite"></span>
     <span class="studio-local">LOCAL STUDIO</span>
   </header>
   <p id="studio-status" role="status" hidden></p>
-  <div id="studio-views"></div>
+  <div id="studio-layout" class="studio-layout">
+    <aside id="record-sidebar" class="record-sidebar" aria-label="运行记录">
+      <div class="record-sidebar-head"><div><span class="record-eyebrow">WORKSPACE</span><h2 id="record-heading">运行记录</h2></div><button id="records-close" type="button" aria-label="收起运行记录">×</button></div>
+      <label class="record-search-label" for="record-search">筛选当前列表</label>
+      <input id="record-search" type="search" placeholder="搜索任务或记录 ID" autocomplete="off">
+      <div class="record-list-head"><span id="record-count">加载中…</span><button id="records-refresh" type="button">刷新</button></div>
+      <nav id="record-list" aria-label="当前视图的记录"></nav>
+    </aside>
+    <div id="studio-views"></div>
+  </div>
+  <button id="records-backdrop" class="records-backdrop" type="button" tabindex="-1" aria-label="关闭运行记录" hidden></button>
   <template id="initial-view" data-path="__VIEW_PATH__">__VIEW_CONTENT__</template>
 </body>
 </html>

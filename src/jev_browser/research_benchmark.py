@@ -11,7 +11,8 @@ def aggregate(reports):
     first = reports[0]
     calls = [call for report in reports for call in report["model_calls"]]
     results = [r["result"] for r in reports]
-    strict = all(r.get("strict_success") is True for r in results)
+    strict = (None if any(r.get("strict_success") is None for r in results)
+              else all(r.get("strict_success") is True for r in results))
     elapsed = sum(r["end_to_end_s"] for r in reports)
     actions = sum(r["actions"] for r in results)
     return {
@@ -48,9 +49,11 @@ def aggregate(reports):
 async def run_pair(args, *, count, output):
     from .public_benchmark import run_webarena
     from .public_web import run_public_web
+    from .saas_benchmark import run_saas
 
     suite = getattr(args, "suite", "webarena")
-    runner = run_public_web if suite == "public-web" else run_webarena
+    runner = {"public-web": run_public_web, "webarena": run_webarena,
+              "saas-bench": run_saas}[suite]
 
     output.mkdir(parents=True, exist_ok=False)
     reports = []

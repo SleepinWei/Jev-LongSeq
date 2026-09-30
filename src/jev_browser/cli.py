@@ -200,6 +200,15 @@ async def run_trial(args, *, count=None, output=None):
     connection_tasks = []
     try:
         policy, planner, transports = adapters(args)
+        checkpoint = getattr(args, "_resume_checkpoint", None)
+        if checkpoint and {client.model for client in transports} != checkpoint["model_names"]:
+            raise ValueError("continuation model configuration differs from the original")
+        if checkpoint:
+            if any(not isinstance(client, ModelTransport) for client in transports):
+                raise ValueError("draft continuation currently requires API model transports")
+            for client in transports:
+                client.required_goal = task.objective
+            manifest["continuation"]["per_request_prompt_guard"] = True
         for client in transports:
             client.observer = observer
         if getattr(args, "preconnect", False):
@@ -256,6 +265,13 @@ async def run_trial(args, *, count=None, output=None):
             asyncio.timeout(max(0.001, args.max_seconds - (time.monotonic() - started))),
             backend as browser,
         ):
+            for url in getattr(args, "_benchmark_urls", []):
+                from .candidates import allowed_url
+
+                if not allowed_url(url, task):
+                    raise ValueError("benchmark tab outside allowed origins")
+                page = await browser.context.new_page()
+                await page.goto(url, wait_until="domcontentloaded")
             if connection_tasks:
                 await asyncio.gather(*connection_tasks)
             manifest["chromium"] = browser.browser_version
@@ -290,6 +306,13 @@ async def run_trial(args, *, count=None, output=None):
                 output=output,
                 observer=observer,
             )
+            if checkpoint:
+                from .continuation import reconstruct_ui, restore_controller
+
+                recovery = await reconstruct_ui(browser, task, checkpoint, observer)
+                restore_controller(controller, checkpoint, recovery)
+                write_json(output / "resume-memory-initial.json", controller.memory.export())
+                manifest["continuation"] = controller.memory.resume_context
             result = await controller.run()
             if is_demo and not custom_goal:
                 # Hidden truth is never passed to the controller, planner, or local policy.
@@ -531,10 +554,16 @@ def main():
     benchmark = commands.add_parser("benchmark", help="Bounded pilot: one or two long tasks only")
     common(benchmark, demo=True)
     benchmark.set_defaults(backend="browsergym", policy="jev", planner="llm", max_planner_calls=4)
-    benchmark.add_argument("--suite", choices=["catalog", "webarena", "public-web"], default="public-web")
+    benchmark.add_argument("--suite", choices=["catalog", "webarena", "public-web", "saas-bench"], default="public-web")
     benchmark.add_argument("--task-ids", type=int, nargs="+", default=[50, 332])
     benchmark.add_argument("--sizes", type=int, nargs="+", default=[24, 32])
     benchmark.add_argument("--seed", type=int, default=0)
+    from .saas_benchmark import add_options
+
+    add_options(benchmark)
+    benchmark.add_argument("--preflight-only", action="store_true")
+    benchmark.add_argument("--environment-only", action="store_true",
+                           help="SaaS-Bench: start, verify pristine state, clean up; no model calls")
     report = commands.add_parser("report")
     report.add_argument("directory")
     observe = commands.add_parser("observe", help="Analyze completed or interrupted run telemetry")
@@ -554,9 +583,10 @@ def main():
         max_seconds=240,
     )
     research.add_argument("--max-trials", type=int, default=2)
-    research.add_argument("--suite", choices=["webarena", "catalog", "public-web"], default="public-web")
+    research.add_argument("--suite", choices=["webarena", "catalog", "public-web", "saas-bench"], default="public-web")
     research.add_argument("--task-ids", type=int, nargs="+", default=[50, 332])
     research.add_argument("--seed", type=int, default=0)
+    add_options(research)
     research.add_argument("--study-seconds", type=float, default=1500)
     research.add_argument("--max-model-attempts", type=int, default=300)
     research.add_argument("--max-tokens", type=int, default=600000)

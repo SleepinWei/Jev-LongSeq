@@ -1,3 +1,5 @@
+import {longseqBenchmark, renderBenchmark} from './benchmark-ui.js';
+
 export function mount(root, {location, history, isActive}) {
 /* Browser Use / Jev Ultrafast (MIT) inspector helpers and rendering pattern,
  * adapted for LongSeq artifacts, timeline replay and continuous live screenshots.
@@ -71,11 +73,15 @@ async function update() {
 }
 function renderSummary() {
   const r = state.report?.result || state.result || {}, grade = state.report?.grade || {};
+  const benchmark=longseqBenchmark(state.report,state.manifest);
+  renderBenchmark(root,benchmark);
   const count = state.events.filter(e => e.kind === "action").length;
   const extracted = new Set(state.events.filter(e => e.kind === "extraction").flatMap(e => e.facts.map(f => f.entity)));
   $("outcome").textContent = statuses[r.status] || "记录中";
   $("outcome").className = r.strict_success ? "success" : r.status === "failed" ? "failed" : "";
-  $("grade").textContent = r.strict_success === true ? "独立严格判分通过" : r.strict_success === false ? "独立严格判分未通过" : "未提供独立判分";
+  $("grade").textContent = benchmark?.status==='invalid' ? 'SaaS-Bench 官方评分无效'
+    : benchmark?.status==='graded' ? `SaaS-Bench 官方 ${grade.earned} / ${grade.total} · 严格${r.strict_success===true?'通过':'未通过'}`
+    : r.strict_success === true ? "独立严格判分通过" : r.strict_success === false ? "独立严格判分未通过" : "未提供独立判分";
   $("actions").textContent = n(r.actions ?? count);
   $("reference").textContent = `参考 H ${n(state.manifest.reference_actions)} · 规划 ${n(r.planner_calls ?? state.events.filter(e=>e.kind==='plan').length)}`;
   const total = state.manifest.fixture?.records;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 import uuid
@@ -12,6 +13,14 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import ValidationError
 
+from .context_budget import (
+    DEFAULT_BRAIN_MAX_BYTES,
+    DEFAULT_FINISH_MAX_BYTES,
+    DEFAULT_MAX_BYTES,
+    ContextBudgetExceeded,
+    project_chat_request,
+    project_request,
+)
 from .memory import Memory
 from .observability import payload_sizes
 from .protocol import Action, Contract, Decision, Observation, Plan, Task, digest, now
@@ -36,9 +45,13 @@ DYNAMIC_SYSTEM = (
     "the user's goal authorizes that operation. Choose only a supplied candidate. A fill/select "
     "candidate may already bind exact quoted user text; prefer that candidate when it matches "
     "the required input. An unbound fill/select requests a separate input helper. "
-    "Filling an input does not submit it. For sequential searches, submit the current query "
+    "A control with activation_key='Escape' is a bound, visible dialog-close shortcut: "
+    "activating its click candidate presses only Escape, not an arbitrary key. Help/info/clear "
+    "icons are not close controls. Filling an input does not submit it. For sequential searches, submit the current query "
     "and observe its results before replacing it with the next query. A confirmed fill means "
     "the value is present, not that the search has been completed. "
+    "An empty password control has value=''; [redacted] means it is populated but hidden, "
+    "not that its literal value is verified or login has succeeded. "
     "Confirm a search submission when the submitted query has visible results or an explicit "
     "no-results message. Irrelevant results still confirm execution; relevance and reading are "
     "separate work. A changed URL or empty results container alone does not confirm execution. "
@@ -85,6 +98,7 @@ class ModelTransport:
         self.timeout_s = timeout_s
         self.ledger: list[dict[str, Any]] = []
         self.observer = None
+        self.required_goal: str | None = None
 
     def _client(self):
         if self.client is None:
@@ -126,6 +140,32 @@ class ModelTransport:
         return record
 
     async def post(self, payload: dict, kind: str) -> dict:
+        if self.required_goal is not None:
+            context = payload.get("state")
+            if context is None:
+                try:
+                    context = json.loads(payload["messages"][-1]["content"])
+                except (KeyError, IndexError, TypeError, ValueError):
+                    raise ValueError("continued model request is missing its original goal") from None
+            if not isinstance(context, dict) or context.get("trusted_goal") != self.required_goal:
+                raise ValueError("continued model request changed the original task prompt")
+        if kind.startswith("dynamic_"):
+            variable, default = (
+                ("BRAIN_FINISH_CONTEXT_MAX_BYTES", DEFAULT_FINISH_MAX_BYTES)
+                if kind == "dynamic_finish" else ("BRAIN_CONTEXT_MAX_BYTES", DEFAULT_BRAIN_MAX_BYTES))
+            maximum = int(os.environ.get(variable, default))
+            if maximum <= 0:
+                raise ValueError(f"{variable} must be positive")
+            try:
+                payload, metrics = project_chat_request(payload, max_bytes=maximum, purpose=kind)
+            except ContextBudgetExceeded as exc:
+                if self.observer:
+                    self.observer.append("context-projections.jsonl", {
+                        **self.observer.context, **exc.metrics, "status": "overflow", "request_dispatched": False})
+                raise
+            if self.observer:
+                self.observer.append("context-projections.jsonl", {
+                    **self.observer.context, **metrics, "status": "projected"})
         client = self._client()
         call_id = uuid.uuid4().hex
         sizes = payload_sizes(payload)
@@ -256,8 +296,13 @@ def state(task: Task, obs: Observation, memory: Memory, contract: Contract | Non
 
 
 class JevPolicy:
-    def __init__(self, transport: ModelTransport):
+    def __init__(self, transport: ModelTransport, *, context_max_bytes: int | None = None):
         self.transport = transport
+        self.context_max_bytes = int(context_max_bytes if context_max_bytes is not None else
+                                     os.environ.get("JEV_CONTEXT_MAX_BYTES", DEFAULT_MAX_BYTES))
+        if self.context_max_bytes <= 0:
+            raise ValueError("Jev context byte budget must be positive")
+        self.last_context_projection = None
 
     async def choose(
         self,
@@ -270,7 +315,9 @@ class JevPolicy:
         options = {a.id: a.model_dump(mode="json") for a in candidates}
         if task.control_mode == "dynamic":
             options = {
-                a.id: {"operation": a.operation, "description": a.description,
+                a.id: {"operation": a.operation,
+                       **({"target": a.element_ref} if a.element_ref else
+                          {"description": a.description}),
                        **({"value": a.bound_value} if a.bound_value is not None else {})}
                 for a in candidates
             }
@@ -280,10 +327,19 @@ class JevPolicy:
         if task.control_mode == "dynamic" and memory.pending_writes:
             questions["outcome"] = {
                 "type": "choice",
-                "instructions": DYNAMIC_SYSTEM + " Assess the previous dispatched action from "
+                "instructions": "Follow the action head's trusted goal and constraints. "
+                "Assess the previous dispatched action from "
                 "the NEW visible page and pending transition. The action head independently "
                 "proposes what to do IF the outcome is confirmed; otherwise it will be ignored. "
+                "Assess pending_writes.expected_goal: the immediate effect of the last action, "
+                "not the whole stage or task. Opening a confirmation dialog is a UI effect only; "
+                "an affirmative click and visible committed state are separate actions. "
+                "If a dialog contains only a close control and obscures the result, you may "
+                "choose that close for inspection while the original action remains pending. "
+                "This exception never approves Yes/No/Cancel or confirms the original write. "
                 "For fill/select, confirm the visible bound value in the selected control. "
+                "For a password fill, a change from empty to [redacted] confirms population "
+                "only; credential validity still requires a separate login result. "
                 "Do not wait for a form submission or search results to confirm filling a field; "
                 "that requires a separate subsequent action.",
                 "criteria": {
@@ -292,14 +348,23 @@ class JevPolicy:
                     "unknown": "Result is ambiguous or unexpected; consult the LLM brain",
                 },
             }
-        data = await self.transport.post(
-            {
-                "model": self.transport.model,
-                "state": state(task, obs, memory, contract),
-                "questions": questions,
-            },
-            "jev",
-        )
+        payload = {"model": self.transport.model, "state": state(task, obs, memory, contract),
+                   "questions": questions}
+        if task.control_mode == "dynamic":
+            observer = getattr(self.transport, "observer", None)
+            try:
+                payload, metrics = project_request(payload, max_bytes=self.context_max_bytes)
+            except ContextBudgetExceeded as exc:
+                if observer:
+                    observer.append("context-projections.jsonl", {
+                        **observer.context, **exc.metrics, "purpose": "jev", "status": "overflow",
+                        "request_dispatched": False})
+                raise
+            self.last_context_projection = metrics
+            if observer:
+                observer.append("context-projections.jsonl", {
+                    **observer.context, **metrics, "purpose": "jev", "status": "projected"})
+        data = await self.transport.post(payload, "jev")
         answer = data["answers"]["action"]
         if answer.get("type") != "choice" or answer["choice"] not in options:
             raise ValueError("Jev returned an invalid or unknown choice")

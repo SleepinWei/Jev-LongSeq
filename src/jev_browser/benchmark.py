@@ -80,11 +80,24 @@ async def run_pilot(args):
     from .cli import run_trial, write_json
     from .evaluation import summarize
 
+    if args.suite != "saas-bench" and (getattr(args, "preflight_only", False)
+                                       or getattr(args, "environment_only", False)):
+        raise ValueError("--preflight-only and --environment-only require --suite saas-bench")
     root = Path(args.output)
     if root.exists() and any(root.iterdir()):
         raise ValueError("pilot output directory must be empty")
     root.mkdir(parents=True, exist_ok=True)
-    if args.suite in {"webarena", "public-web"}:
+    if args.suite == "saas-bench":
+        from .saas_benchmark import check_saas, run_saas
+
+        report = await check_saas(args)
+        write_json(root / "preflight.json", report)
+        if report["status"] != "ready" or getattr(args, "preflight_only", False):
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 0 if report["status"] == "ready" else 2
+        reports = [await run_saas(args, task, root / f"saas-bench-{task['id']}")
+                   for task in report["selected_tasks"]]
+    elif args.suite in {"webarena", "public-web"}:
         from .public_web import check_public_web, run_public_web
 
         check = check_public_web if args.suite == "public-web" else check_webarena
@@ -111,6 +124,14 @@ async def run_pilot(args):
             print(json.dumps(reports[-1]["result"], ensure_ascii=False), flush=True)
     summary = summarize(reports)
     summary["scope"] = "one/two-task pilot only; no estimate of aggregate benchmark performance"
+    if args.suite == "saas-bench" and getattr(args, "environment_only", False):
+        summary["scope"] = "Environment smoke only; no agent performance measured"
+        write_json(root / "summary.json", summary)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0 if all(r["grade"]["data_valid"] and not r["environment"]["cleanup_error"]
+                        for r in reports) else 2
     write_json(root / "summary.json", summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if args.suite == "saas-bench" and any(r["grade"].get("data_valid") is False for r in reports):
+        return 2
     return 0 if all(r["result"]["strict_success"] for r in reports) else 1

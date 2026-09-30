@@ -15,6 +15,7 @@ benchmark = [
     "browsergym-core>=0.13.3",
     "browsergym-webarena>=0.13.3",
 ]
+saas = ["pyyaml>=6,<7"]
 chrome = [
     "browser-harness==0.1.13",
 ]

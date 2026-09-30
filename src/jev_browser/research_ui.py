@@ -116,6 +116,7 @@ def study_data(store, study_id):
                     )["total"],
                     "components": efficiency_profile(calls, actions=0, elapsed_s=0)["by_component"],
                     "grade": task_report.get("grade", {}),
+                    "environment": task_report.get("environment", {}),
                     "inflight": len([r for r in starts if r.get("attempt_id") not in completed]),
                     "has_preview": store.file(task_root, "live.jpg").exists(),
                 }
@@ -155,6 +156,9 @@ def launch_research(store, body):
         raise ValueError("研究轮数须为 2–6（包含基线）")
     if not isinstance(metric, str) or metric not in {"tokens", "latency"}:
         raise ValueError("请选择 tokens 或 latency 研究目标")
+    suite = body.get("suite", "public-web")
+    if not isinstance(suite, str) or suite not in {"public-web", "saas-bench"}:
+        raise ValueError("请选择 public-web 或 saas-bench")
     with store.lock:
         if store.child and store.child.poll() is None:
             raise RuntimeError("已有任务正在运行，请等待完成")
@@ -170,15 +174,15 @@ def launch_research(store, body):
                 raise RuntimeError("该研究正在运行")
             study_id = body["id"]
         else:
-            study_id = f"autoresearch-public-web-{time.time_ns()}"
+            study_id = f"autoresearch-{suite}-{time.time_ns()}"
             output = store.root / study_id
-        suite = prior.get("config", {}).get("suite", "webarena") if mode == "resume" else "public-web"
+        suite = prior.get("config", {}).get("suite", "webarena") if mode == "resume" else suite
         if mode == "resume":
             max_trials = prior.get("limits", {}).get("max_trials", 2)
             metric = prior.get("config", {}).get("metric", "tokens")
         study_seconds = (prior.get("limits", {}).get("study_seconds", 600 * max_trials + 300)
                          if mode == "resume" else 600 * max_trials + 300)
-        if suite not in {"webarena", "public-web"}:
+        if suite not in {"webarena", "public-web", "saas-bench"}:
             raise ValueError("该研究类型请通过 CLI 恢复")
         command = [
             sys.executable,
@@ -214,6 +218,14 @@ def launch_research(store, body):
             "--output",
             str(output),
         ]
+        if suite == "saas-bench":
+            from .saas_benchmark import DEFAULT_TASKS
+
+            ids = prior.get("config", {}).get("task_ids", DEFAULT_TASKS) if mode == "resume" else DEFAULT_TASKS
+            command.extend(["--saas-task-ids", *ids])
+            if mode == "resume" and prior.get("config", {}).get("saas_root"):
+                command.extend(["--saas-root", prior["config"]["saas_root"],
+                                "--saas-slot", str(prior["config"].get("saas_slot", 0))])
         if mode == "resume":
             command.append("--resume")
         store.root.mkdir(parents=True, exist_ok=True)

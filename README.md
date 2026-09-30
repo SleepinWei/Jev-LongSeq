@@ -58,6 +58,12 @@ Trace Studio 顶部导航统一提供 LongSeq、Ultrafast 和 Autoresearch。三
 页面内切换，保留各自的草稿、所选记录、回看位置与展开状态；研究中的执行轨迹链接
 直接切换到 LongSeq。原有 `/`、`/ultrafast`、`/research` 地址仍支持直接访问和刷新，
 浏览器前进 / 后退可恢复对应视图。未显示的工作区暂停常规轮询，后台任务继续执行。
+左侧共用运行记录栏按当前工作区显示 LongSeq 轨迹、原版 Ultrafast 轨迹或
+Autoresearch 研究与逐任务 trace。可搜索、收起；窄屏以抽屉打开。选择记录后保留
+可分享的 `?run=` / `?study=` 深链接。设计与交互说明见
+[运行记录侧栏](docs/STUDIO-RUN-SIDEBAR.md)。
+SaaS-Bench 轨迹还显示官方严格成功、部分得分和逐项检查；评分器异常明确标为无效，
+不会把原始 0 分算作 Agent 的有效成绩。
 
 ```bash
 # 读取已有 runs/，包括历史失败和成功的真实模型任务
@@ -273,3 +279,7 @@ Live Preview 下方的「执行记录 / 历史快照」提供缩略图、上一�
 点选快照会同步 Native Decision 与 DOM 框，并展示对应的实际动作、输入文本、决策耗时
 和页面变化；快照是动作选择前的观察，末尾「最终页面」为最后观察。回看时暂停跟随，
 也可聚焦缩略图后用左右方向键切换。未执行的决策单独标注，旧记录缺失的截图显示占位。
+
+### SaaS-Bench（Mac mini）
+
+已增加 SaaS-Bench 的独立容器、官方状态判分和 Autoresearch 接口。首批运行 Business 任务，部署范围、命令及计分口径见 [SaaS-Bench 接入](docs/SAAS-BENCH.zh-CN.md)。
