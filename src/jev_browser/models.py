@@ -22,7 +22,7 @@ from .context_budget import (
     project_request,
 )
 from .memory import Memory
-from .observability import ResourceLimit, payload_sizes
+from .observability import ModelCallTimeout, ResourceLimit, payload_sizes
 from .protocol import Action, Contract, Decision, Observation, Plan, Task, digest, now
 
 SYSTEM = (
@@ -190,7 +190,9 @@ class ModelTransport:
         for attempt in range(retries + 1):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise ResourceLimit(f"{kind} model call allowance exhausted; checkpoint retained")
+                if run_deadline is not None and time.monotonic() >= run_deadline - 5:
+                    raise ResourceLimit("run deadline reserve reached; checkpoint retained")
+                raise ModelCallTimeout(f"{kind} model call allowance exhausted; checkpoint retained")
             if self.observer:
                 self.observer.before_call()
             started = time.monotonic()
@@ -232,9 +234,7 @@ class ModelTransport:
             if self.observer:
                 self.observer.request_started(record)
             try:
-                attempt_seconds = min(remaining, self.timeout_s,
-                                      (60 if kind in {"dynamic_feedback", "dynamic_finish"} else 30)
-                                      if dynamic else self.timeout_s)
+                attempt_seconds = min(remaining, self.timeout_s)
                 async with asyncio.timeout(attempt_seconds):
                     response = await client.post(
                         self.endpoint, json=payload,
@@ -286,9 +286,14 @@ class ModelTransport:
                     cause = cause.__cause__ or cause.__context__
                 record["error_chain"] = causes
                 record["error_detail"] = " → ".join(causes)
-                if attempt < retries:
+                if attempt < retries and deadline - time.monotonic() > .5:
                     await asyncio.sleep(min(0.5 * 2**attempt, 2))
                     continue
+                if dynamic and isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+                    raise ModelCallTimeout(
+                        f"{kind}: {self.model} timed out after {attempt + 1} attempts; "
+                        "run budget not exhausted; pending retained, no action replayed"
+                    ) from exc
                 if isinstance(exc, httpx.ConnectError):
                     phase = record.get("network_error_phase", "connection establishment")
                     raise httpx.ConnectError(

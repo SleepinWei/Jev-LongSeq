@@ -938,8 +938,9 @@ class DynamicController(Controller):
         route = planning_location(obs)
         if feedback.verification:
             self.verification_runs.setdefault(route, (self.actions, time.monotonic()))
-            if route in self.exhausted_verifications and not self.pending:
-                self.defer_verification(obs)
+            if route in self.exhausted_verifications and self.defer_verification(obs):
+                feedback.next_goal = self.memory.feedback["next_goal"]
+                feedback.verification, feedback.inputs = None, []
         if not feedback.working_memory:
             self.memory.feedback["working_memory"] = old_memory
         if feedback._local_readback:

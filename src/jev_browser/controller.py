@@ -9,7 +9,7 @@ from typing import Protocol
 from .candidates import authorize, generate, validate_plan
 from .memory import Memory, all_checks, check, visible_fields
 from .models import InvalidPlanOutput
-from .observability import Observer, ResourceLimit
+from .observability import ModelCallTimeout, Observer, ResourceLimit
 from .protocol import (
     Action,
     Budget,
@@ -232,6 +232,9 @@ class Controller:
                 result = await self._loop()
         except TimeoutError:
             result = self.result("budget_exhausted", "wall-clock deadline reached")
+        except ModelCallTimeout as exc:
+            self.log("model_call_timeout", detail=str(exc), pending_preserved=bool(self.memory.pending_writes))
+            result = self.result("needs_attention", str(exc))
         except ResourceLimit as exc:
             result = self.result("budget_exhausted", str(exc))
         except asyncio.CancelledError:

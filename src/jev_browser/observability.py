@@ -19,6 +19,10 @@ class ResourceLimit(RuntimeError):
     """A local experiment budget was reached before dispatching another model request."""
 
 
+class ModelCallTimeout(RuntimeError):
+    """One model request exceeded its allowance, independent of the run deadline."""
+
+
 def read_jsonl(path: Path) -> list[dict]:
     rows = []
     if path.exists():

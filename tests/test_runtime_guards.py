@@ -8,8 +8,8 @@ import pytest
 
 from jev_browser.dynamic import DynamicController, Feedback, JsonFeedback, planning_location
 from jev_browser.memory import Memory
-from jev_browser.models import ModelTransport
-from jev_browser.observability import Observer, ResourceLimit
+from jev_browser.models import ModelTransport, state
+from jev_browser.observability import ModelCallTimeout, Observer, ResourceLimit
 from jev_browser.protocol import Element, Observation, Operation, Task
 
 
@@ -100,7 +100,7 @@ async def test_dynamic_retry_is_bounded_and_run_reserve_prevents_a_request():
     payload = {'messages': [{'role': 'user', 'content': json.dumps({'trusted_goal': 'test'})}]}
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         transport = ModelTransport('https://test.example', 'test', 'test', retries=9, client=client)
-        with pytest.raises(httpx.ReadTimeout):
+        with pytest.raises(ModelCallTimeout):
             await transport.post(payload, 'dynamic_readback')
         assert len(requests) == 2 and len(transport.ledger) == 2
         transport.observer = Observer()
@@ -108,6 +108,39 @@ async def test_dynamic_retry_is_bounded_and_run_reserve_prevents_a_request():
         with pytest.raises(ResourceLimit):
             await transport.post(payload, 'dynamic_readback')
         assert len(requests) == 2
+
+
+async def test_planning_request_can_use_whole_logical_allowance():
+    def respond(request):
+        assert 119 < request.extensions['timeout']['read'] <= 120
+        return httpx.Response(200, json={'choices': []})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        transport = ModelTransport('https://test.example', 'test', 'test', client=client, timeout_s=180)
+        await transport.post({'messages': [{'role': 'user', 'content': json.dumps(
+            state(definition(), page(), Memory(), None))}]},
+                             'dynamic_feedback')
+
+
+async def test_model_timeout_is_not_run_budget_exhaustion(tmp_path):
+    async def respond(request):
+        await asyncio.Event().wait()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        transport = ModelTransport('https://test.example', 'test', 'test', client=client,
+                                   retries=0, timeout_s=.01)
+        class SlowModel(DynamicController):
+            async def _loop(self):
+                self.memory.pending_writes['write'] = {'dispatch_status': 'unknown', 'waits': 0,
+                    'action': {'operation': 'click', 'description': 'Submit'}}
+                await transport.post({'messages': [{'role': 'user', 'content': json.dumps(
+                    state(self.task, page(), self.memory, None))}]},
+                                     'dynamic_feedback')
+        controller = SlowModel(definition(), None, None, feedback=None, output=tmp_path)
+        result = await controller.run()
+    assert result.status == 'needs_attention'
+    assert 'dynamic_feedback' in result.reason and 'timed out' in result.reason
+    assert result.elapsed_s < controller.budget.max_seconds
+    saved = json.loads((tmp_path / 'memory.json').read_text())
+    assert saved['pending_writes']['write']['dispatch_status'] == 'unknown'
 
 
 async def test_local_readback_preserves_input_and_verification_contracts():
