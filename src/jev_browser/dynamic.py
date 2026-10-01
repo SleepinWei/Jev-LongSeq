@@ -16,6 +16,7 @@ from .controller import Controller
 from .input_bindings import quoted_inputs
 from .memory import all_checks
 from .models import state
+from .observability import ModelCallTimeout
 from .protocol import Action, AgentTuning, Decision, Model, Observation, Operation, Source, digest
 
 MUTATIONS = {Operation.CLICK, Operation.FILL, Operation.SELECT}
@@ -23,6 +24,8 @@ WORKING_MEMORY_LIMIT = 64_000
 WORKING_MEMORY_TRIGGER = 48_000
 WORKING_MEMORY_TARGET = 24_000
 WORKING_MEMORY_RECENT = 6_000
+PLANNING_PHASES = frozenset({"initial", "step", "resume", "no_progress", "draft_row_added",
+                            "stage_budget", "write_checkpoint", "navigation_checkpoint", "ui_checkpoint"})
 
 
 def feedback_json(raw: str) -> dict:
@@ -390,7 +393,7 @@ class JsonFeedback:
                      retrieved_evidence=None):
         if phase != "finish" and transition and not transition.get("resolved"):
             return await self.readback(task, obs, memory, transition, diagnostic=diagnostic)
-        compact = (phase in {"initial", "step", "resume", "no_progress", "draft_row_added", "stage_budget", "write_checkpoint", "navigation_checkpoint", "ui_checkpoint"}
+        compact = (phase in PLANNING_PHASES
                    and (not transition or transition.get("resolved")))
         content = {
             **state(task, obs, memory, None),
@@ -743,6 +746,7 @@ class DynamicController(Controller):
         self.last_brain_location = None
         self.verification_runs = {}
         self.exhausted_verifications = set()
+        self.planning_retry_after = {}
 
     def input_suppression(self, obs):
         scope = digest([semantic_key(obs), self.memory.feedback.get("next_goal"),
@@ -794,6 +798,11 @@ class DynamicController(Controller):
     async def review(self, obs, phase="step"):
         self.input_retry = None
         self.stale_click = None
+        optional = (phase in PLANNING_PHASES and not self.pending and not self.memory.pending_writes
+                    and (not self.last_transition or self.last_transition.get("resolved")))
+        route = planning_location(obs)
+        if optional and time.monotonic() < self.planning_retry_after.get(route, 0):
+            return self.degraded_planning(obs, phase, "planning retry cooldown")
         self.memory.feedback["working_memory"] = await self.compact_memory(
             obs, self.memory.feedback.get("working_memory", "")
         )
@@ -890,6 +899,11 @@ class DynamicController(Controller):
                 break
             except ContextBudgetExceeded:
                 raise  # A protected-context overflow cannot be repaired by regenerating JSON.
+            except ModelCallTimeout:
+                if not optional:
+                    raise  # Required readback and completion never degrade to advisory guidance.
+                self.planning_retry_after[route] = time.monotonic() + 120
+                return self.degraded_planning(obs, phase, "optional planning call timed out")
             except (ValidationError, ValueError) as exc:
                 diagnostic = (
                     [{"loc": e["loc"], "type": e["type"]} for e in exc.errors()]
@@ -957,6 +971,25 @@ class DynamicController(Controller):
         self.log("feedback", phase=phase, feedback=feedback.model_dump(),
                  effective_actions=self.effective_actions, attempted_actions=self.actions)
         return feedback
+
+    def degraded_planning(self, obs, phase, reason):
+        """Continue finite choices from the original goal; no new evidence or confirmation."""
+        previous = self.memory.feedback
+        same_route = self.last_brain_location == planning_location(obs)
+        guidance = Feedback(
+            next_goal=(previous.get("next_goal") or self.task.objective) if same_route else self.task.objective,
+            working_memory=previous.get("working_memory", ""),
+            inputs=previous.get("inputs", []) if same_route else [],
+            verification=previous.get("verification") if same_route else None,
+        )
+        self.memory.feedback.update(guidance.model_dump())
+        self.last_brain_action, self.last_brain_attempt = self.effective_actions, self.actions
+        self.last_brain_location = planning_location(obs)
+        self.log("planning_degraded", phase=phase, reason=reason, original_goal_preserved=True,
+                 guidance_source="previous_same_route" if same_route else "original_task",
+                 working_memory_preserved=True, action_confirmed=False, completion_claim=False)
+        self.checkpoint()
+        return guidance
 
     def defer_verification(self, obs):
         plan = self.memory.feedback.get("verification")

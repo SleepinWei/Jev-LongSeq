@@ -157,3 +157,38 @@ async def test_local_readback_preserves_input_and_verification_contracts():
     result = await JsonFeedback(transport).readback(definition(), obs, memory, {})
     assert result.inputs[0].value == '2026-07-31'
     assert result.verification.fallback_goal == 'Create vendor'
+
+
+async def test_optional_planning_timeout_keeps_memory_and_cools_down_without_confirming(tmp_path):
+    brain = AsyncMock()
+    brain.review.side_effect = ModelCallTimeout('provider slow')
+    controller = DynamicController(definition(), None, None, feedback=brain, output=tmp_path)
+    controller.memory.feedback = {'next_goal': 'Old page goal', 'working_memory': 'Exact recovered history',
+                                 'inputs': [{'name': 'To Date', 'value': '2026-07-31'}]}
+    controller.memory.evidence['archive'] = {'source': {'url': 'about:blank', 'quote': 'historical only'}}
+    guidance = await controller.review(page(), phase='resume')
+    assert guidance.next_goal == controller.task.objective
+    assert guidance.working_memory == 'Exact recovered history'
+    assert not guidance.inputs and not guidance.complete and guidance.last_outcome != 'confirmed'
+    assert len(controller.memory.evidence) == 1 and not controller.memory.confirmed_writes
+    await controller.review(page(), phase='draft_row_added')
+    assert brain.review.await_count == 1  # No request in the cooldown window.
+    saved = json.loads((tmp_path / 'memory.json').read_text())
+    assert saved['working_memory'] == 'Exact recovered history'
+
+
+@pytest.mark.parametrize('phase,pending,orphan', [
+    ('finish', False, False), ('action_readback', False, False),
+    ('stage_budget', True, False), ('step', False, True),
+])
+async def test_required_review_or_pending_write_never_degrades_on_timeout(phase, pending, orphan):
+    brain = AsyncMock()
+    brain.review.side_effect = ModelCallTimeout('provider slow')
+    controller = DynamicController(definition(), None, None, feedback=brain)
+    if pending:
+        controller.pending = {'key': 'pending', 'action': {'operation': 'click'}}
+    if orphan:
+        controller.memory.pending_writes['pending'] = {'dispatch_status': 'unknown'}
+    with pytest.raises(ModelCallTimeout):
+        await controller.review(page(), phase=phase)
+    assert not controller.planning_retry_after and not controller.memory.confirmed_writes
