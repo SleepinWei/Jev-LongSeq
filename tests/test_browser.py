@@ -21,6 +21,7 @@ async def test_rendered_refresh_icons_and_navigation_search_are_distinct():
               <button><svg class="lucide-refresh-cw" width="20" height="20"><rect width="20" height="20"/></svg></button>
               <button><svg width="20" height="20"><defs><symbol id="icon-reload"><rect width="20" height="20"/></symbol></defs><use href="#icon-reload"/></svg></button>
               <button><svg class="icon-refresh" style="display:none"></svg></button>
+              <button><svg aria-hidden="true" class="icon-refresh" width="20" height="20"><rect width="20" height="20"/></svg></button>
             </main>''')
         obs = await browser.observe()
         search = next(e for e in obs.elements if e.name == 'Search')
@@ -30,7 +31,35 @@ async def test_rendered_refresh_icons_and_navigation_search_are_distinct():
         assert any(e.name == 'refresh (icon control)' for e in obs.elements)
         assert any(e.name == 'reload (icon control)' for e in obs.elements)
         buttons = [e for e in obs.elements if e.role == 'button']
-        assert buttons[-1].name == ''  # Hidden asset does not name a visible control.
+        assert buttons[-2].name == ''  # Hidden asset does not name a visible control.
+        assert buttons[-1].name == 'refresh (icon control)'  # Decorative is still visually rendered.
+
+
+async def test_sidebar_shortcut_buttons_name_global_search_without_form_binding():
+    from jev_browser.protocol import Task
+
+    definition = Task(id='sidebar-search', objective='Inspect report', control_mode='dynamic', sandbox=True)
+    async with PlaywrightBackend(definition) as browser:
+        await browser.load_html('''
+          <div><div><button>Search</button><button><span>⌘K</span></button></div></div>
+          <main><label>Employee<input role="combobox"></label></main>''')
+        obs = await browser.observe()
+        search = next(e for e in obs.elements if e.name == 'Search')
+        assert search.context == 'Keyboard shortcut: ⌘K'
+        assert search.search_query is None and search.search_scope is None
+
+
+async def test_hidden_parent_and_hidden_decorative_icons_never_name_visible_buttons():
+    from jev_browser.protocol import Task
+
+    definition = Task(id='hidden-icons', objective='Inspect report', control_mode='dynamic', sandbox=True)
+    async with PlaywrightBackend(definition) as browser:
+        await browser.load_html('''
+          <button><span style="display:none"><svg aria-hidden="true" class="icon-refresh" width="20" height="20"></svg></span></button>
+          <button><svg aria-hidden="true" class="icon-refresh" style="opacity:0" width="20" height="20"></svg></button>
+          <div aria-hidden="true"><button>Hidden control</button></div>''')
+        obs = await browser.observe()
+        assert [e.name for e in obs.elements] == ['', '']
 
 
 async def test_options_keep_unique_owner_and_field_context():

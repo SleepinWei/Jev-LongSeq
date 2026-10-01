@@ -18,8 +18,8 @@ NATIVE_SELECTOR = ('a[href],button,input,textarea,select,summary,[contenteditabl
 SELECTOR = NATIVE_SELECTOR + ',div,span,img,svg,kbd,[onclick],[tabindex],[aria-readonly="true"]'
 # Reads rendered DOM only. No application globals, hidden attributes or backend state.
 SNAPSHOT = r"""selector => {
-  const visible = el => {
-    if (!el || el.closest('[hidden],[inert],[aria-hidden="true"],script,style,noscript')) return false;
+  const rendered = el => {
+    if (!el || el.closest('[hidden],[inert],script,style,noscript')) return false;
     for (let node = el; node; node = node.parentElement) {
       const style = getComputedStyle(node);
       if (style.opacity === '0' || style.visibility === 'hidden' || style.display === 'none') return false;
@@ -29,6 +29,7 @@ SNAPSHOT = r"""selector => {
       && r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0
       && r.top < innerHeight && r.left < innerWidth;
   };
+  const visible = el => !!el && !el.closest('[aria-hidden="true"]') && rendered(el);
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   const lines = [];
   while (walker.nextNode()) {
@@ -70,8 +71,10 @@ SNAPSHOT = r"""selector => {
       // A use reference may have no independent box; its visible SVG supplies
       // the icon box. Hidden descendants still cannot contribute a label.
       const style = getComputedStyle(n);
-      return visible(n.matches('use') ? n.closest('svg') : n) &&
-        !n.closest('[hidden],[inert],[aria-hidden="true"]') &&
+      // aria-hidden is common on visually rendered decorative icons. Read
+      // their asset hints only; do not expose them as interactive controls.
+      return rendered(n.matches('use') ? n.closest('svg') : n) &&
+        !n.closest('[hidden],[inert]') &&
         style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
     };
     const icons = [el, ...[...el.querySelectorAll('img,svg,use')].filter(iconVisible).slice(0, 8)];
@@ -178,9 +181,11 @@ SNAPSHOT = r"""selector => {
     for (let scope = nodes[c.index].parentElement, depth = 0;
          scope && scope !== document.body && depth < 3; scope = scope.parentElement, depth++) {
       if (controls.some(f => (f.editable || f.selectable) && scope.contains(nodes[f.index]))) break;
-      const hints = [...scope.querySelectorAll('kbd')].filter(visible).map(labelText).filter(Boolean);
-      if (hints.length === 1) {
-        c.context = [c.context, 'Keyboard shortcut: ' + hints[0]].filter(Boolean).join(' | ');
+      const hints = [...scope.querySelectorAll('kbd,span,button,[role="button"]')].filter(n =>
+        visible(n) && /^(?:[⌘⌃⌥⇧]+\s*[a-z]|(?:ctrl|cmd|alt|shift)\s*\+\s*[a-z])$/i.test(labelText(n)));
+      const leaves = hints.filter(n => !hints.some(other => other !== n && n.contains(other)));
+      if (leaves.length === 1) {
+        c.context = [c.context, 'Keyboard shortcut: ' + labelText(leaves[0])].filter(Boolean).join(' | ');
         break;
       }
     }
