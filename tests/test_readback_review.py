@@ -13,6 +13,7 @@ from jev_browser.dynamic import (
     UngroundedFeedback,
     generate_dynamic,
     validated_feedback,
+    visible_controls,
 )
 from jev_browser.evaluation import efficiency_profile
 from jev_browser.memory import Memory
@@ -519,3 +520,40 @@ async def test_current_environment_confirmation_survives_advisory_memory_regress
     recreated.dynamic_mode = True
     recreated.confirmed_actions = agent.memory.export()['confirmed_actions_archive']
     assert not recreated.context()['current_environment_readbacks']['actions']
+
+
+async def test_scoped_readback_sees_late_popup_disappearance_without_stage_history():
+    definition = task()
+    before = observation()
+    before.text = 'Not Saved\n' + 'Many rows\n' * 250
+    before.elements += [Element(id='search', role='textbox', name='Search', value='Ananya Reddy', editable=True),
+                        Element(id='close', role='button', name='close (icon control)')]
+    backend = AsyncMock()
+    backend.execute.return_value = Receipt(action_id='a', status='ok')
+    agent = DynamicController(definition, backend, None, feedback=None)
+    agent.memory.feedback = {'next_goal': 'Close search then create and submit the whole document',
+                             'working_memory': 'Old navigation/search history'}
+    await agent.perform(next(a for a in generate_dynamic(before, definition) if a.element_ref == 'close'), before)
+    assert 'Ananya Reddy' not in agent.pending['before_excerpt']
+    fresh = before.model_copy(deep=True)
+    fresh.observation_id = 'o2'
+    fresh.elements = fresh.elements[:-2]
+    for e in fresh.elements:
+        e.id = 'new-' + e.id
+        if e.option_owner:
+            e.option_owner = 'new-' + e.option_owner
+    def respond(request):
+        context = json.loads(json.loads(request.content)['messages'][-1]['content'])
+        assert 'untrusted_memory' not in context and 'stage_goal' not in context['last_transition']
+        delta = context['visible_control_delta']
+        assert [e['name'] for e in delta['disappeared_or_changed']] == ['Search', 'close (icon control)']
+        assert not delta['appeared_or_changed']
+        assert 'before_controls' not in context['last_transition']
+        ref = next(k for k, v in context['readback_evidence'].items() if v == 'Not Saved')
+        return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(
+            {'last_outcome': 'confirmed', 'evidence_ids': [ref]})}}]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        result = await JsonFeedback(ModelTransport('https://test.example', 'test', 'test', client=client)).readback(
+            definition, fresh, agent.memory, agent.pending)
+    assert result.last_outcome == 'confirmed'
+    assert visible_controls(before)[-1]['name'] == 'close (icon control)'
