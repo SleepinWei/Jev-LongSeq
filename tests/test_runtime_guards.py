@@ -163,11 +163,14 @@ async def test_optional_planning_timeout_keeps_memory_and_cools_down_without_con
     brain = AsyncMock()
     brain.review.side_effect = ModelCallTimeout('provider slow')
     controller = DynamicController(definition(), None, None, feedback=brain, output=tmp_path)
+    controller.task.objective += '\n' + 'Long original benchmark instructions. ' * 200
     controller.memory.feedback = {'next_goal': 'Old page goal', 'working_memory': 'Exact recovered history',
                                  'inputs': [{'name': 'To Date', 'value': '2026-07-31'}]}
     controller.memory.evidence['archive'] = {'source': {'url': 'about:blank', 'quote': 'historical only'}}
     guidance = await controller.review(page(), phase='resume')
-    assert guidance.next_goal == controller.task.objective
+    assert 'original task' in guidance.next_goal and len(guidance.next_goal) < 4000
+    assert len(controller.task.objective) > 4000
+    assert state(controller.task, page(), controller.memory, None)['trusted_goal'] == controller.task.objective
     assert guidance.working_memory == 'Exact recovered history'
     assert not guidance.inputs and not guidance.complete and guidance.last_outcome != 'confirmed'
     assert len(controller.memory.evidence) == 1 and not controller.memory.confirmed_writes
@@ -175,6 +178,21 @@ async def test_optional_planning_timeout_keeps_memory_and_cools_down_without_con
     assert brain.review.await_count == 1  # No request in the cooldown window.
     saved = json.loads((tmp_path / 'memory.json').read_text())
     assert saved['working_memory'] == 'Exact recovered history'
+
+
+def test_verification_allowance_starts_after_planned_inputs_match():
+    controller = DynamicController(definition(), None, None, feedback=None)
+    controller.memory.feedback = {'inputs': [{'name': 'To Date', 'value': '2026-07-31'}],
+        'verification': {'goal': 'Find required report row', 'fallback_goal': 'Create requested vendor'}}
+    obs = page()
+    controller.arm_verification(obs)
+    assert not controller.verification_runs
+    assert not controller.defer_verification(obs)
+    obs.elements[0].value = '2026-07-31'
+    controller.actions = 5
+    controller.arm_verification(obs)
+    assert controller.verification_runs[planning_location(obs)][0] == 5
+    assert controller.defer_verification(obs)
 
 
 @pytest.mark.parametrize('phase,pending,orphan', [

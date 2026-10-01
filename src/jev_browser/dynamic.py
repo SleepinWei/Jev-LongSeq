@@ -951,7 +951,7 @@ class DynamicController(Controller):
         self.memory.feedback = feedback.model_dump()
         route = planning_location(obs)
         if feedback.verification:
-            self.verification_runs.setdefault(route, (self.actions, time.monotonic()))
+            self.arm_verification(obs)
             if route in self.exhausted_verifications and self.defer_verification(obs):
                 feedback.next_goal = self.memory.feedback["next_goal"]
                 feedback.verification, feedback.inputs = None, []
@@ -977,7 +977,9 @@ class DynamicController(Controller):
         previous = self.memory.feedback
         same_route = self.last_brain_location == planning_location(obs)
         guidance = Feedback(
-            next_goal=(previous.get("next_goal") or self.task.objective) if same_route else self.task.objective,
+            next_goal=previous.get("next_goal") if same_route and previous.get("next_goal") else
+                "Continue the original task from the current observed page. Reconcile recovered history "
+                "with current state; never repeat confirmed actions or treat interrupted writes as confirmed.",
             working_memory=previous.get("working_memory", ""),
             inputs=previous.get("inputs", []) if same_route else [],
             verification=previous.get("verification") if same_route else None,
@@ -991,9 +993,22 @@ class DynamicController(Controller):
         self.checkpoint()
         return guidance
 
+    def verification_inputs_ready(self, obs):
+        for plan in self.memory.feedback.get("inputs", []):
+            matches = [e for e in obs.elements if e.name == plan["name"]
+                       and e.grid_ref == plan.get("grid_ref") and e.row_ref == plan.get("row_ref")]
+            if len(matches) != 1 or matches[0].value != plan["value"]:
+                return False
+        return True
+
+    def arm_verification(self, obs):
+        if (self.memory.feedback.get("verification") and not self.pending and not self.memory.pending_writes
+                and self.verification_inputs_ready(obs)):
+            self.verification_runs.setdefault(planning_location(obs), (self.actions, time.monotonic()))
+
     def defer_verification(self, obs):
         plan = self.memory.feedback.get("verification")
-        if not plan or self.pending or self.memory.pending_writes:
+        if not plan or self.pending or self.memory.pending_writes or not self.verification_inputs_ready(obs):
             return False
         self.memory.unresolved_verifications.append({"goal": plan["goal"],
             "status": "unresolved", "source": self.memory.view(obs),
@@ -1695,6 +1710,7 @@ class DynamicController(Controller):
             self.confirm_visible_dialog(obs)
             if self.confirm_visible_grid_row(obs):
                 trigger = "draft_row_added"
+            self.arm_verification(obs)
             allowance = self.verification_runs.get(planning_location(obs))
             if allowance and (self.actions - allowance[0] >= 6 or time.monotonic() - allowance[1] >= 120):
                 self.defer_verification(obs)
