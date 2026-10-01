@@ -360,3 +360,60 @@ def test_query_filters_keep_stage_but_new_tabs_and_hash_routes_change_it():
     assert planning_location(obs) == planning_location(obs.model_copy(update={'url': 'https://example.test/report?employee=8'}))
     assert planning_location(obs) != planning_location(obs.model_copy(update={'tab_id': 'tab2'}))
     assert planning_location(obs) != planning_location(obs.model_copy(update={'url': 'https://example.test/report#/ledger'}))
+
+
+async def test_confirmed_menu_opening_replans_before_repeating_the_opener():
+    definition = Task(id='quick-menu', control_mode='dynamic', sandbox=True,
+                      objective='Open the creation menu and select Vendor.')
+    phases = []
+
+    class Brain:
+        async def review(self, task, obs, memory, *, phase, **kwargs):
+            phases.append(phase)
+            complete = phase == 'finish'
+            return Feedback(next_goal='Click Quick new' if phase == 'initial' else 'Select Vendor',
+                            working_memory='Menu opened; vendor not created' if not complete else 'Form opened',
+                            complete=complete, answer='Vendor form opened' if complete else '',
+                            notes=[{'quote': obs.text}])
+
+    class Backend:
+        calls = []
+        count = 0
+
+        async def observe(self):
+            self.count += 1
+            form = 'vendor' in self.calls
+            opened = self.calls.count('quick') % 2 == 1 and not form
+            return Observation(observation_id=f'o{self.count}', document_version='v', tab_id='tab',
+                               url='about:blank', title='Vendors',
+                               text='Vendor form' if form else 'Vendor' if opened else 'Vendors list',
+                               elements=[Element(id='quick', role='button', name='Quick new')]
+                               + ([Element(id='vendor', role='menuitem', name='Vendor')] if opened else []))
+
+        async def execute(self, action):
+            self.calls.append(action.element_ref)
+            return Receipt(action_id=action.id, status='ok')
+
+    backend = Backend()
+
+    class Policy:
+        async def choose(self, task, obs, memory, contract, candidates):
+            if not backend.calls:
+                target, outcome = 'quick', 'none'
+            elif backend.calls == ['quick'] and phases[-1] == 'initial':
+                # The previous opener is confirmed, but the fast head still
+                # proposes the stale next click. It must be discarded.
+                target, outcome = 'quick', 'confirmed'
+            elif backend.calls == ['quick']:
+                assert phases[-1] == 'ui_checkpoint'
+                assert memory.feedback['next_goal'] == 'Select Vendor'
+                assert 'vendor not created' in memory.feedback['working_memory']
+                target, outcome = 'vendor', 'none'
+            else:
+                return Decision(choice=next(a.id for a in candidates if a.operation == Operation.FINISH),
+                                outcome='confirmed')
+            return Decision(choice=next(a.id for a in candidates if a.element_ref == target), outcome=outcome)
+
+    result = await DynamicController(definition, backend, Policy(), feedback=Brain()).run()
+    assert result.status == 'success' and backend.calls == ['quick', 'vendor']
+    assert phases == ['initial', 'ui_checkpoint', 'finish']

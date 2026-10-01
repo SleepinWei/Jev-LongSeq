@@ -211,6 +211,10 @@ def planning_location(obs):
     return obs.tab_id, url.scheme, url.netloc, url.path, url.fragment
 
 
+def menu_signature(obs):
+    return digest([e.model_dump(exclude={"id"}) for e in obs.elements if e.role == "menuitem"])
+
+
 def action_key(action: Action, obs: Observation) -> str:
     element = next((e for e in obs.elements if e.id == action.element_ref), None)
     if (action.operation == Operation.CLICK and element
@@ -338,7 +342,7 @@ class JsonFeedback:
                      retrieved_evidence=None):
         if phase != "finish" and transition and not transition.get("resolved"):
             return await self.readback(task, obs, memory, transition, diagnostic=diagnostic)
-        compact = (phase in {"initial", "step", "stage_budget", "write_checkpoint", "navigation_checkpoint"}
+        compact = (phase in {"initial", "step", "stage_budget", "write_checkpoint", "navigation_checkpoint", "ui_checkpoint"}
                    and (not transition or transition.get("resolved")))
         content = {
             **state(task, obs, memory, None),
@@ -647,6 +651,7 @@ class DynamicController(Controller):
         self.input_noop_scope = None
         self.input_noops = {}
         self.stage_review_due = False
+        self.ui_review_due = False
         self.last_brain_location = None
 
     def input_suppression(self, obs):
@@ -940,6 +945,7 @@ class DynamicController(Controller):
                 "before": self.memory.view(obs),
                 "before_tabs": {**obs.tabs, obs.tab_id: obs.url},
                 "before_dialogs": list(obs.dialogs),
+                "before_menu_signature": menu_signature(obs),
                 "before_errors": [e for e in obs.errors if e.startswith("page_error:")],
                 "before_semantics": semantic_key(obs),
                 "waits": 0,
@@ -1144,6 +1150,14 @@ class DynamicController(Controller):
                 (scope != "dialog_opened" and target.get("role") == "button"
                  and command in {"save", "submit", "publish", "approve", "保存", "提交", "发布", "审批"})):
             self.stage_review_due = True
+        elif (self.pending.get("before_menu_signature") is not None
+              and self.pending["action"]["operation"] == Operation.CLICK
+              and any(e.role == "menuitem" for e in obs.elements)
+              and menu_signature(obs) != self.pending["before_menu_signature"]):
+            # Confirmed menu opening changes the next operation even without a
+            # route change. Replan before the fast policy can toggle its opener
+            # again using pre-menu guidance. This does not confirm a business write.
+            self.ui_review_due = True
         self.pending = None
         self.log("transition_confirmed", key=key, basis=basis,
                  confirmation_scope=self.last_transition.get("confirmation_scope", "action_effect"))
@@ -1497,6 +1511,10 @@ class DynamicController(Controller):
                 if self.stage_review_due:
                     trigger = "write_checkpoint"
                     self.stage_review_due = False
+                    self.ui_review_due = False
+                elif self.ui_review_due:
+                    trigger = "ui_checkpoint"
+                    self.ui_review_due = False
                 elif self.last_brain_location is not None and planning_location(obs) != self.last_brain_location:
                     trigger = "navigation_checkpoint"
             evidence_keys = frozenset(self.memory.evidence)
@@ -1506,7 +1524,7 @@ class DynamicController(Controller):
             signature = semantic_key(obs)
             visits[signature] = visits.get(signature, 0) + 1
             if (visits[signature] > self.budget.no_progress_limit and not self.pending
-                    and trigger not in {"write_checkpoint", "navigation_checkpoint"}):
+                    and trigger not in {"write_checkpoint", "navigation_checkpoint", "ui_checkpoint"}):
                 if signature in recovered_states:
                     return self.result("needs_attention", "repeated state after brain recovery")
                 recovered_states.add(signature)
@@ -1630,7 +1648,7 @@ class DynamicController(Controller):
                         if reason := await self.perform(waiting, obs):
                             return self.result("needs_attention", reason)
                         continue  # discard proposed next action until readback is confirmed
-                    if (guidance_changed or self.stage_review_due
+                    if (guidance_changed or self.stage_review_due or self.ui_review_due
                             or (self.last_brain_location is not None
                                 and planning_location(obs) != self.last_brain_location)):
                         continue  # the previous next-action proposal predates the revised guidance
