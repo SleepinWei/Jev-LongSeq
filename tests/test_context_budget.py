@@ -201,6 +201,59 @@ def test_dense_grid_projection_is_lossless_and_fits_without_dropping_current_row
     assert metrics['level'] == 3 and metrics['after_bytes'] < wire_bytes(regular)
 
 
+def test_verification_history_decays_without_losing_obligations_or_commit_proof():
+    from jev_browser.context_budget import memory_view
+    raw = {'unresolved_verifications': [{'goal': f'Unresolved report {i}', 'status': 'unresolved',
+            'source': {'url': f'https://test.example/report/{i}', 'observation_id': f'o{i}'},
+            'visible_excerpt': f'Report {i} ' + 'visible historical text ' * 100} for i in range(8)],
+           'current_environment_readbacks': {'actions': [{'target': f'Submit {i}',
+            'business_commit_confirmed': True, 'confirmation_scope': 'business_commit',
+            'action_key': f'a{i}', 'proof': {'record_id': f'HR-{i}', 'status': 'Submitted'},
+            'source': {'observation_id': f'o{i}', 'visible_excerpt': 'record text ' * 100}} for i in range(8)]}}
+    original = copy.deepcopy(raw)
+    compact = memory_view(raw, 2)
+    assert wire_bytes(compact) < wire_bytes(raw) / 2
+    assert raw == original
+    for old, projected in zip(raw['unresolved_verifications'], compact['unresolved_verifications'], strict=True):
+        assert {k:projected[k] for k in ('goal', 'status', 'source')} == {k:old[k] for k in ('goal', 'status', 'source')}
+    assert len(compact['unresolved_verifications'][0]['visible_excerpt']) < len(compact['unresolved_verifications'][-1]['visible_excerpt'])
+    for old, projected in zip(raw['current_environment_readbacks']['actions'],
+                              compact['current_environment_readbacks']['actions'], strict=True):
+        assert {k:v for k,v in old.items() if k != 'source'} == {k:v for k,v in projected.items() if k != 'source'}
+        assert projected['source']['observation_id'] == old['source']['observation_id']
+    assert compact['current_environment_readbacks']['actions'][-2:] == raw['current_environment_readbacks']['actions'][-2:]
+
+
+async def test_old_long_confirmation_proof_is_retrievable_and_recent_records_stay_exact():
+    from unittest.mock import AsyncMock
+
+    from jev_browser.context_budget import memory_view
+    task, obs, memory = sample()
+    memory.pending_writes.clear()
+    memory.confirmed_actions = [{'environment_id': memory.environment_id,
+        'target': 'Submit', 'business_commit_confirmed': True, 'confirmation_scope': 'business_commit',
+        'action_key': f'a{i}', 'proof': {'rows': [f'exact committed row {j}' for j in range(150)]},
+        'source': {'url': 'about:blank', 'observation_id': f'old{i}', 'visible_excerpt': 'visible text ' * 80}}
+        for i in range(4)]
+    original = copy.deepcopy(memory.confirmed_actions)
+    view = memory_view(memory.context(), 2)['current_environment_readbacks']['actions']
+    assert view[0]['archive_ref'] == archive_ref(original[0])
+    assert view[0]['proof']['archived'] and view[0]['business_commit_confirmed']
+    assert view[-2:] == original[-2:] and memory.confirmed_actions == original
+    brain = AsyncMock()
+    async def respond(*args, **kwargs):
+        if kwargs.get('retrieved_evidence'):
+            assert kwargs['retrieved_evidence'][view[0]['archive_ref']] == original[0]
+            return Feedback(next_goal='Continue', working_memory='Proof retrieved')
+        return Feedback(next_goal='Retrieve proof', evidence_requests=[view[0]['archive_ref']])
+    brain.review.side_effect = respond
+    agent = DynamicController(task, None, None, feedback=brain)
+    agent.memory = memory
+    result = await agent.review(obs, phase='step')
+    assert result.working_memory == 'Proof retrieved' and brain.review.await_count == 2
+    assert memory.confirmed_actions == original
+
+
 def test_dense_grid_default_is_lossless_for_multiple_grids_and_unscoped_controls():
     from jev_browser.context_budget import _pool
 
@@ -234,6 +287,35 @@ def test_dense_grid_default_is_lossless_for_multiple_grids_and_unscoped_controls
     projected, metrics = project_request(payload, max_bytes=wire_bytes(normal) - 529)
     assert metrics['after_bytes'] <= metrics['max_bytes']
     assert projected['state']['trusted_goal'] == task.objective
+    assert payload == saved
+
+
+def test_last_resort_control_schema_preserves_exact_current_state_and_candidate_ids():
+    from jev_browser.context_budget import _pool
+
+    task, obs, memory = sample()
+    obs.elements = [Element(id=f'e{i}', role='textbox', name=f'Cell {i}', value=str(i),
+        grid_ref='grid', row_ref=str(i // 4), enabled=i % 2 == 0,
+        checked=False if i % 3 else None, context='shared context') for i in range(120)]
+    obs.elements += [Element(id='menu', role='button', name='Open menu', grid_ref=None)]
+    payload = {'state': {'trusted_goal': task.objective, 'hard_constraints': [],
+        'untrusted_observation': obs.model_dump(), 'untrusted_memory': memory.context()},
+        'questions': {'action': {'criteria': {'a1': {'operation': 'click', 'target': 'menu'}}}}}
+    saved = copy.deepcopy(payload)
+    ordinary, compact = _pool(payload, 3), _pool(payload, 4)
+    view = compact['state']['untrusted_observation']
+    assert 'control_columns' in view
+    for key, old in ordinary['state']['untrusted_observation']['controls'].items():
+        schema, *values = view['controls'][key]
+        restored = {**view['control_defaults'],
+                    **dict(zip(view['control_columns'][schema], values, strict=True))}
+        assert all(restored[k] == v for k, v in {**view['control_defaults'], **old}.items())
+    assert compact['questions'] == ordinary['questions']
+    assert compact['state']['trusted_goal'] == task.objective
+    assert compact['state']['untrusted_memory'] == ordinary['state']['untrusted_memory']
+    projected, metrics = project_request(payload, max_bytes=wire_bytes(ordinary) - 1)
+    assert metrics['level'] == 4 and metrics['after_bytes'] <= metrics['max_bytes']
+    assert projected['state']['untrusted_observation']['control_columns'] == view['control_columns']
     assert payload == saved
 
 

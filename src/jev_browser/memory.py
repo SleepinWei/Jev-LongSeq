@@ -285,7 +285,7 @@ class Memory:
     def current_readbacks(self) -> dict:
         current = [a for a in self.confirmed_actions if a["environment_id"] == self.environment_id]
         def boundary(action):
-            return (action["business_commit_confirmed"] or action["target"].casefold().strip()
+            return (action["business_commit_confirmed"] or "".join(action["target"].casefold().split())
                     in {"save", "submit", "publish", "approve", "保存", "提交"})
         return {
             "environment_id": self.environment_id,

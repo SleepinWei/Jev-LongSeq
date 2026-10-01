@@ -197,6 +197,33 @@ def test_verification_allowance_starts_after_planned_inputs_match():
     assert controller.defer_verification(obs)
 
 
+async def test_confirmed_write_retires_old_verification_without_completing_other_goals():
+    from jev_browser.dynamic import generate_dynamic
+    from jev_browser.protocol import Receipt
+    before = page()
+    before.elements = [Element(id='save', role='button', name='S a ve')]
+    backend = AsyncMock()
+    backend.execute.return_value = Receipt(action_id='a', status='ok')
+    controller = DynamicController(definition(), backend, None, feedback=None)
+    controller.memory.feedback = {'verification': {'goal': 'Read back this draft',
+                                                   'fallback_goal': 'Keep checking the draft'}}
+    route = planning_location(before)
+    controller.verification_runs[route] = (0, time.monotonic() - 200)
+    controller.exhausted_verifications.add(route)
+    action = next(a for a in generate_dynamic(before, definition()) if a.operation == Operation.CLICK)
+    await controller.perform(action, before)
+    after = before.model_copy(update={'text': 'Saved HR-001', 'observation_id': 'o2'})
+    assert controller.confirm_transition('confirmed', after, 'model_readback')
+    assert controller.stage_review_due and controller.memory.feedback['verification'] is None
+    assert route not in controller.verification_runs and route not in controller.exhausted_verifications
+    assert not controller.defer_verification(after) and not controller.memory.unresolved_verifications
+    assert not controller.memory.feedback.get('complete')
+    # A styled Save label remains a boundary even after ordinary UI activity.
+    controller.memory.confirmed_actions += [{**controller.memory.confirmed_actions[0],
+                                            'target': f'UI action {i}'} for i in range(6)]
+    assert controller.memory.current_readbacks()['actions'][0]['target'] == 'S a ve'
+
+
 @pytest.mark.parametrize('phase,pending,orphan', [
     ('finish', False, False), ('action_readback', False, False),
     ('stage_budget', True, False), ('step', False, True),

@@ -828,7 +828,8 @@ class DynamicController(Controller):
                     if not feedback.evidence_requests:
                         break
                     records = {archive_ref(r): r for r in (
-                        *self.memory.evidence.values(), *self.memory.key_nodes.values())}
+                        *self.memory.evidence.values(), *self.memory.key_nodes.values(),
+                        *self.memory.confirmed_actions)}
                     missing = [ref for ref in feedback.evidence_requests if ref not in records]
                     if missing:
                         raise UngroundedFeedback([{"loc": ["evidence_requests"],
@@ -1334,6 +1335,16 @@ class DynamicController(Controller):
                 (scope not in {"dialog_opened", "menu_opened_ui"} and target.get("role") == "button"
                  and command in {"save", "submit", "publish", "approve", "保存", "提交", "发布", "审批"})):
             self.stage_review_due = True
+            if plan := self.memory.feedback.get("verification"):
+                # A confirmed write closes the planning stage. Old advisory
+                # readback goals must not resurrect this resolved transition.
+                self.memory.feedback["verification"] = None
+                route = planning_location(obs)
+                self.verification_runs.pop(route, None)
+                self.exhausted_verifications.discard(route)
+                self.log("verification_plan_reset", goal=plan["goal"],
+                         reason="confirmed write boundary; new planning required",
+                         confirmation_key=key, obligation_marked_complete=False)
         elif self.pending.get("grid_append") and scope != "draft_row_added":
             # A generic model confirmation can precede the exact append proof
             # (e.g. blur resolves an earlier link field). Reconcile the new row
