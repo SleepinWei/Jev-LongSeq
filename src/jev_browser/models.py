@@ -238,6 +238,17 @@ class ModelTransport:
                     output_tokens=outgoing,
                     resolved_model=data.get("model", self.model),
                 )
+                choices = data.get("choices")
+                if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                    choice = choices[0]
+                    finish = choice.get("finish_reason")
+                    # Fixed metadata only: never persist arbitrary response text.
+                    if finish in {"stop", "length", "tool_calls", "content_filter", "function_call"}:
+                        record["finish_reason"] = finish
+                    message = choice.get("message")
+                    content = message.get("content") if isinstance(message, dict) else None
+                    if isinstance(content, str):
+                        record["response_content_chars"] = len(content)
                 if (
                     incoming is not None
                     and outgoing is not None

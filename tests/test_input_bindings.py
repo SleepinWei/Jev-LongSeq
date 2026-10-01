@@ -5,11 +5,16 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from jev_browser.dynamic import DynamicController, JsonFeedback, generate_dynamic
+from jev_browser.context_budget import ContextBudgetExceeded
+from jev_browser.dynamic import (
+    DynamicController,
+    JsonFeedback,
+    generate_dynamic,
+)
 from jev_browser.input_bindings import quoted_inputs
 from jev_browser.memory import Memory
 from jev_browser.models import ModelTransport
-from jev_browser.protocol import Element, Observation, Operation, Receipt, Task
+from jev_browser.protocol import Budget, Element, Observation, Operation, Receipt, Task
 
 
 def setup():
@@ -136,3 +141,127 @@ async def test_finish_review_retains_evidence_and_omits_redundant_memory():
         result = await agent.review(obs, phase='finish')
     assert result.complete and result.answer == 'Sources summarized'
     assert agent.memory.feedback['working_memory'] == 'Remember the earlier sources'
+
+
+def input_trial(responses, *, budget=None, select=False):
+    task, obs = setup()
+    if select:
+        obs.elements = [Element(id="e0", role="combobox", name="Plan", selectable=True,
+                                options=["gold", "basic"])]
+    backend = AsyncMock()
+    backend.execute.return_value = Receipt(action_id="a", status="ok")
+    transport = AsyncMock()
+    transport.model = "test"
+    transport.post.side_effect = responses
+    agent = DynamicController(task, backend, None, feedback=JsonFeedback(transport), budget=budget)
+    agent.memory.feedback["working_memory"] = "Keep the unresolved work"
+    operation = Operation.SELECT if select else Operation.FILL
+    action = next(a for a in generate_dynamic(obs, task)
+                  if a.operation == operation and a.bound_value is None)
+
+    async def loop():
+        await agent.bind_input(action, obs)
+        await agent.perform(action, obs)
+        return agent.result("budget_exhausted", "test complete")
+
+    agent.dynamic_loop = loop
+    return agent, backend, transport, action, task
+
+
+def input_response(raw, finish="stop"):
+    return {"choices": [{"message": {"content": raw}, "finish_reason": finish}]}
+
+
+async def test_truncated_input_repairs_once_before_exactly_one_dispatch():
+    agent, backend, transport, action, task = input_trial([
+        input_response('{"value":"private unfinished text'),
+        input_response('{"value":"Ada"}'),
+    ])
+    result = await agent.run()
+    assert result.feedback_calls == 2
+    assert backend.execute.await_count == 1 and action.bound_value == "Ada"
+    requests = [call.args[0] for call in transport.post.await_args_list]
+    contexts = [json.loads(r["messages"][-1]["content"]) for r in requests]
+    assert all(r["max_tokens"] == 8192 for r in requests)
+    assert all(c["trusted_goal"] == task.objective for c in contexts)
+    assert all(c["untrusted_memory"]["working_memory"] == "Keep the unresolved work"
+               for c in contexts)
+    diagnostic = contexts[1].pop("repair_diagnostic")
+    assert diagnostic == ["json_invalid"] and contexts[0] == contexts[1]
+    assert "private unfinished text" not in json.dumps(agent.events)
+
+
+@pytest.mark.parametrize("raw,finish", [
+    ('{"value":"unfinished', "stop"),
+    ('{"value":null}', "stop"),
+    ('{"value":42}', "stop"),
+    ('{"value":[]}', "stop"),
+    ('{"value":"Ada","extra":"secret"}', "stop"),
+    ('{}', "stop"),
+    ('```json\n{"value":"Ada"}\n```', "stop"),
+    ('{"value":"Ada"}', "length"),
+    (None, "stop"),
+])
+async def test_persistently_invalid_input_stops_without_dispatch(raw, finish):
+    response = input_response(raw, finish)
+    agent, backend, transport, action, _ = input_trial([response, response])
+    result = await agent.run()
+    assert result.status == "needs_attention" and "one repair" in result.reason
+    assert transport.post.await_count == result.feedback_calls == 2
+    backend.execute.assert_not_awaited()
+    assert action.bound_value is None and agent.pending is None
+    assert not agent.memory.pending_writes
+
+
+async def test_input_repair_respects_remaining_call_budget():
+    agent, backend, transport, action, _ = input_trial([
+        input_response('{"value":null}'), input_response('{"value":"Ada"}'),
+    ], budget=Budget(max_feedback_calls=1))
+    result = await agent.run()
+    assert result.status == "budget_exhausted" and result.feedback_calls == 1
+    assert transport.post.await_count == 1 and action.bound_value is None
+    backend.execute.assert_not_awaited()
+
+
+async def test_unobserved_select_option_is_repaired_before_dispatch():
+    agent, backend, transport, action, _ = input_trial([
+        input_response('{"value":"Gold"}'), input_response('{"value":"gold"}'),
+    ], select=True)
+    await agent.run()
+    assert backend.execute.await_count == 1 and action.bound_value == "gold"
+    context = json.loads(transport.post.await_args_list[1].args[0]["messages"][-1]["content"])
+    assert context["repair_diagnostic"] == "unobserved_select_option"
+
+
+async def test_context_overflow_is_never_retried_as_input_format_error():
+    _, obs = setup()
+    agent, backend, transport, action, _ = input_trial([])
+    transport.post.side_effect = ContextBudgetExceeded({"protected_bytes": 1000})
+    with pytest.raises(ContextBudgetExceeded):
+        await agent.bind_input(action, obs)
+    assert transport.post.await_count == 1 and agent.feedback_calls == 1
+    backend.execute.assert_not_awaited()
+    assert not any(e["kind"] == "invalid_input_value" for e in agent.events)
+
+
+async def test_transport_records_only_safe_output_metadata_and_preserves_goal_guard():
+    task, obs = setup()
+    raw = '{"value":"Ada"}'
+
+    def respond(request):
+        return httpx.Response(200, json=input_response(raw))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        transport = ModelTransport("https://model.test", "test", "test", client=client)
+        transport.required_goal = task.objective
+        feedback = JsonFeedback(transport)
+        action = next(a for a in generate_dynamic(obs, task)
+                      if a.operation == Operation.FILL and a.bound_value is None)
+        assert await feedback.value(task, obs, Memory(), action) == "Ada"
+        assert transport.ledger[0]["finish_reason"] == "stop"
+        assert transport.ledger[0]["response_content_chars"] == len(raw)
+        assert raw not in json.dumps(transport.ledger)
+        changed = task.model_copy(update={"objective": "Changed goal"})
+        with pytest.raises(ValueError, match="changed the original task prompt"):
+            await feedback.value(changed, obs, Memory(), action, diagnostic=["json_invalid"])
+        assert len(transport.ledger) == 1
