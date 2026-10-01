@@ -37,6 +37,7 @@ class Memory:
         self.confirmed_writes: set[str] = set()
         self.environment_id = uuid4().hex
         self.confirmed_actions: list[dict[str, Any]] = []
+        self.unresolved_verifications: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
         self.page_notes: dict[str, dict] = {}
         self.page_registry: dict[str, dict] = {}
@@ -223,6 +224,11 @@ class Memory:
             pages = list(self.page_registry.values())[-24:]
             history = history_view(self.events)
             return {
+                **({"unresolved_verifications": self.unresolved_verifications}
+                   if self.unresolved_verifications else {}),
+                **({"planned_inputs": self.feedback["inputs"]} if self.feedback.get("inputs") else {}),
+                **({"verification_stage": self.feedback["verification"]}
+                   if self.feedback.get("verification") else {}),
                 **({"current_environment_readbacks": self.current_readbacks()}
                    if self.confirmed_actions else {}),
                 "opened_pages": pages,

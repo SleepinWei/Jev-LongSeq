@@ -145,6 +145,7 @@ async def run_trial(args, *, count=None, output=None):
         raise ValueError("use a dynamic task without predefined rules/predicates")
     tuning = resolve_tuning(args)
     observer = Observer(output, gate=getattr(args, "_research_gate", None))
+    observer.deadline = time.monotonic() + args.max_seconds
     budget = Budget(
         max_actions=args.max_actions,
         max_seconds=args.max_seconds,
@@ -359,6 +360,9 @@ async def run_trial(args, *, count=None, output=None):
         )
         if is_demo and not custom_goal:
             result.strict_success = False
+    checkpoint = getattr(controller, "checkpoint", None)
+    if callable(checkpoint):
+        checkpoint()
     for connection in connection_tasks:
         if not connection.done():
             connection.cancel()

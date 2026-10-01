@@ -234,14 +234,24 @@ class Controller:
             result = self.result("budget_exhausted", "wall-clock deadline reached")
         except ResourceLimit as exc:
             result = self.result("budget_exhausted", str(exc))
+        except asyncio.CancelledError:
+            self.checkpoint()
+            raise
         except Exception as exc:
             self.log("error", error_type=type(exc).__name__, detail=str(exc)[:500])
             result = self.result("failed", f"{type(exc).__name__}: {str(exc)[:200]}")
         self.log("result", result=result.model_dump())
+        self.checkpoint()
         if self.output:
-            (self.output / "memory.json").write_text(json.dumps(self.memory.export(), indent=2))
             (self.output / "result.json").write_text(result.model_dump_json(indent=2))
         return result
+
+    def checkpoint(self):
+        """Synchronous atomic checkpoint survives an outer cancellation deadline."""
+        if self.output:
+            temporary = self.output / "memory.json.tmp"
+            temporary.write_text(json.dumps(self.memory.export(), ensure_ascii=False, indent=2))
+            temporary.replace(self.output / "memory.json")
 
     async def _loop(self):
         stalled = loading = 0

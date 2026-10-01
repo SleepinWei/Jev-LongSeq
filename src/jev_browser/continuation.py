@@ -100,6 +100,7 @@ def load_continuation(directory, task, manifest, *, ui_directory=None, _visited=
     # A fresh Memory has a new environment ID. Preserve old evidence for audit,
     # but never promote it to current proof after recreating the application.
     memory.confirmed_actions = copy.deepcopy(saved.get("confirmed_actions_archive", []))
+    memory.unresolved_verifications = copy.deepcopy(saved.get("unresolved_verifications", []))
     memory.interrupted_writes = copy.deepcopy(saved.get("interrupted_writes", {}))
     memory.interrupted_writes.update(copy.deepcopy(saved.get("pending_writes", {})))
     memory.resume_context = {

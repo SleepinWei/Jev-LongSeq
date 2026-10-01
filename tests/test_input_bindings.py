@@ -80,6 +80,7 @@ async def test_stage_counter_ignores_failed_attempts_and_passive_waits(status, o
 
 @pytest.mark.parametrize("phase,transition,compact", [
     ("initial", None, True), ("stage_budget", {"resolved": True}, True),
+    ("resume", None, True), ("no_progress", None, True), ("draft_row_added", None, True),
     ("stage_budget", {"resolved": False}, False),
     ("uncertain_outcome", None, False), ("finish", None, False),
 ])
@@ -89,7 +90,7 @@ async def test_compact_stages_never_replace_readback_or_final_review(phase, tran
     def respond(request):
         content = json.loads(json.loads(request.content)["messages"][-1]["content"])
         fields = content["schema"]["properties"]
-        assert (set(fields) == {"next_goal", "working_memory", "notes", "evidence_requests"}) == compact
+        assert (set(fields) == {"next_goal", "working_memory", "notes", "evidence_requests", "inputs", "verification"}) == compact
         if compact:
             assert "current_visible_evidence" not in content
             response = {"next_goal": "Search", "working_memory": "Pending all three"}

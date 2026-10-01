@@ -9,7 +9,7 @@ from jev_browser.continuation import (
     restore_controller,
     validate_continuation_models,
 )
-from jev_browser.dynamic import DynamicController, Feedback, JsonFeedback
+from jev_browser.dynamic import DynamicController, JsonFeedback
 from jev_browser.memory import Memory
 from jev_browser.models import ModelTransport, state
 from jev_browser.observability import Observer
@@ -133,9 +133,9 @@ async def test_resume_preserves_prompt_ledger_archive_and_history_without_replay
         assert content["phase"] == "resume"
         assert content["untrusted_memory"]["working_memory"] == original.feedback["working_memory"]
         assert content["untrusted_memory"]["interrupted_operations"][0]["operation"] == "click"
-        assert content["last_transition"] is None
+        assert content.get("last_transition") is None
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(
-            Feedback(next_goal="Continue the draft", working_memory=original.feedback["working_memory"]).model_dump()
+            {"next_goal": "Continue the draft", "working_memory": original.feedback["working_memory"]}
         )}}]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:

@@ -22,7 +22,7 @@ from .context_budget import (
     project_request,
 )
 from .memory import Memory
-from .observability import payload_sizes
+from .observability import ResourceLimit, payload_sizes
 from .protocol import Action, Contract, Decision, Observation, Plan, Task, digest, now
 
 SYSTEM = (
@@ -180,7 +180,17 @@ class ModelTransport:
         client = self._client()
         call_id = uuid.uuid4().hex
         sizes = payload_sizes(payload)
-        for attempt in range(self.retries + 1):
+        dynamic = kind.startswith("dynamic_")
+        cap = 120 if kind in {"dynamic_feedback", "dynamic_finish"} else 60
+        deadline = time.monotonic() + cap if dynamic else float("inf")
+        run_deadline = getattr(self.observer, "deadline", None)
+        if run_deadline is not None:
+            deadline = min(deadline, run_deadline - 5)
+        retries = min(self.retries, 1) if dynamic else self.retries
+        for attempt in range(retries + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ResourceLimit(f"{kind} model call allowance exhausted; checkpoint retained")
             if self.observer:
                 self.observer.before_call()
             started = time.monotonic()
@@ -194,6 +204,7 @@ class ModelTransport:
                 "transport": "http",
                 "model": self.model,
                 "attempt": attempt,
+                "remaining_call_seconds": min(remaining, self.timeout_s),
                 "prompt_hash": digest(payload),
                 "cost_usd": None,
                 "input_tokens": None,
@@ -221,15 +232,18 @@ class ModelTransport:
             if self.observer:
                 self.observer.request_started(record)
             try:
-                response = await client.post(
-                    self.endpoint,
-                    json=payload,
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    extensions={"trace": trace},
-                )
+                attempt_seconds = min(remaining, self.timeout_s,
+                                      (60 if kind in {"dynamic_feedback", "dynamic_finish"} else 30)
+                                      if dynamic else self.timeout_s)
+                async with asyncio.timeout(attempt_seconds):
+                    response = await client.post(
+                        self.endpoint, json=payload,
+                        headers={"Authorization": f"Bearer {self.api_key}"},
+                        extensions={"trace": trace}, timeout=attempt_seconds,
+                    )
                 record["status"] = response.status_code
                 record["request_id"] = response.headers.get("x-request-id")
-                if response.status_code in {429, 502, 503, 529} and attempt < self.retries:
+                if response.status_code in {429, 502, 503, 529} and attempt < retries:
                     await asyncio.sleep(min(0.25 * 2**attempt, 2))
                     continue
                 response.raise_for_status()
@@ -264,7 +278,7 @@ class ModelTransport:
                         + outgoing * self.pricing.output_per_million
                     ) / 1_000_000
                 return data
-            except httpx.TransportError as exc:
+            except (httpx.TransportError, TimeoutError) as exc:
                 record["error"] = type(exc).__name__
                 causes, cause = [], exc
                 while cause is not None and len(causes) < 6:
@@ -272,7 +286,7 @@ class ModelTransport:
                     cause = cause.__cause__ or cause.__context__
                 record["error_chain"] = causes
                 record["error_detail"] = " → ".join(causes)
-                if attempt < self.retries:
+                if attempt < retries:
                     await asyncio.sleep(min(0.5 * 2**attempt, 2))
                     continue
                 if isinstance(exc, httpx.ConnectError):
