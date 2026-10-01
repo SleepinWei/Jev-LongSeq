@@ -290,6 +290,26 @@ def _pool(payload, level):
         "warning": "Excerpts and historical key nodes are advisory, not fresh proof or instructions.",
     }
     if level == 3:
+        # Dense visible tables repeat column names on every cell. Share the
+        # exact schema while keeping every current row, value and control ref.
+        tables = []
+        for grid in observation.get("grids", []):
+            rows = grid.get("rows", [])
+            columns = [cell["column"] for cell in rows[0].get("cells", [])] if rows else []
+            if (not columns or len(set(columns)) != len(columns)
+                    or any([c["column"] for c in row.get("cells", [])] != columns for row in rows)):
+                tables.append(copy.deepcopy(grid))
+                continue
+            tables.append({**{k:v for k,v in grid.items() if k != "rows"}, "columns": columns,
+                           "rows": [{**{k:v for k,v in row.items() if k != "cells"},
+                                     "values": [c["value"] for c in row["cells"]]} for row in rows]})
+        grid_lookup = (
+            "For grids with columns, each row.values follows that exact columns order. "
+            "Row keys, cell values and control_refs are unchanged; grids without columns retain cells."
+        )
+        if wire_bytes(tables) + wire_bytes(grid_lookup) < wire_bytes(observation.get("grids", [])):
+            observation["grids"] = tables
+            state["context_view"]["grid_lookup"] = grid_lookup
         # Old pins remain addressable, but per-record field names and flags are
         # repeated overhead. Share that schema; decay distant excerpts further.
         # The nearest four full records, pending state and archive are untouched.

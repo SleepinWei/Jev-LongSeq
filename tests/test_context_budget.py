@@ -175,6 +175,32 @@ def test_byte_budget_matches_actual_httpx_unicode_serialization():
     assert wire_bytes(payload) == len(httpx.Request('POST', 'https://example.test', json=payload).content)
 
 
+def test_dense_grid_projection_is_lossless_and_fits_without_dropping_current_rows():
+    from jev_browser.context_budget import _pool
+    from jev_browser.protocol import GridCell, GridRow, VisibleGrid
+
+    task, obs, memory = sample()
+    obs.grids = [VisibleGrid(id='vendors', name='Vendors', rows=[GridRow(key=str(i),
+        cells=[GridCell(column=name, value=f'row {i}: {name}') for name in
+               ('Display Name', 'Company Name', 'Phone Number', 'Receivable balance')],
+        control_refs=[f'e{i}']) for i in range(40)])]
+    payload = {'state': {'trusted_goal': task.objective, 'hard_constraints': [],
+                         'untrusted_observation': obs.model_dump(), 'untrusted_memory': memory.context()}}
+    original = copy.deepcopy(payload)
+    regular = _pool(payload, 2)
+    compact = _pool(payload, 3)
+    projected = compact['state']['untrusted_observation']['grids'][0]
+    decoded = [{**{k:v for k,v in row.items() if k != 'values'},
+                'cells': [{'column':column, 'value':value} for column,value in
+                          zip(projected['columns'], row['values'], strict=True)]}
+               for row in projected['rows']]
+    assert decoded == original['state']['untrusted_observation']['grids'][0]['rows']
+    assert compact['state']['untrusted_memory']['pending_writes'] == memory.context()['pending_writes']
+    assert payload == original
+    _, metrics = project_request(payload, max_bytes=wire_bytes(regular) - 1)
+    assert metrics['level'] == 3 and metrics['after_bytes'] < wire_bytes(regular)
+
+
 def test_dense_grid_default_is_lossless_for_multiple_grids_and_unscoped_controls():
     from jev_browser.context_budget import _pool
 

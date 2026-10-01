@@ -355,10 +355,15 @@ class JevPolicy:
     ) -> Decision:
         options = {a.id: a.model_dump(mode="json") for a in candidates}
         if task.control_mode == "dynamic":
+            columns = {g.id: {c.column for r in g.rows for c in r.cells} for g in obs.grids}
+            headers = {e.id for e in obs.elements if e.grid_ref and not e.row_ref and e.role == "button"
+                       and not e.editable and e.name in columns.get(e.grid_ref, set())}
             options = {
                 a.id: {"operation": a.operation,
                        **({"target": a.element_ref} if a.element_ref else
                           {"description": a.description}),
+                       **({"description": "Grid column header, not a row field input"}
+                          if a.element_ref in headers else {}),
                        **({"value": a.bound_value} if a.bound_value is not None else {})}
                 for a in candidates
             }
