@@ -384,3 +384,23 @@ bash scripts/saas-bench.sh benchmark --saas-agent jev-ultrafast \
 更长任务中的记忆效果。密码候选过滤和跨应用动作缺失不在本次实验修复范围内。
 
 实验 trace：<http://127.0.0.1:8768/ultrafast?run=saas-saas-bench-business_031-1790744542022637000>。
+
+### 2026-10-02：以官方成功率为目标的逐项实验
+
+目标是提高最终 `strict_success`，而非只让 readback、动作数或单元测试更好看。
+采用顺序增量实验：每次只改变一个机制组，保持原 prompt、模型/provider、
+恢复点、候选上限与运行预算一致，使用独立输出目录，完整执行官方评分和清理。
+单次 rubric 得分改善不等于成功率改善；正式报告成功率需要多次独立试验并给出分母。
+任何 scorer 金标准或数据库内部信息只用于事后评分，不能指导 agent。
+
+实验 A（`arcbench-24`）：写入检查点及规划超时交接。控制器在已有新鲜读回的
+Save/Submit 边界记录环境 ID、字段快照、原阶段、证据来源及确认范围；
+`write_effect_confirmed` 不冒充业务最终验证。超时时清除旧填写绑定，限制候选为
+已观测链接、返回、Quick find 及非表单操作，直到新的有效规划完成。
+历史检查点在新环境只作为历史，较早字段详情可通过 archive_ref 取回。
+这不是完整的逐义务任务 ledger；任务拆分和最终验证仍由 brain 与独立 grader 负责。
+
+验证：macmini 定向回归 84 通过，全量 578 通过/3 跳过，Ruff 与 diff 检查通过。
+使用 run23 cycle101 的真实保存前后 observation 做只读离线回放：保存字段快照 9 项，
+超时后的 New Vendor 被排除，Quick find 仍可用，未调用模型或操作真实浏览器。
+实验 A 的线上评分和后续阶段约束实验分别记录，避免把多项同时修改当成因果证据。

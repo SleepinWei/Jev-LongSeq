@@ -28,6 +28,23 @@ PLANNING_PHASES = frozenset({"initial", "step", "resume", "no_progress", "draft_
                             "stage_budget", "write_checkpoint", "navigation_checkpoint", "ui_checkpoint"})
 
 
+def write_boundary(target):
+    return (target.get("role") == "button" and
+            "".join(target.get("name", "").casefold().split()) in
+            {"save", "submit", "publish", "approve", "保存", "提交", "发布", "审批"})
+
+
+def handoff_navigation(action, obs):
+    """Only observed navigation while a write awaits a new planning stage."""
+    if action.operation not in MUTATIONS:
+        return action.operation != Operation.FINISH
+    element = next((e for e in obs.elements if e.id == action.element_ref), None)
+    if not element or action.operation != Operation.CLICK:
+        return False
+    return bool(element.href or (element.role == "button" and re.fullmatch(
+        r"back(?: to (?:list|\w+))?|quick find|go back|返回(?:列表)?", element.name.strip(), re.I)))
+
+
 def feedback_json(raw: str) -> dict:
     """Ignore a JSON fence or literal object metadata, never extra behavioral fields."""
     raw = raw.strip()
@@ -452,6 +469,9 @@ class JsonFeedback:
             "For sequential searches, distinguish entering a query, submitting it, and observing "
             "its results; preserve the requested order. "
             "Use current_environment_readbacks over old advisory summaries. Resume warnings "
+            "write_checkpoints contain sourced field snapshots and local write effects; use them "
+            "to avoid recreating already processed objects. Their status is not final verification. "
+            "Check environment_id before using a checkpoint as current-environment evidence. "
             "describe inherited work at startup only; never reclassify later confirmed actions "
             "as prior-session work without new contradictory evidence. A local UI readback "
             "still does not prove business persistence or whole-task completion. "
@@ -829,7 +849,7 @@ class DynamicController(Controller):
                         break
                     records = {archive_ref(r): r for r in (
                         *self.memory.evidence.values(), *self.memory.key_nodes.values(),
-                        *self.memory.confirmed_actions)}
+                        *self.memory.confirmed_actions, *self.memory.write_checkpoints)}
                     missing = [ref for ref in feedback.evidence_requests if ref not in records]
                     if missing:
                         raise UngroundedFeedback([{"loc": ["evidence_requests"],
@@ -983,19 +1003,26 @@ class DynamicController(Controller):
         """Continue finite choices from the original goal; no new evidence or confirmation."""
         previous = self.memory.feedback
         same_route = self.last_brain_location == planning_location(obs)
+        handoff = previous.get("planning_handoff")
+        if handoff and handoff["environment_id"] != self.memory.environment_id:
+            handoff = None
         guidance = Feedback(
-            next_goal=previous.get("next_goal") if same_route and previous.get("next_goal") else
+            next_goal=("The last write has fresh local readback in write_checkpoints. Its task obligation "
+                "may still need final verification. Navigate to locate the next requested work; "
+                "do not recreate, fill or submit the previous form until fresh planning is available."
+                if handoff else previous.get("next_goal") if same_route and previous.get("next_goal") else
                 "Continue the original task from the current observed page. Reconcile recovered history "
-                "with current state; never repeat confirmed actions or treat interrupted writes as confirmed.",
+                "with current state; never repeat confirmed actions or treat interrupted writes as confirmed."),
             working_memory=previous.get("working_memory", ""),
-            inputs=previous.get("inputs", []) if same_route else [],
-            verification=previous.get("verification") if same_route else None,
+            inputs=previous.get("inputs", []) if same_route and not handoff else [],
+            verification=previous.get("verification") if same_route and not handoff else None,
         )
         self.memory.feedback.update(guidance.model_dump())
         self.last_brain_action, self.last_brain_attempt = self.effective_actions, self.actions
         self.last_brain_location = planning_location(obs)
         self.log("planning_degraded", phase=phase, reason=reason, original_goal_preserved=True,
-                 guidance_source="previous_same_route" if same_route else "original_task",
+                 guidance_source="write_checkpoint_navigation" if handoff else
+                                 "previous_same_route" if same_route else "original_task",
                  working_memory_preserved=True, action_confirmed=False, completion_claim=False)
         self.checkpoint()
         return guidance
@@ -1071,6 +1098,11 @@ class DynamicController(Controller):
         return None
 
     async def perform(self, action, obs):
+        handoff = self.memory.feedback.get("planning_handoff")
+        if (not self.pending and handoff
+                and handoff["environment_id"] == self.memory.environment_id
+                and not handoff_navigation(action, obs)):
+            return "write checkpoint needs fresh planning before another form mutation"
         if action.operation not in {Operation.FILL, Operation.SELECT}:
             self.input_retry = None
         if action.operation not in self.task.allowed_operations:
@@ -1138,6 +1170,10 @@ class DynamicController(Controller):
                     "popup_open": element.popup_open}
                 self.pending["before_menu_items"] = [e.model_dump() for e in obs.elements
                                                       if e.role == "menuitem"]
+                if write_boundary(self.pending["click_target"]):
+                    self.pending["field_snapshot"] = [
+                        {"name": e.name, "value": e.value, "grid_ref": e.grid_ref, "row_ref": e.row_ref}
+                        for e in obs.elements if e.editable or e.selectable]
                 if (len(obs.dialogs) == 1 and element.role == "button"
                         and element.name.casefold().strip() in {"close", "close (icon control)", "关闭", "關閉"}
                         and not element.editable and not element.selectable):
@@ -1329,6 +1365,14 @@ class DynamicController(Controller):
     async def choose_with_context_pages(self, obs, candidates, *, limit, offset):
         """Retry only pre-dispatch context overflow with a smaller navigable page."""
         while True:
+            handoff = self.memory.feedback.get("planning_handoff")
+            if (not self.pending and handoff
+                    and handoff["environment_id"] == self.memory.environment_id):
+                original = len(candidates)
+                candidates = [a for a in candidates if handoff_navigation(a, obs)]
+                self.log("handoff_candidates_guarded", removed=original - len(candidates),
+                         checkpoint_key=handoff["action_key"], pending_preserved=False,
+                         browser_action_dispatched=False)
             try:
                 decision = await self.observer.measure(
                     "policy.choose", self.policy.choose, self.task, obs, self.memory, None, candidates)
@@ -1367,11 +1411,25 @@ class DynamicController(Controller):
         self.last_transition = {**self.pending, "resolved": True}
         scope = self.pending.get("confirmation_scope")
         target = self.pending.get("click_target", {})
-        command = "".join(target.get("name", "").casefold().split())
         if (scope == "business_commit" or
-                (scope not in {"dialog_opened", "menu_opened_ui"} and target.get("role") == "button"
-                 and command in {"save", "submit", "publish", "approve", "保存", "提交", "发布", "审批"})):
+                (scope not in {"dialog_opened", "menu_opened_ui"} and write_boundary(target))):
             self.stage_review_due = True
+            checkpoint = {
+                "environment_id": self.memory.environment_id, "action_key": key,
+                "stage_goal": self.pending.get("stage_goal", ""),
+                "target": target.get("name", ""),
+                "status": "business_commit_confirmed" if scope == "business_commit" else "write_effect_confirmed",
+                "fields": self.pending.get("field_snapshot", []),
+                "before": self.pending["before"], "source": self.memory.view(obs),
+                "visible_excerpt": evidence_text(obs)[:1600], "basis": basis,
+                "proof": self.pending.get("readback_proof", {}),
+                "meaning": "Local write readback only; no whole-task completion or independent grade.",
+            }
+            self.memory.write_checkpoints.append(checkpoint)
+            self.memory.feedback["planning_handoff"] = {
+                "environment_id": self.memory.environment_id, "action_key": key,
+                "mode": "navigation_only_until_fresh_planning"}
+            self.memory.feedback["inputs"] = []
             if plan := self.memory.feedback.get("verification"):
                 # A confirmed write closes the planning stage. Old advisory
                 # readback goals must not resurrect this resolved transition.

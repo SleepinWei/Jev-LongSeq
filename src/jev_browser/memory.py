@@ -37,6 +37,7 @@ class Memory:
         self.confirmed_writes: set[str] = set()
         self.environment_id = uuid4().hex
         self.confirmed_actions: list[dict[str, Any]] = []
+        self.write_checkpoints: list[dict[str, Any]] = []
         self.unresolved_verifications: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
         self.page_notes: dict[str, dict] = {}
@@ -231,6 +232,10 @@ class Memory:
                    if self.feedback.get("verification") else {}),
                 **({"current_environment_readbacks": self.current_readbacks()}
                    if self.confirmed_actions else {}),
+                **({"write_checkpoints": self.write_checkpoints}
+                   if self.write_checkpoints else {}),
+                **({"planning_handoff": self.feedback["planning_handoff"]}
+                   if self.feedback.get("planning_handoff") else {}),
                 "opened_pages": pages,
                 "opened_pages_total": len(self.page_registry),
                 "opened_pages_truncated": len(self.page_registry) > len(pages),
@@ -305,6 +310,7 @@ class Memory:
             "observed_urls": sorted(self.observed_urls),
             "confirmed_writes": sorted(self.confirmed_writes),
             "confirmed_actions_archive": self.confirmed_actions,
+            "write_checkpoints_archive": self.write_checkpoints,
             "environment_id": self.environment_id,
             "observed_entities": sorted(self.observed_entities),
             **({"evidence_archive": self.evidence, "brain_feedback": self.feedback}
