@@ -10,6 +10,46 @@ from jev_browser.memory import Memory
 from jev_browser.protocol import Binding, Budget, Decision, InteractionRule, Operation
 
 
+async def test_rendered_refresh_icons_and_navigation_search_are_distinct():
+    from jev_browser.protocol import Task
+
+    definition = Task(id='report-controls', objective='Inspect a report', control_mode='dynamic', sandbox=True)
+    async with PlaywrightBackend(definition) as browser:
+        await browser.load_html('''
+            <header><div><button>Search</button><kbd>⌘K</kbd></div></header>
+            <main><label>Employee<input role="combobox"></label>
+              <button><svg class="lucide-refresh-cw" width="20" height="20"><rect width="20" height="20"/></svg></button>
+              <button><svg width="20" height="20"><defs><symbol id="icon-reload"><rect width="20" height="20"/></symbol></defs><use href="#icon-reload"/></svg></button>
+              <button><svg class="icon-refresh" style="display:none"></svg></button>
+            </main>''')
+        obs = await browser.observe()
+        search = next(e for e in obs.elements if e.name == 'Search')
+        assert 'Navigation: Search ⌘K' in search.context
+        assert 'Keyboard shortcut: ⌘K' in search.context
+        assert search.search_query is None and search.search_scope is None
+        assert any(e.name == 'refresh (icon control)' for e in obs.elements)
+        assert any(e.name == 'reload (icon control)' for e in obs.elements)
+        buttons = [e for e in obs.elements if e.role == 'button']
+        assert buttons[-1].name == ''  # Hidden asset does not name a visible control.
+
+
+async def test_options_keep_unique_owner_and_field_context():
+    from jev_browser.protocol import Task
+
+    definition = Task(id='local-options', objective='Choose a linked record', control_mode='dynamic', sandbox=True)
+    async with PlaywrightBackend(definition) as browser:
+        await browser.load_html('''
+            <div><label>Employee<input role="combobox" value="Ada"></label>
+              <div role="option">EMP-7 Ada</div></div>
+            <div><label>Department<input role="combobox"></label></div>''')
+        obs = await browser.observe()
+        field = next(e for e in obs.elements if e.name == 'Employee')
+        option = next(e for e in obs.elements if e.role == 'option')
+        assert option.option_owner == field.id and field.popup_open
+        assert option.context == 'Options for: Employee'
+        assert not next(e for e in obs.elements if e.name == 'Department').popup_open
+
+
 async def test_password_snapshot_distinguishes_empty_and_filled_without_exposing_value():
     from jev_browser.dynamic import action_key, generate_dynamic, semantic_key
     from jev_browser.protocol import Task

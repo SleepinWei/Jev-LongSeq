@@ -54,6 +54,24 @@ def observation(**kw):
     )
 
 
+async def test_unidentifiable_clicks_are_neither_offered_nor_dispatched():
+    elements = [Element(id='blank', role='button', name=''),
+                Element(id='form-blank', role='button', name='', context='Employee Save'),
+                Element(id='navigation-blank', role='button', name='', context='Navigation: Search'),
+                Element(id='row-editor', role='button', name='', context='Row 1 Employee',
+                        grid_ref='g1', row_ref='1'),
+                Element(id='link', role='link', name='', href='about:blank'),
+                Element(id='refresh', role='button', name='refresh (icon control)')]
+    obs = observation(elements=elements)
+    clicks = [a for a in generate_dynamic(obs, task()) if a.operation == Operation.CLICK]
+    assert {a.element_ref for a in clicks} == {'row-editor', 'link', 'refresh'}
+    agent = DynamicController(task(), None, None, feedback=None)
+    forged = clicks[-1].model_copy(update={'element_ref': 'blank'})
+    assert await agent.perform(forged, obs) == 'click target has no observed name, destination or row context'
+    assert agent.pending is None and not agent.memory.pending_writes
+    assert not agent.consumed and agent.actions == 0
+
+
 class FormPolicy:
     async def choose(self, task, obs, memory, contract, candidates):
         assert task.rules == task.success_predicates == task.extraction.fields == []

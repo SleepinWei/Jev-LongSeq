@@ -225,6 +225,13 @@ def input_slot_key(element, operation):
     return digest([operation, element.model_dump(exclude={"id"})])
 
 
+def identifiable_click(element):
+    # A form or navigation container alone does not identify a blank button's
+    # purpose. Retain observed row editors and links with an actual destination.
+    return bool(element.name.strip() or element.href
+                or (element.grid_ref and element.row_ref and element.context.strip()))
+
+
 def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppressed_inputs=None):
     """All candidates come from current DOM capabilities, never task-name matching."""
     consumed = consumed or set()
@@ -267,7 +274,7 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppresse
             description += f" | grid={element.grid_ref}; row={element.row_ref}"
         if element.activation_key:
             description = f"Activate observed {element.activation_key} shortcut: {element.name} | {element.context}"
-        if not element.editable and not element.selectable:
+        if not element.editable and not element.selectable and identifiable_click(element):
             regular.append(make(Operation.CLICK, description, element_ref=element.id))
         if element.editable:
             for literal in literals:
@@ -431,6 +438,13 @@ class JsonFeedback:
                         " observation and sourced notebook; distrust previous completion claims. If"
                         " evidence is incomplete, set complete=false and explain what remains."
                         " Do not emit complete=true while a mutation is pending or unknown.")
+                        + " For editable comboboxes, select the matching observed option belonging"
+                        " to that field; typed display text alone does not resolve a linked record."
+                        " Check option_owner and popup_open. Distinguish navigation or command"
+                        " search from a local form/report query by the control's visible context"
+                        " and keyboard hint. Do not prescribe a Search button for unrelated"
+                        " filters. Use only observed local refresh/query controls and current"
+                        " result evidence; if results are absent, keep that uncertainty explicit."
                         + PROMPT_VARIANTS[self.tuning.prompt_variant]
                         + " Fresh grids bind cell values to a grid and row; never transfer a value"
                         " between rows or infer a reverted value when an inline editor becomes display text."
@@ -876,6 +890,8 @@ class DynamicController(Controller):
                 return "target is not an enabled observed control"
             if element.href and not allowed_url(element.href, self.task):
                 return "target origin is not authorized"
+            if action.operation == Operation.CLICK and not identifiable_click(element):
+                return "click target has no observed name, destination or row context"
             if action.operation == Operation.FILL and not element.editable:
                 return "target is not editable"
             if action.operation == Operation.SELECT and (

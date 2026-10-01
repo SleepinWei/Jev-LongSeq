@@ -51,6 +51,14 @@ SNAPSHOT = r"""selector => {
     .sort((a,b) => b.z-a.z || b.order-a.order)[0];
   const modal = front ? [front.m] : [];
   const nativeSelector = __NATIVE_SELECTOR__, custom = new Set();
+  const labelText = label => {
+    const texts = [], walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
+    while(walker.nextNode()) {
+      const n = walker.currentNode;
+      if (visible(n.parentElement) && !n.parentElement.closest('select,textarea,input')) texts.push(n.textContent.trim());
+    }
+    return texts.filter(Boolean).join(' ');
+  };
   const iconName = el => [...el.querySelectorAll('img[alt],svg[aria-label],svg title')]
     .filter(visible).map(n => n.getAttribute('alt') || n.getAttribute('aria-label') || n.textContent)
     .filter(Boolean).join(' ');
@@ -58,13 +66,21 @@ SNAPSHOT = r"""selector => {
   // are descriptive, untrusted labels, never permission or invented navigation.
   const iconHint = el => {
     if (el.matches('a[href],[role="link"]')) return '';
-    const icons = [el, ...[...el.querySelectorAll('img,svg,use')].slice(0, 8)];
+    const iconVisible = n => {
+      // A use reference may have no independent box; its visible SVG supplies
+      // the icon box. Hidden descendants still cannot contribute a label.
+      const style = getComputedStyle(n);
+      return visible(n.matches('use') ? n.closest('svg') : n) &&
+        !n.closest('[hidden],[inert],[aria-hidden="true"]') &&
+        style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+    };
+    const icons = [el, ...[...el.querySelectorAll('img,svg,use')].filter(iconVisible).slice(0, 8)];
     const tokens = icons.map(n => [n.getAttribute('class'),
       n.matches('img') ? n.getAttribute('src') : '',
       n.matches('svg,use') ? n.getAttribute('href') || n.getAttribute('xlink:href') : '']
       .filter(Boolean).join(' '))
       .join(' ').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
-    for (const word of ['help','question','info','clear','close','search','submit','menu','next','previous','back','send','add','remove','delete']) {
+    for (const word of ['help','question','info','clear','close','refresh','reload','search','submit','menu','next','previous','back','send','add','remove','delete']) {
       if (new RegExp('(?:^|[^a-z])' + word + '(?=$|[^a-z])').test(tokens))
         return (word === 'question' ? 'help' : word) + ' (icon control)';
     }
@@ -84,14 +100,6 @@ SNAPSHOT = r"""selector => {
       custom.add(el);
     }
     const tag = el.tagName.toLowerCase();
-    const labelText = label => {
-      const texts = [], walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
-      while(walker.nextNode()) {
-        const n = walker.currentNode;
-        if (visible(n.parentElement) && !n.parentElement.closest('select,textarea,input')) texts.push(n.textContent.trim());
-      }
-      return texts.filter(Boolean).join(' ');
-    };
     const labels = el.labels ? [...el.labels].filter(visible).map(labelText).join(' ') : '';
     // Some form libraries render a sibling label without `for`. Associate only
     // a visible label in a scope containing this single visible field.
@@ -129,11 +137,13 @@ SNAPSHOT = r"""selector => {
       /\*\s*$/.test(labels || implicitLabel) ||
       [...(el.closest('.frappe-control') || el.parentElement).querySelectorAll('label')]
         .some(label => visible(label) && getComputedStyle(label, '::after').content.replace(/["']/g, '') === '*');
+    const navigation = el.closest('nav,header,[role="navigation"],[role="banner"]');
+    const context = row ? labelText(row) : navigation ? 'Navigation: ' + labelText(navigation).slice(0, 240) : '';
     return {index, role, name:name.trim().replace(/\s*\*$/, ''), value:el.type === 'password' ? (el.value ? '[redacted]' : '') : (display ? labelText(el) : el.value || ''),
       enabled:!display && !el.matches(':disabled') && !el.closest('[aria-disabled="true"]'),
       editable, read_only:readOnly, required, selectable:tag === 'select' && !readOnly,
       checked: ['checkbox','radio'].includes(role) ? (el.checked ?? el.getAttribute('aria-checked') === 'true') : null,
-      context:row ? labelText(row) : '', href:tag === 'a' ? el.href : null,
+      context, href:tag === 'a' ? el.href : null,
       options:tag === 'select' ? [...el.options].filter(x => !x.disabled && !x.hidden).map(x => x.value) : []};
   }).filter(Boolean);
   const nodes = document.querySelectorAll(selector);
@@ -163,6 +173,17 @@ SNAPSHOT = r"""selector => {
   }
   for (const c of controls) {
     if (c.role !== 'button' || !/^(search(?: \(icon control\))?|搜索|搜尋)$/i.test(c.name)) continue;
+    // Preserve a nearby rendered keyboard hint so a navigation search trigger
+    // cannot be mistaken for submitting an unrelated report filter.
+    for (let scope = nodes[c.index].parentElement, depth = 0;
+         scope && scope !== document.body && depth < 3; scope = scope.parentElement, depth++) {
+      if (controls.some(f => (f.editable || f.selectable) && scope.contains(nodes[f.index]))) break;
+      const hints = [...scope.querySelectorAll('kbd')].filter(visible).map(labelText).filter(Boolean);
+      if (hints.length === 1) {
+        c.context = [c.context, 'Keyboard shortcut: ' + hints[0]].filter(Boolean).join(' | ');
+        break;
+      }
+    }
     for (let scope = nodes[c.index].parentElement; scope && scope !== document.body; scope = scope.parentElement) {
       const fields = controls.filter(f => f.editable && scope.contains(nodes[f.index]));
       if (fields.length > 1) break;
@@ -273,6 +294,7 @@ SNAPSHOT = r"""selector => {
       const owner = owners[0]; owner.popup_open = true;
       option.option_owner = 'e' + owner.index;
       option.grid_ref = owner.grid_ref; option.row_ref = owner.row_ref;
+      if (owner.name) option.context = [option.context, 'Options for: ' + owner.name].filter(Boolean).join(' | ');
     }
   }
   return {url:location.href,title:document.title,text:lines.join('\n'),controls,
