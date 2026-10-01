@@ -1205,7 +1205,8 @@ async def test_feedback_wire_separates_modal_scope_and_direct_readback_from_cont
     def respond(request):
         payload = json.loads(request.content)
         content = json.loads(payload['messages'][1]['content'])
-        assert content['untrusted_observation']['dialogs'] == [question]
+        assert content['current_page']['dialogs'] == [question]
+        assert 'untrusted_memory' not in content
         assert set(content['schema']['properties']) == {'last_outcome', 'evidence_ids'}
         assert payload['max_tokens'] == 4096
         ref = next(key for key, quote in content['readback_evidence'].items() if quote == question)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import uuid4
 
 from .context_budget import history_view
 from .protocol import Contract, Extraction, Fact, Observation, Predicate, Source, Task, digest
@@ -34,6 +35,8 @@ class Memory:
         self.interrupted_writes: dict[str, dict[str, Any]] = {}
         self.resume_context: dict[str, Any] = {}
         self.confirmed_writes: set[str] = set()
+        self.environment_id = uuid4().hex
+        self.confirmed_actions: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
         self.page_notes: dict[str, dict] = {}
         self.page_registry: dict[str, dict] = {}
@@ -220,6 +223,8 @@ class Memory:
             pages = list(self.page_registry.values())[-24:]
             history = history_view(self.events)
             return {
+                **({"current_environment_readbacks": self.current_readbacks()}
+                   if self.confirmed_actions else {}),
                 "opened_pages": pages,
                 "opened_pages_total": len(self.page_registry),
                 "opened_pages_truncated": len(self.page_registry) > len(pages),
@@ -229,6 +234,8 @@ class Memory:
                 "blockers": self.feedback.get("blockers", []),
                 "history_for_context": history,
                 **({"resume": self.resume_context,
+                    "resume_warning_scope": "Inherited work at startup only; later current-environment "
+                                            "readbacks remain valid unless new contradictory evidence appears.",
                     "interrupted_operations": [
                         {"description": p["action"]["description"],
                          "operation": p["action"]["operation"],
@@ -269,6 +276,19 @@ class Memory:
             context["visible_evidence"] = list(self.evidence.values())
         return context
 
+    def current_readbacks(self) -> dict:
+        current = [a for a in self.confirmed_actions if a["environment_id"] == self.environment_id]
+        def boundary(action):
+            return (action["business_commit_confirmed"] or action["target"].casefold().strip()
+                    in {"save", "submit", "publish", "approve", "保存", "提交"})
+        return {
+            "environment_id": self.environment_id,
+            "meaning": "Immutable local action evidence in this environment, not whole-task completion. "
+                       "Startup recovery warnings apply only to inherited work; they cannot invalidate "
+                       "these later readbacks. New contradictory observations still require review.",
+            "actions": [a for a in current if boundary(a)] + [a for a in current if not boundary(a)][-4:],
+        }
+
     def export(self) -> dict:
         return {
             **self.context(list(self.facts), limit=len(self.facts)),
@@ -278,6 +298,8 @@ class Memory:
             "conflicts": self.conflicts,
             "observed_urls": sorted(self.observed_urls),
             "confirmed_writes": sorted(self.confirmed_writes),
+            "confirmed_actions_archive": self.confirmed_actions,
+            "environment_id": self.environment_id,
             "observed_entities": sorted(self.observed_entities),
             **({"evidence_archive": self.evidence, "brain_feedback": self.feedback}
                if self.dynamic_mode else {}),

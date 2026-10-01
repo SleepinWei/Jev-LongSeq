@@ -59,6 +59,8 @@ class Element(Model):
     row_ref: str | None = None
     option_owner: str | None = None
     popup_open: bool | None = None
+    popup_kind: Literal["menu"] | None = None
+    menu_owner: str | None = None
 
 
 class GridCell(Model):

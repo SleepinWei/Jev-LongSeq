@@ -27,7 +27,7 @@ CONTROL_DEFAULTS = {
     "read_only": False, "required": False,
     "activation_key": None,
     "grid_ref": None, "row_ref": None,
-    "option_owner": None, "popup_open": None,
+    "option_owner": None, "popup_open": None, "popup_kind": None, "menu_owner": None,
 }
 
 
@@ -219,7 +219,7 @@ def memory_view(raw, level):
     if "resume" in raw:
         result["resume"] = {k: raw["resume"][k] for k in (
             "source_run_id", "original_prompt_hash", "ui_rewound", "ui_checkpoint_run_id",
-            "environment_recreated", "pending_disposition", "recovery_scope") if k in raw["resume"]}
+            "environment_recreated", "pending_disposition", "recovery_scope", "warning_scope") if k in raw["resume"]}
     # Pending operations and blockers are never shortened. Pin excerpts are
     # historical retrieval hints, never proof of a fresh business result.
     result["recent_evidence"] = [{**e, "quote": excerpt(e.get("quote", ""), (400, 200, 100)[level])}
@@ -384,6 +384,17 @@ def project_chat_request(payload, *, max_bytes, purpose):
     quotes and the full final notebook remain protected, never silently omitted.
     """
     original = json.loads(payload["messages"][-1]["content"])
+    if purpose == "dynamic_readback" and "untrusted_observation" not in original:
+        # Scoped readback already contains only exact current evidence and the
+        # action contract. Do not reintroduce advisory state or excerpt proof.
+        projected = copy.deepcopy(payload)
+        projected["messages"][-1]["content"] = wire_json(original)
+        metrics = {"purpose": purpose, "before_bytes": wire_bytes(payload),
+                   "after_bytes": wire_bytes(projected), "max_bytes": max_bytes,
+                   "level": 0, "sections": {k: wire_bytes(v) for k, v in original.items()}}
+        if metrics["after_bytes"] > max_bytes:
+            raise ContextBudgetExceeded("Scoped action evidence exceeds readback budget", metrics)
+        return projected, metrics
     prepared = copy.deepcopy(original)
     if purpose == "dynamic_input":
         target = prepared.get("selected_action", {}).get("element_ref")

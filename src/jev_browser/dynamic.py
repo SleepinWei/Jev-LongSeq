@@ -171,6 +171,8 @@ def evidence_text(obs: Observation) -> str:
         f"{e.role} {e.name} = {e.value}"
         + (f"; checked={str(e.checked).lower()}" if e.checked is not None else "")
         + (f"; grid={e.grid_ref}; row={e.row_ref}" if e.row_ref else "")
+        + (f"; menu_owner={e.menu_owner}" if e.menu_owner else "")
+        + (f"; popup={e.popup_kind}; open={e.popup_open}" if e.popup_kind else "")
         for e in obs.elements
     ]
     grids = [f"Visible grid {g.id} ({g.name}): {len(g.rows)} visible rows" for g in obs.grids]
@@ -387,6 +389,12 @@ class JsonFeedback:
             "at the end. Prefer recent information; older settled detail may be discarded. "
             "For sequential searches, distinguish entering a query, submitting it, and observing "
             "its results; preserve the requested order. "
+            "Use current_environment_readbacks over old advisory summaries. Resume warnings "
+            "describe inherited work at startup only; never reclassify later confirmed actions "
+            "as prior-session work without new contradictory evidence. A local UI readback "
+            "still does not prove business persistence or whole-task completion. "
+            "Prefer a directly matching page-local operation over a generic global creation "
+            "menu when both are visible and their observed purpose matches the requested work. "
             "Use the supplied quoted-user-text candidates for literal inputs when appropriate. "
             "Optionally add notes with critical=true for durable identifiers, checkpoints or "
             "important failures. Copy exact quotes from the current observation; these notes "
@@ -515,11 +523,21 @@ class JsonFeedback:
                 "and evidence_ids. confirmed requires current visible evidence of the intended "
                 "local effect; choose IDs from readback_evidence, never invent or rewrite quotes. "
                 "An input value alone does not prove link resolution or a saved business record. "
-                "Opening/closing a popup is separate from saving/submitting. Use pending if the "
+                "Opening/closing a popup is separate from saving/submitting. For a menu-opening "
+                "action, new visible menu items confirm menu expansion; subsequent menu selection and form "
+                "creation are separate actions. trusted_goal supplies authorization only, not "
+                "the success criterion for this local check. Use pending if the "
                 "effect is still loading, unknown if unsupported. Do not generate a plan, notes, "
                 "working_memory, answer or completion. Repair only schema_error if supplied."},
                 {"role": "user", "content": json.dumps({
-                    **state(task, obs, memory, None), "last_transition": transition,
+                    "trusted_goal": task.objective, "hard_constraints": task.constraints,
+                    "last_transition": {k: v for k, v in transition.items()
+                                        if k not in {"stage_goal", "before_semantics", "key",
+                                                     "before_menu_signature"}},
+                    "current_page": {"url": obs.url, "tab_id": obs.tab_id,
+                                     "observation_id": obs.observation_id,
+                                     "loading": obs.loading, "dialogs": obs.dialogs,
+                                     "errors": obs.errors},
                     "readback_evidence": lines, "schema": ReadbackReview.model_json_schema(),
                     "schema_error": diagnostic,
                 }, ensure_ascii=False)}],
@@ -961,7 +979,15 @@ class DynamicController(Controller):
                 ),
             }
             if action.operation == Operation.CLICK:
-                self.pending["click_target"] = {"role": element.role, "name": element.name}
+                self.pending["click_target"] = {"id": element.id, "role": element.role,
+                    "name": element.name, "popup_kind": element.popup_kind,
+                    "popup_open": element.popup_open}
+                self.pending["before_menu_items"] = [e.model_dump() for e in obs.elements
+                                                      if e.role == "menuitem"]
+                if element.popup_kind == "menu":
+                    self.pending["expected_goal"] = (
+                        "Confirm only that this menu trigger exposes visible enabled menu items. "
+                        "Selecting a menu item, opening a form and saving it are separate actions.")
                 if element.role == "option" and element.option_owner:
                     owners = [e for e in obs.elements if e.id == element.option_owner
                               and e.role == "combobox" and e.editable and e.enabled
@@ -1147,7 +1173,7 @@ class DynamicController(Controller):
         target = self.pending.get("click_target", {})
         command = "".join(target.get("name", "").casefold().split())
         if (scope == "business_commit" or
-                (scope != "dialog_opened" and target.get("role") == "button"
+                (scope not in {"dialog_opened", "menu_opened_ui"} and target.get("role") == "button"
                  and command in {"save", "submit", "publish", "approve", "保存", "提交", "发布", "审批"})):
             self.stage_review_due = True
         elif (self.pending.get("before_menu_signature") is not None
@@ -1158,6 +1184,18 @@ class DynamicController(Controller):
             # route change. Replan before the fast policy can toggle its opener
             # again using pre-menu guidance. This does not confirm a business write.
             self.ui_review_due = True
+        # Prior advisory quotes can still occur on this page; they are not proof
+        # for a new action. Always archive the fresh observed excerpt separately.
+        self.memory.confirmed_actions.append({
+            "environment_id": self.memory.environment_id, "action_key": key,
+            "operation": self.pending["action"]["operation"],
+            "target": target.get("name") or self.pending["action"]["description"],
+            "confirmation_scope": scope or "action_effect", "basis": basis,
+            "business_commit_confirmed": scope == "business_commit",
+            "source": {**self.memory.view(obs), "title": obs.title,
+                       "visible_excerpt": obs.text[:600]},
+            "proof": self.pending.get("readback_proof", {}),
+        })
         self.pending = None
         self.log("transition_confirmed", key=key, basis=basis,
                  confirmation_scope=self.last_transition.get("confirmation_scope", "action_effect"))
@@ -1251,6 +1289,33 @@ class DynamicController(Controller):
             f"{target['name']}={matches[0].value}; matching option clicked and dropdown closed. "
             "Local UI only; link resolution and business persistence remain unverified.")
         return True
+
+    def confirm_visible_menu(self, obs):
+        """Prove a newly owned menu expansion, never a business mutation."""
+        pending = self.pending
+        if (not pending or pending.get("dispatch_status") != "ok"
+                or pending["action"]["operation"] != Operation.CLICK
+                or not (target := pending.get("click_target"))
+                or target.get("popup_kind") != "menu" or target.get("popup_open") is True
+                or obs.loading or obs.dialogs or pending.get("before_dialogs")
+                or obs.observation_id == pending["action"]["observation_id"]
+                or obs.url != pending["before"]["url"] or obs.tab_id != pending["before"]["tab_id"]
+                or any(e.startswith("page_error:") and e not in pending.get("before_errors", [])
+                       for e in obs.errors)):
+            return False
+        triggers = [e for e in obs.elements if e.id == target["id"] and e.enabled
+                    and e.role == target["role"] and e.name == target["name"]
+                    and e.popup_kind == "menu" and e.popup_open is True]
+        items = [e for e in obs.elements if e.role == "menuitem" and e.enabled
+                 and e.name.strip() and e.menu_owner == target["id"]]
+        if (len(triggers) != 1 or not items or
+                any(e.get("menu_owner") == target["id"] for e in pending.get("before_menu_items", []))):
+            return False
+        pending["confirmation_scope"] = "menu_opened_ui"
+        pending["business_commit_confirmed"] = False
+        pending["readback_proof"] = {"observation_id": obs.observation_id,
+            "trigger_ref": target["id"], "menu_items": [{"id": e.id, "name": e.name} for e in items]}
+        return self.confirm_transition("confirmed", obs, "fresh_owned_menu_expansion")
 
     def confirm_visible_grid_row(self, obs):
         """Prove one local draft-row append, never document persistence or completion."""
@@ -1488,6 +1553,7 @@ class DynamicController(Controller):
             loading = 0
             self.confirm_visible_input(obs)
             self.confirm_visible_option(obs)
+            self.confirm_visible_menu(obs)
             self.confirm_visible_dialog(obs)
             if self.confirm_visible_grid_row(obs):
                 trigger = "draft_row_added"

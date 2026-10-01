@@ -123,7 +123,9 @@ async def test_light_readback_retains_goal_memory_and_resolves_current_reference
         payload = json.loads(request.content)
         context = json.loads(payload["messages"][-1]["content"])
         assert context["trusted_goal"] == definition.objective
-        assert context["untrusted_memory"]["working_memory"] == "Keep unfinished work"
+        assert "untrusted_memory" not in context and "untrusted_observation" not in context
+        assert "stage_goal" not in context["last_transition"]
+        assert context["current_page"]["observation_id"] == obs.observation_id
         assert payload["max_tokens"] == 4096
         assert set(context["schema"]["properties"]) == {"last_outcome", "evidence_ids"}
         ref = next(k for k, v in context["readback_evidence"].items() if v == "Not Saved")
@@ -134,7 +136,8 @@ async def test_light_readback_retains_goal_memory_and_resolves_current_reference
         transport = ModelTransport("https://test.example", "test", "test", client=client)
         transport.required_goal = definition.objective
         result = await JsonFeedback(transport).review(definition, obs, memory,
-                                                     phase="action_readback", transition={"resolved": False})
+                                                     phase="action_readback", transition={"resolved": False,
+                                                         "stage_goal": "Wrongly require full form creation"})
     assert result.readback_quote == "Not Saved"
     assert result.working_memory == "Keep unfinished work" and result.next_goal == "Continue the draft"
     assert not result.complete and result.answer == ""
@@ -362,7 +365,8 @@ def test_query_filters_keep_stage_but_new_tabs_and_hash_routes_change_it():
     assert planning_location(obs) != planning_location(obs.model_copy(update={'url': 'https://example.test/report#/ledger'}))
 
 
-async def test_confirmed_menu_opening_replans_before_repeating_the_opener():
+@pytest.mark.parametrize('owned', [False, True])
+async def test_confirmed_menu_opening_replans_before_repeating_the_opener(owned):
     definition = Task(id='quick-menu', control_mode='dynamic', sandbox=True,
                       objective='Open the creation menu and select Vendor.')
     phases = []
@@ -387,8 +391,11 @@ async def test_confirmed_menu_opening_replans_before_repeating_the_opener():
             return Observation(observation_id=f'o{self.count}', document_version='v', tab_id='tab',
                                url='about:blank', title='Vendors',
                                text='Vendor form' if form else 'Vendor' if opened else 'Vendors list',
-                               elements=[Element(id='quick', role='button', name='Quick new')]
-                               + ([Element(id='vendor', role='menuitem', name='Vendor')] if opened else []))
+                               elements=[Element(id='quick', role='button', name='Quick new',
+                                                 popup_kind='menu' if owned else None,
+                                                 popup_open=opened if owned else None)]
+                               + ([Element(id='vendor', role='menuitem', name='Vendor',
+                                           menu_owner='quick' if owned else None)] if opened else []))
 
         async def execute(self, action):
             self.calls.append(action.element_ref)
@@ -401,6 +408,7 @@ async def test_confirmed_menu_opening_replans_before_repeating_the_opener():
             if not backend.calls:
                 target, outcome = 'quick', 'none'
             elif backend.calls == ['quick'] and phases[-1] == 'initial':
+                assert not owned  # Owned expansion must bypass this false pending outcome.
                 # The previous opener is confirmed, but the fast head still
                 # proposes the stale next click. It must be discarded.
                 target, outcome = 'quick', 'confirmed'
@@ -417,3 +425,97 @@ async def test_confirmed_menu_opening_replans_before_repeating_the_opener():
     result = await DynamicController(definition, backend, Policy(), feedback=Brain()).run()
     assert result.status == 'success' and backend.calls == ['quick', 'vendor']
     assert phases == ['initial', 'ui_checkpoint', 'finish']
+
+
+@pytest.mark.parametrize('binding', ['aria', 'labelledby', 'inline', 'ambiguous', 'unowned'])
+async def test_rendered_menu_ownership_and_local_readback(binding):
+    relation = 'aria-controls="menu"' if binding == 'aria' else ''
+    label = 'aria-labelledby="quick"' if binding == 'labelledby' else ''
+    extra = '<button aria-haspopup="menu">Other</button>' if binding == 'ambiguous' else ''
+    container = 'div' if binding in {'inline', 'ambiguous'} else 'body'
+    html = f'''<{container}><button id="quick" aria-haspopup="menu" aria-expanded="false" {relation}
+      onclick="document.getElementById('menu').style.display='block';this.setAttribute('aria-expanded','true')">
+      Quick new</button>{extra}<ul id="menu" role="menu" {label} style="display:none">
+      <li role="menuitem">Vendor</li><li role="menuitem">Manual Journal</li></ul></{container}>'''
+    async with PlaywrightBackend(task()) as browser:
+        await browser.load_html(html)
+        before = await browser.observe()
+        trigger = next(e for e in before.elements if e.name == 'Quick new')
+        agent = DynamicController(task(), browser, None, feedback=None)
+        action = next(a for a in generate_dynamic(before, task()) if a.element_ref == trigger.id)
+        await agent.perform(action, before)
+        fresh = await browser.observe()
+        items = [e for e in fresh.elements if e.role == 'menuitem']
+        owned = binding in {'aria', 'labelledby', 'inline'}
+        assert all((e.menu_owner == trigger.id) == owned for e in items)
+        assert agent.confirm_visible_menu(fresh) is owned
+        if owned:
+            assert agent.ui_review_due and not agent.stage_review_due
+            assert agent.last_transition['confirmation_scope'] == 'menu_opened_ui'
+            assert agent.last_transition['business_commit_confirmed'] is False
+            assert not agent.memory.feedback.get('complete')
+        else:
+            assert agent.pending
+
+
+@pytest.mark.parametrize('case', ['same_frame', 'navigation', 'wrong_tab', 'replacement',
+                                 'different_owner', 'loading', 'dialog', 'runtime_error',
+                                 'unknown_receipt', 'already_open', 'no_items', 'disabled'])
+async def test_menu_expansion_never_confirms_ambiguous_or_business_effects(case):
+    before = observation()
+    before.elements = [Element(id='quick', role='button', name='Quick new',
+                               popup_kind='menu', popup_open=case == 'already_open')]
+    backend = AsyncMock()
+    backend.execute.return_value = Receipt(action_id='a', status='unknown' if case == 'unknown_receipt' else 'ok')
+    agent = DynamicController(task(), backend, None, feedback=None)
+    await agent.perform(next(a for a in generate_dynamic(before, task()) if a.element_ref == 'quick'), before)
+    fresh = before.model_copy(deep=True)
+    fresh.observation_id = 'o2'
+    fresh.elements[0].popup_open = True
+    fresh.elements.append(Element(id='vendor', role='menuitem', name='Vendor', menu_owner='quick'))
+    if case == 'same_frame':
+        fresh.observation_id = before.observation_id
+    elif case == 'navigation':
+        fresh.url = 'https://elsewhere.test'
+    elif case == 'wrong_tab':
+        fresh.tab_id = 'other'
+    elif case == 'replacement':
+        fresh.elements[0].id = 'replacement'
+    elif case == 'different_owner':
+        fresh.elements[-1].menu_owner = 'other'
+    elif case == 'loading':
+        fresh.loading = True
+    elif case == 'dialog':
+        fresh.dialogs = ['Confirm Submit?']
+    elif case == 'runtime_error':
+        fresh.errors = ['page_error:failed']
+    elif case == 'no_items':
+        fresh.elements.pop()
+    elif case == 'disabled':
+        fresh.elements[-1].enabled = False
+    assert not agent.confirm_visible_menu(fresh)
+    assert agent.pending and not agent.memory.confirmed_actions
+
+
+async def test_current_environment_confirmation_survives_advisory_memory_regression():
+    before = observation()
+    before.elements = [Element(id='yes', role='button', name='Yes')]
+    before.dialogs = ['Submit this document?']
+    backend = AsyncMock()
+    backend.execute.return_value = Receipt(action_id='a', status='ok')
+    agent = DynamicController(task(), backend, None, feedback=None)
+    agent.memory.resume_context = {'environment_recreated': True, 'recovery_scope': 'No committed data restored'}
+    await agent.perform(next(a for a in generate_dynamic(before, task()) if a.element_ref == 'yes'), before)
+    fresh = before.model_copy(update={'observation_id': 'o2', 'dialogs': [], 'text': 'SEP-0001 Submitted'})
+    assert agent.confirm_transition('confirmed', fresh, 'test readback')
+    agent.memory.feedback = {'working_memory': 'Prior session only; no fresh proof'}
+    context = agent.memory.context()
+    proof = context['current_environment_readbacks']['actions'][0]
+    assert proof['source']['observation_id'] == 'o2'
+    assert proof['source']['visible_excerpt'] == 'SEP-0001 Submitted'
+    assert proof['business_commit_confirmed'] is True
+    assert 'Inherited work at startup only' in context['resume_warning_scope']
+    recreated = Memory()
+    recreated.dynamic_mode = True
+    recreated.confirmed_actions = agent.memory.export()['confirmed_actions_archive']
+    assert not recreated.context()['current_environment_readbacks']['actions']

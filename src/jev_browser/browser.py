@@ -150,6 +150,42 @@ SNAPSHOT = r"""selector => {
       options:tag === 'select' ? [...el.options].filter(x => !x.disabled && !x.hidden).map(x => x.value) : []};
   }).filter(Boolean);
   const nodes = document.querySelectorAll(selector);
+  // Bind menu items only through rendered ARIA ownership or a unique local
+  // trigger. Portalled menus without such a relationship remain unowned.
+  const triggers = controls.filter(c => c.role === 'button' &&
+    ['menu','true'].includes(nodes[c.index].getAttribute('aria-haspopup')));
+  for (const c of triggers) {
+    c.popup_kind = 'menu';
+    const expanded = nodes[c.index].getAttribute('aria-expanded');
+    c.popup_open = expanded === 'true' ? true : expanded === 'false' ? false : null;
+  }
+  for (const item of controls.filter(c => c.role === 'menuitem')) {
+    const node = nodes[item.index], menu = node.closest('[role="menu"]');
+    let owners = triggers.filter(c => {
+      const trigger = nodes[c.index];
+      const ids = [trigger.getAttribute('aria-controls'), trigger.getAttribute('aria-owns')]
+        .filter(Boolean).join(' ').split(/\s+/);
+      return ids.some(id => {
+        const popup = document.getElementById(id);
+        return popup && visible(popup) && popup.contains(node);
+      }) || (menu && trigger.id &&
+        (menu.getAttribute('aria-labelledby') || '').split(/\s+/).includes(trigger.id));
+    });
+    if (!owners.length && menu) {
+      for (let scope = menu.parentElement; scope && scope !== document.body;
+           scope = scope.parentElement) {
+        const buttons = controls.filter(c => c.role === 'button' && scope.contains(nodes[c.index]));
+        if (buttons.length) {
+          owners = buttons.length === 1 && triggers.includes(buttons[0]) ? buttons : [];
+          break;
+        }
+      }
+    }
+    if (owners.length === 1) {
+      item.menu_owner = 'e' + owners[0].index;
+      owners[0].popup_open = true;
+    }
+  }
   if (front) {
     const fields = controls.filter(c => c.editable || c.selectable || ['checkbox','radio'].includes(c.role));
     const searchOnly = fields.length === 1 && fields[0].editable && fields[0].enabled &&
