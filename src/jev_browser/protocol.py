@@ -57,6 +57,8 @@ class Element(Model):
     activation_key: Literal["Escape"] | None = None
     grid_ref: str | None = None
     row_ref: str | None = None
+    option_owner: str | None = None
+    popup_open: bool | None = None
 
 
 class GridCell(Model):

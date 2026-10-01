@@ -241,6 +241,40 @@ SNAPSHOT = r"""selector => {
     }
     grids.push(grid);
   }
+  // Associate only rendered options with a unique visible editable combobox.
+  // ARIA ownership supports portalled lists; a smallest shared DOM container
+  // supports inline autocomplete widgets. Never guess from page-wide focus.
+  const combos = controls.filter(c => c.role === 'combobox' && c.editable);
+  for (const c of combos) c.popup_open = false;
+  for (const option of controls.filter(c => c.role === 'option')) {
+    const node = nodes[option.index];
+    let owners = combos.filter(c => {
+      const field = nodes[c.index];
+      const ids = [field.getAttribute('aria-controls'),field.getAttribute('aria-owns')]
+        .filter(Boolean).join(' ').split(/\s+/);
+      return ids.some(id => {
+        const list = document.getElementById(id);
+        return list && visible(list) && list.contains(node);
+      });
+    });
+    if (!owners.length) {
+      for (let scope = node.parentElement; scope && scope !== document.body;
+           scope = scope.parentElement) {
+        if (scope.matches('.grid-row,tr,[role="row"],.grid-field,.form-grid,form')) break;
+        const fields = controls.filter(c => (c.editable || c.selectable) &&
+          scope.contains(nodes[c.index]));
+        if (fields.length) {
+          owners = fields.length === 1 && combos.includes(fields[0]) ? fields : [];
+          break;
+        }
+      }
+    }
+    if (owners.length === 1) {
+      const owner = owners[0]; owner.popup_open = true;
+      option.option_owner = 'e' + owner.index;
+      option.grid_ref = owner.grid_ref; option.row_ref = owner.row_ref;
+    }
+  }
   return {url:location.href,title:document.title,text:lines.join('\n'),controls,
     grids,
     visible_frames:[...document.querySelectorAll('iframe,frame')].filter(visible).length,

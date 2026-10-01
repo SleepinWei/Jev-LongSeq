@@ -93,6 +93,10 @@ async def test_compact_stages_never_replace_readback_or_final_review(phase, tran
         if compact:
             assert "current_visible_evidence" not in content
             response = {"next_goal": "Search", "working_memory": "Pending all three"}
+        elif transition and not transition.get("resolved") and phase != "finish":
+            assert set(fields) == {"last_outcome", "evidence_ids"}
+            assert "readback_evidence" in content
+            response = {"last_outcome": "pending", "evidence_ids": []}
         else:
             assert "current_visible_evidence" in content
             assert "complete" in fields and "notes" in fields and "last_outcome" in fields

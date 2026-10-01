@@ -225,7 +225,7 @@ async def test_ungrounded_feedback_repairs_once_and_never_executes():
     backend = UnknownBackend()
     agent = DynamicController(task(), backend, FirstClick(), feedback=Hallucinating())
     result = await agent.run()
-    assert result.status == "failed" and result.feedback_calls == 2
+    assert result.status == "needs_attention" and result.feedback_calls == 2
     assert backend.dispatched == 0
     assert all(
         "Invented success" not in e["source"]["quote"] for e in agent.memory.evidence.values()
@@ -1187,13 +1187,12 @@ async def test_feedback_wire_separates_modal_scope_and_direct_readback_from_cont
     def respond(request):
         payload = json.loads(request.content)
         content = json.loads(payload['messages'][1]['content'])
-        assert content['evidence_contract']['interactive_scope'] == 'dialog'
-        assert content['evidence_contract']['historical_references_are_not_current_proof']
-        assert 'readback_quote' in content['schema']['properties']
-        assert 'Active dialog' in content['current_visible_evidence']
+        assert content['untrusted_observation']['dialogs'] == [question]
+        assert set(content['schema']['properties']) == {'last_outcome', 'evidence_ids'}
+        assert payload['max_tokens'] == 4096
+        ref = next(key for key, quote in content['readback_evidence'].items() if quote == question)
         return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(
-            Feedback(next_goal='Inspect the confirmation', last_outcome='confirmed',
-                     readback_quote=question).model_dump())}}]})
+            {'last_outcome': 'confirmed', 'evidence_ids': [ref]})}}]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         brain = JsonFeedback(ModelTransport('https://test.example', 'test', 'test', client=client))

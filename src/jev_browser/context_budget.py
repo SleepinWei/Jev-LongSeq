@@ -27,6 +27,7 @@ CONTROL_DEFAULTS = {
     "read_only": False, "required": False,
     "activation_key": None,
     "grid_ref": None, "row_ref": None,
+    "option_owner": None, "popup_open": None,
 }
 
 

@@ -12,7 +12,7 @@ def efficiency_profile(ledger: list[dict], *, actions: int, elapsed_s: float) ->
         kind = record["kind"]
         group = (
             "brain"
-            if kind in {"dynamic_feedback", "dynamic_finish", "dynamic_memory_compression"}
+            if kind in {"dynamic_feedback", "dynamic_readback", "dynamic_finish", "dynamic_memory_compression"}
             else "input_helper"
             if kind == "dynamic_input"
             else "jev"
