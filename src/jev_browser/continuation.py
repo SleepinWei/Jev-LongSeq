@@ -9,6 +9,7 @@ import json
 import time
 from collections import Counter
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .dynamic import generate_dynamic
 from .memory import Memory
@@ -128,7 +129,37 @@ def load_continuation(directory, task, manifest, *, ui_directory=None, _visited=
         })
     calls = [json.loads(line) for line in (directory / "model-calls.jsonl").read_text().splitlines()]
     return {"memory": memory, "recipe": recipe, "manifest": previous,
-            "model_names": {r["model"] for r in calls}, "last_observation": last}
+            "model_names": {r["model"] for r in calls}, "model_calls": calls,
+            "last_observation": last}
+
+
+def validate_continuation_models(checkpoint, policy, brain, *, brain_model=None):
+    """Require original models unless an explicit, auditable brain migration is requested."""
+    if not brain_model:
+        if {policy.model, brain.model} != checkpoint["model_names"]:
+            raise ValueError("continuation model configuration differs from the original")
+        return
+    calls = checkpoint.get("model_calls", [])
+    policy_calls = [r for r in calls if r.get("kind") == "jev"]
+    brain_calls = [r for r in calls if r.get("kind", "").startswith("dynamic_")]
+    if not policy_calls or not brain_calls or len(policy_calls) + len(brain_calls) != len(calls):
+        raise ValueError("brain migration requires an unambiguous Jev/brain checkpoint ledger")
+    if {r["model"] for r in policy_calls} != {policy.model}:
+        raise ValueError("brain migration cannot change the Jev policy model")
+    old_policy_hosts = {r.get("endpoint_host") for r in policy_calls}
+    if old_policy_hosts != {urlsplit(policy.endpoint).hostname}:
+        raise ValueError("brain migration cannot change the Jev policy provider")
+    if brain.model != brain_model:
+        raise ValueError("configured brain model differs from --saas-resume-brain-model")
+    checkpoint["memory"].resume_context["brain_migration"] = {
+        "explicitly_requested": True,
+        "previous_models": sorted({r["model"] for r in brain_calls}),
+        "previous_endpoint_hosts": sorted({r.get("endpoint_host") or "unknown" for r in brain_calls}),
+        "model": brain.model,
+        "endpoint_host": urlsplit(brain.endpoint).hostname,
+        "policy_model": policy.model,
+        "policy_endpoint_host": urlsplit(policy.endpoint).hostname,
+    }
 
 
 async def replay_draft_step(browser, task, source, operation, value, observer, index):

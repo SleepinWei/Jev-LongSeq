@@ -3,7 +3,12 @@ import json
 import httpx
 import pytest
 
-from jev_browser.continuation import load_continuation, reconstruct_ui, restore_controller
+from jev_browser.continuation import (
+    load_continuation,
+    reconstruct_ui,
+    restore_controller,
+    validate_continuation_models,
+)
 from jev_browser.dynamic import DynamicController, Feedback, JsonFeedback
 from jev_browser.memory import Memory
 from jev_browser.models import ModelTransport, state
@@ -50,6 +55,64 @@ def checkpoint_files(tmp_path):
     (tmp_path / "trajectory.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
     (tmp_path / "model-calls.jsonl").write_text(json.dumps({"model": "test"}))
     return tmp_path, task, manifest, memory, draft
+
+
+@pytest.mark.parametrize("change", ["brain", "policy", "declaration", "provider", "legacy", "mixed"])
+def test_brain_migration_rejects_undeclared_or_ambiguous_changes(checkpoint_files, change):
+    path, task, manifest, _, _ = checkpoint_files
+    calls = [{"kind": "jev", "model": "jev-latest", "endpoint_host": "api.typesafe.ai"},
+             {"kind": "dynamic_feedback", "model": "old-brain", "endpoint_host": "old.example"}]
+    (path / "model-calls.jsonl").write_text("\n".join(json.dumps(r) for r in calls))
+    checkpoint = load_continuation(path, task, manifest)
+    policy = ModelTransport("https://api.typesafe.ai/v1/systemone", "test-key", "jev-latest")
+    brain = ModelTransport("https://api.arc-bench.com/v1/chat/completions", "test-key", "deepseek-v4-flash")
+    declared = "deepseek-v4-flash"
+    if change == "brain":
+        declared = None
+    elif change == "policy":
+        policy.model = "other-policy"
+    elif change == "declaration":
+        declared = "different-brain"
+    elif change == "provider":
+        policy.endpoint = "https://other.example/v1/systemone"
+    elif change == "legacy":
+        checkpoint["model_calls"] = [{"model": "old-brain"}]
+    elif change == "mixed":
+        checkpoint["model_calls"].append({"kind": "policy", "model": "other"})
+    with pytest.raises(ValueError):
+        validate_continuation_models(checkpoint, policy, brain, brain_model=declared)
+    assert "brain_migration" not in checkpoint["memory"].resume_context
+
+
+def test_brain_migration_records_provenance_without_changing_goal_or_memory(checkpoint_files):
+    path, task, manifest, _, _ = checkpoint_files
+    calls = [{"kind": "jev", "model": "jev-latest", "endpoint_host": "api.typesafe.ai"},
+             {"kind": "dynamic_feedback", "model": "deepseek-flash", "endpoint_host": "api.deepseek.com"},
+             {"kind": "dynamic_input", "model": "deepseek-flash", "endpoint_host": "api.deepseek.com"}]
+    (path / "model-calls.jsonl").write_text("\n".join(json.dumps(r) for r in calls))
+    checkpoint = load_continuation(path, task, manifest)
+    before = checkpoint["memory"].export()
+    policy = ModelTransport("https://api.typesafe.ai/v1/systemone", "test-key", "jev-latest")
+    brain = ModelTransport("https://api.arc-bench.com/v1/chat/completions", "test-key", "deepseek-v4-flash")
+    validate_continuation_models(checkpoint, policy, brain, brain_model=brain.model)
+    after = checkpoint["memory"].export()
+    migration = after["resume_context"].pop("brain_migration")
+    assert after == before
+    assert migration["previous_models"] == ["deepseek-flash"]
+    assert migration["previous_endpoint_hosts"] == ["api.deepseek.com"]
+    assert migration["endpoint_host"] == "api.arc-bench.com"
+    assert migration["model"] == brain.model
+    assert migration["policy_model"] == policy.model
+
+
+def test_legacy_checkpoint_keeps_strict_default_model_check(checkpoint_files):
+    path, task, manifest, _, _ = checkpoint_files
+    checkpoint = load_continuation(path, task, manifest)
+    client = ModelTransport("https://example.com", "test-key", "test")
+    validate_continuation_models(checkpoint, client, client)
+    client.model = "other"
+    with pytest.raises(ValueError, match="model configuration differs"):
+        validate_continuation_models(checkpoint, client, client)
 
 
 async def test_resume_preserves_prompt_ledger_archive_and_history_without_replaying_unknown(checkpoint_files):

@@ -41,6 +41,8 @@ def add_options(parser):
     parser.add_argument("--saas-resume-from", help="Continue an unsaved LongSeq draft from a prior run directory")
     parser.add_argument("--saas-resume-ui-from",
                         help="Rewind UI to an earlier empty draft checkpoint, retaining latest memory")
+    parser.add_argument("--saas-resume-brain-model",
+                        help="Explicitly migrate the API brain to this model during Jev draft recovery")
 
 
 def checkout(args):
@@ -303,6 +305,8 @@ async def run_saas(args, selected, output):
         ),
     }
     checkpoint = None
+    if getattr(args, "saas_resume_brain_model", None) and not getattr(args, "saas_resume_from", None):
+        raise ValueError("--saas-resume-brain-model requires --saas-resume-from")
     if getattr(args, "saas_resume_ui_from", None) and not getattr(args, "saas_resume_from", None):
         raise ValueError("--saas-resume-ui-from requires --saas-resume-from")
     if getattr(args, "saas_resume_from", None):

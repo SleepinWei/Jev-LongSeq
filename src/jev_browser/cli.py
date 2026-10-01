@@ -201,11 +201,14 @@ async def run_trial(args, *, count=None, output=None):
     try:
         policy, planner, transports = adapters(args)
         checkpoint = getattr(args, "_resume_checkpoint", None)
-        if checkpoint and {client.model for client in transports} != checkpoint["model_names"]:
-            raise ValueError("continuation model configuration differs from the original")
         if checkpoint:
-            if any(not isinstance(client, ModelTransport) for client in transports):
+            if len(transports) != 2 or any(not isinstance(client, ModelTransport) for client in transports):
                 raise ValueError("draft continuation currently requires API model transports")
+            from .continuation import validate_continuation_models
+
+            validate_continuation_models(
+                checkpoint, policy.transport, planner.transport,
+                brain_model=getattr(args, "saas_resume_brain_model", None))
             for client in transports:
                 client.required_goal = task.objective
             manifest["continuation"]["per_request_prompt_guard"] = True

@@ -24,6 +24,16 @@ HRMS、BigCapital、Twenty。每个任务都重建容器，判分后清理。
 在 Mac mini 项目目录执行；包装脚本使用项目 `.env`，不复制本机密钥或浏览器会话。
 输出目录必须是全新目录。
 
+LongSeq brain 可使用 OpenAI 兼容的 ArcBench 模型接口：在 macmini 的私密 env 文件中设置
+`PLANNER_ENDPOINT=https://api.arc-bench.com/v1/chat/completions`、
+`PLANNER_MODEL=deepseek-v4-flash` 和 `PLANNER_API_KEY`，保留原 `TYPESAFE_*` Jev 配置。
+通过 `JEV_ENV_FILE` 选择该文件；不要提交密钥。
+若从旧 brain 模型的检查点续跑，须显式添加
+`--saas-resume-brain-model deepseek-v4-flash`。该选项仅允许迁移 brain，
+校验 Jev 模型及 provider 不变，并在 `continuation.brain_migration` 中记录旧、新配置。
+原任务、权限、工作记忆以及每次请求的原目标校验继续保留。
+模型变化后的成绩应作为新的实验配置对比。
+
 ```bash
 cd ~/CodeProjects/Jev-LongSeq
 
