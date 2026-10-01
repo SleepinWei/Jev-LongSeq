@@ -36,11 +36,15 @@ def observation():
 
 
 @pytest.mark.parametrize("binding", ["inline", "aria", "ambiguous"])
-async def test_browser_binds_options_only_to_unique_visible_input(binding):
+@pytest.mark.parametrize("initial_blank", [False, True])
+async def test_browser_binds_options_only_to_unique_visible_input(binding, initial_blank):
     html = '''<div class="awesomplete"><label>User<input id="user" role="combobox"
       aria-controls="list" value="rajesh@example.test"></label>
       <ul id="list" role="listbox"><li role="option"
-        onclick="document.getElementById('list').style.display='none'">rajesh@example.test Rajesh</li></ul></div>'''
+        onclick="document.getElementById('user').value='rajesh@example.test';
+        document.getElementById('list').style.display='none'">rajesh@example.test Rajesh</li></ul></div>'''
+    if initial_blank:
+        html = html.replace('value="rajesh@example.test"', 'value=""')
     if binding == "inline":
         html = html.replace('aria-controls="list"', '')
     elif binding == "aria":
@@ -203,3 +207,91 @@ async def test_pending_readback_uses_its_own_budget_before_generic_no_progress()
     assert result.status == "needs_attention" and "readback unresolved" in result.reason
     assert phases == ["initial", "action_readback"]
     assert agent.pending and sum(e["operation"] == Operation.CLICK for e in agent.memory.events) == 1
+
+
+async def test_light_readback_does_not_reset_stage_clock_or_evidence_cursor():
+    obs = observation()
+    memory = Memory()
+    memory.dynamic_mode = True
+    memory.feedback = {"next_goal": "Continue", "working_memory": "Unfinished work",
+                       "evidence_cursor": 2, "action_cursor": 3}
+
+    def respond(request):
+        context = json.loads(json.loads(request.content)["messages"][-1]["content"])
+        ref = next(k for k, v in context["readback_evidence"].items() if v == "Not Saved")
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
+            "last_outcome": "confirmed", "evidence_ids": [ref]})}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        brain = JsonFeedback(ModelTransport("https://test.example", "test", "test", client=client))
+        agent = DynamicController(task(), None, None, feedback=brain)
+        agent.memory = memory
+        agent.effective_actions, agent.actions = 10, 13
+        agent.last_brain_action, agent.last_brain_attempt = 1, 2
+        agent.pending = {"resolved": False}
+        result = await agent.review(obs, phase="action_readback")
+    assert result._local_readback
+    assert (agent.last_brain_action, agent.last_brain_attempt) == (1, 2)
+    assert agent.memory.feedback["evidence_cursor"] == 2
+    assert agent.memory.feedback["action_cursor"] == 3
+    assert agent.memory.feedback["working_memory"] == "Unfinished work"
+
+
+@pytest.mark.parametrize("scope,command,expected", [
+    ("action_effect", "S a ve", True), ("business_commit", "Yes", True),
+    ("dialog_opened", "Submit", False), ("draft_row_added", "Add row", False),
+])
+async def test_only_write_boundaries_schedule_stage_planning(scope, command, expected):
+    before = observation()
+    before.elements = [Element(id="button", role="button", name=command)]
+    backend = AsyncMock()
+    backend.execute.return_value = Receipt(action_id="a", status="ok")
+    agent = DynamicController(task(), backend, None, feedback=None)
+    selected = next(a for a in generate_dynamic(before, task()) if a.element_ref == "button")
+    await agent.perform(selected, before)
+    agent.pending["confirmation_scope"] = scope
+    fresh = before.model_copy(update={"observation_id": "o2", "text": "Saved result"})
+    assert agent.confirm_transition("confirmed", fresh, "test readback")
+    assert agent.stage_review_due is expected
+
+
+async def test_save_checkpoint_replans_before_dispatching_old_next_choice():
+    definition = Task(id="save", control_mode="dynamic", sandbox=True,
+                      objective="Save this document and verify it.")
+    phases = []
+
+    class Brain:
+        async def review(self, task, obs, memory, *, phase, **kwargs):
+            phases.append(phase)
+            complete = phase in {"write_checkpoint", "finish"}
+            return Feedback(next_goal="Verify saved document" if complete else "Save the draft",
+                            complete=complete, last_outcome="none", answer="Saved" if complete else "",
+                            notes=[{"quote": "Saved" if complete else "Draft"}])
+
+    class Policy:
+        async def choose(self, task, obs, memory, contract, candidates):
+            # Deliberately propose Save again; the controller must discard this
+            # choice when the previous Save is confirmed and a checkpoint is due.
+            return Decision(choice=next(a.id for a in candidates if a.element_ref == "save"),
+                            outcome="confirmed" if memory.pending_writes else "none")
+
+    class Backend:
+        calls = 0
+        observations = 0
+
+        async def observe(self):
+            self.observations += 1
+            return Observation(observation_id=f"o{self.observations}", document_version="v",
+                               tab_id="tab", url="about:blank", title="Document",
+                               text="Saved" if self.calls else "Draft",
+                               elements=[Element(id="save", role="button", name="Save")])
+
+        async def execute(self, action):
+            self.calls += 1
+            return Receipt(action_id=action.id, status="ok")
+
+    backend = Backend()
+    agent = DynamicController(definition, backend, Policy(), feedback=Brain())
+    result = await agent.run()
+    assert result.status == "success" and backend.calls == 1
+    assert phases == ["initial", "write_checkpoint", "finish"]

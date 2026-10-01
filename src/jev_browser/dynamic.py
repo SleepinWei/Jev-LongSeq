@@ -58,6 +58,7 @@ class EvidenceNote(Model):
 
 class Feedback(Model):
     _note_diagnostics: list = PrivateAttr(default_factory=list)
+    _local_readback: bool = PrivateAttr(default=False)
     next_goal: str = Field(max_length=4000)
     notes: list[EvidenceNote] = Field(default_factory=list, max_length=12)
     last_outcome: Literal["none", "confirmed", "pending", "unknown"] = "none"
@@ -323,7 +324,7 @@ class JsonFeedback:
                      retrieved_evidence=None):
         if phase != "finish" and transition and not transition.get("resolved"):
             return await self.readback(task, obs, memory, transition, diagnostic=diagnostic)
-        compact = (phase in {"initial", "step", "stage_budget"}
+        compact = (phase in {"initial", "step", "stage_budget", "write_checkpoint"}
                    and (not transition or transition.get("resolved")))
         content = {
             **state(task, obs, memory, None),
@@ -502,13 +503,15 @@ class JsonFeedback:
         if result.last_outcome == "confirmed" and not result.evidence_ids:
             raise UngroundedFeedback([{"loc": ["evidence_ids"], "type": "confirmation_requires_current_evidence"}])
         quotes = [lines[ref] for ref in dict.fromkeys(result.evidence_ids)]
-        return Feedback(next_goal=memory.feedback.get("next_goal") or task.objective,
+        feedback = Feedback(next_goal=memory.feedback.get("next_goal") or task.objective,
                         working_memory=memory.feedback.get("working_memory", ""),
                         blockers=memory.feedback.get("blockers", []),
                         last_outcome=result.last_outcome,
                         readback_quote=quotes[0] if quotes else "",
                         notes=[EvidenceNote(quote=q, interpretation="Local action effect only")
                                for q in quotes])
+        feedback._local_readback = True
+        return feedback
 
     async def compress(self, task, obs, memory, text):
         context = state(task, obs, memory, None)
@@ -616,6 +619,7 @@ class DynamicController(Controller):
         self.stale_click = None
         self.input_noop_scope = None
         self.input_noops = {}
+        self.stage_review_due = False
 
     def input_suppression(self, obs):
         scope = digest([semantic_key(obs), self.memory.feedback.get("next_goal"),
@@ -806,13 +810,20 @@ class DynamicController(Controller):
         feedback.working_memory = await self.compact_memory(
             obs, feedback.working_memory or old_memory
         )
+        previous_feedback = self.memory.feedback
         self.memory.feedback = feedback.model_dump()
         if not feedback.working_memory:
             self.memory.feedback["working_memory"] = old_memory
-        self.memory.feedback["evidence_cursor"] = len(self.memory.evidence)
-        self.memory.feedback["action_cursor"] = len(self.memory.events)
-        self.last_brain_action = self.effective_actions
-        self.last_brain_attempt = self.actions
+        if feedback._local_readback:
+            # A local check neither consumes unsummarized evidence nor restarts
+            # the stage-planning interval. Full planning still advances the task.
+            for cursor in ("evidence_cursor", "action_cursor"):
+                self.memory.feedback[cursor] = previous_feedback.get(cursor, 0)
+        else:
+            self.memory.feedback["evidence_cursor"] = len(self.memory.evidence)
+            self.memory.feedback["action_cursor"] = len(self.memory.events)
+            self.last_brain_action = self.effective_actions
+            self.last_brain_attempt = self.actions
         self.log("feedback", phase=phase, feedback=feedback.model_dump(),
                  effective_actions=self.effective_actions, attempted_actions=self.actions)
         return feedback
@@ -917,10 +928,11 @@ class DynamicController(Controller):
                 if element.role == "option" and element.option_owner:
                     owners = [e for e in obs.elements if e.id == element.option_owner
                               and e.role == "combobox" and e.editable and e.enabled
-                              and e.popup_open is True and e.value and e.value != "[redacted]"
-                              and (element.name == e.value or element.name.startswith(e.value + " "))]
+                              and e.popup_open is True and e.value != "[redacted]"
+                              and e.grid_ref == element.grid_ref and e.row_ref == element.row_ref]
                     if len(owners) == 1:
                         self.pending["option_input"] = owners[0].model_dump()
+                        self.pending["option_text"] = element.name
                 if (element.role == "button" and element.grid_ref and not element.row_ref
                         and re.fullmatch(r"(?:add|insert)(?: a)? row|添加行|新增行", element.name.strip(), re.I)):
                     grids = [g for g in obs.grids if g.id == element.grid_ref]
@@ -1094,6 +1106,13 @@ class DynamicController(Controller):
         self.memory.pending_writes.pop(key, None)
         self.memory.confirmed_writes.add(key)
         self.last_transition = {**self.pending, "resolved": True}
+        scope = self.pending.get("confirmation_scope")
+        target = self.pending.get("click_target", {})
+        command = "".join(target.get("name", "").casefold().split())
+        if (scope == "business_commit" or
+                (scope != "dialog_opened" and target.get("role") == "button"
+                 and command in {"save", "submit", "publish", "approve", "保存", "提交", "发布", "审批"})):
+            self.stage_review_due = True
         self.pending = None
         self.log("transition_confirmed", key=key, basis=basis,
                  confirmation_scope=self.last_transition.get("confirmation_scope", "action_effect"))
@@ -1166,7 +1185,9 @@ class DynamicController(Controller):
                    and (e.role, e.name, e.grid_ref, e.row_ref) ==
                        (target["role"], target["name"], target.get("grid_ref"), target.get("row_ref"))
                    and e.editable and e.enabled and not e.read_only
-                   and e.value == target["value"] and e.popup_open is False]
+                   and e.value and e.value != "[redacted]" and e.popup_open is False
+                   and (pending["option_text"] == e.value or
+                        pending["option_text"].startswith(e.value + " "))]
         if len(matches) != 1 or any(e.option_owner == target["id"] for e in obs.elements):
             return False
         pending["confirmation_scope"] = "option_selected_ui"
@@ -1174,7 +1195,7 @@ class DynamicController(Controller):
         pending["link_resolution_confirmed"] = False
         pending["readback_proof"] = {
             "input_ref": target["id"], "grid_ref": target.get("grid_ref"),
-            "row_ref": target.get("row_ref"), "value": target["value"],
+            "row_ref": target.get("row_ref"), "value": matches[0].value,
             "popup_open": False, "observation_id": obs.observation_id,
         }
         if not self.confirm_transition("confirmed", obs, "fresh_scoped_option_ui"):
@@ -1182,7 +1203,7 @@ class DynamicController(Controller):
         self.memory.feedback["working_memory"] = (
             self.memory.feedback.get("working_memory", "") + "\nRECENT LOCAL UI READBACK: "
             f"grid={target.get('grid_ref')}; row={target.get('row_ref')}; "
-            f"{target['name']}={target['value']}; matching option clicked and dropdown closed. "
+            f"{target['name']}={matches[0].value}; matching option clicked and dropdown closed. "
             "Local UI only; link resolution and business persistence remain unverified.")
         return True
 
@@ -1425,6 +1446,9 @@ class DynamicController(Controller):
             self.confirm_visible_dialog(obs)
             if self.confirm_visible_grid_row(obs):
                 trigger = "draft_row_added"
+            if self.stage_review_due and not self.pending:
+                trigger = "write_checkpoint"
+                self.stage_review_due = False
             # The opener may be unchanged even though its link opened successfully.
             # Switch first and inspect the destination; never confirm from a tab URL alone.
             destinations = [tab for tab, url in self.readback_tabs(obs).items()
@@ -1447,7 +1471,8 @@ class DynamicController(Controller):
                 previous_evidence = evidence_keys
             signature = semantic_key(obs)
             visits[signature] = visits.get(signature, 0) + 1
-            if visits[signature] > self.budget.no_progress_limit and not self.pending:
+            if (visits[signature] > self.budget.no_progress_limit and not self.pending
+                    and trigger != "write_checkpoint"):
                 if signature in recovered_states:
                     return self.result("needs_attention", "repeated state after brain recovery")
                 recovered_states.add(signature)
@@ -1465,9 +1490,12 @@ class DynamicController(Controller):
                 "same_value_inputs_suppressed": list(self.input_noops.values())
                     if self.input_suppression(obs) else [],
             }
-            if self.effective_actions - self.last_brain_action >= self.budget.brain_interval:
+            if (self.effective_actions - self.last_brain_action >= self.budget.brain_interval
+                    and (not self.pending or not self.pending.get("stage_readback_reviewed"))):
                 trigger = trigger or "stage_budget"
             if trigger:
+                if self.pending and trigger == "stage_budget":
+                    self.pending["stage_readback_reviewed"] = True
                 self.log("brain_requested", reason=trigger)
                 assessment = await self.review(obs, phase=trigger)
                 if self.pending and assessment.last_outcome == "confirmed":
@@ -1568,7 +1596,7 @@ class DynamicController(Controller):
                         if reason := await self.perform(waiting, obs):
                             return self.result("needs_attention", reason)
                         continue  # discard proposed next action until readback is confirmed
-                    if guidance_changed:
+                    if guidance_changed or self.stage_review_due:
                         continue  # the previous next-action proposal predates the revised guidance
                 threshold = self.budget.confidence_threshold
                 if (
