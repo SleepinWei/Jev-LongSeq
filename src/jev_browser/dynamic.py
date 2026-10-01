@@ -1317,6 +1317,34 @@ class DynamicController(Controller):
             self.log("context_budget_unresolved", **exc.metrics, pending_preserved=bool(self.pending))
             return self.result("needs_attention", "protected context cannot fit; pending retained; no request or resubmission")
 
+    async def choose_with_context_pages(self, obs, candidates, *, limit, offset):
+        """Retry only pre-dispatch context overflow with a smaller navigable page."""
+        while True:
+            try:
+                decision = await self.observer.measure(
+                    "policy.choose", self.policy.choose, self.task, obs, self.memory, None, candidates)
+                return decision, candidates, limit
+            except ContextBudgetExceeded as exc:
+                # Without a next-page operation a shorter list would make some
+                # observed controls inaccessible. Never trim protected state.
+                floor = len([a for a in candidates if a.operation in {
+                    Operation.FINISH, Operation.WAIT, Operation.SCROLL,
+                    Operation.REPLAN, Operation.BACK}]) + 2
+                reduced = max(floor, min(limit - 1, len(candidates) // 2))
+                if (Operation.MORE_CANDIDATES not in self.task.allowed_operations
+                        or reduced >= limit or len(candidates) <= floor):
+                    raise
+                smaller = generate_dynamic(obs, self.task, limit=reduced, offset=offset,
+                    consumed=self.consumed, suppressed_inputs=self.input_suppression(obs))
+                if len(smaller) >= len(candidates):
+                    raise
+                self.log("candidate_context_page_reduced", previous_limit=limit,
+                         limit=reduced, previous_candidates=len(candidates),
+                         candidates=len(smaller), offset=offset, overflow_bytes=exc.metrics.get("after_bytes"),
+                         pending_preserved=bool(self.pending), browser_action_dispatched=False,
+                         all_controls_preserved=True)
+                candidates, limit = smaller, reduced
+
     def confirm_transition(self, outcome, obs, basis):
         if not self.pending:
             return True
@@ -1709,6 +1737,7 @@ class DynamicController(Controller):
         previous_evidence = frozenset()
         recovered_states: set[str] = set()
         offset = loading = 0
+        candidate_limit = self.budget.candidate_limit
         trigger = getattr(self, "initial_phase", "initial")
         for _ in range(self.budget.max_cycles):
             self.cycles += 1
@@ -1805,7 +1834,7 @@ class DynamicController(Controller):
                 candidates = generate_dynamic(
                     obs,
                     self.task,
-                    limit=self.budget.candidate_limit,
+                    limit=candidate_limit,
                     offset=offset,
                     consumed=self.consumed,
                     suppressed_inputs=self.input_suppression(obs),
@@ -1818,10 +1847,11 @@ class DynamicController(Controller):
                              action_dispatched=False, pending_preserved=bool(self.pending))
                     trigger = "stale_target_changed"
                     continue
-                decision = (Decision(choice=refreshed.id) if refreshed else
-                            await self.observer.measure(
-                                "policy.choose", self.policy.choose, self.task, obs,
-                                self.memory, None, candidates))
+                if refreshed:
+                    decision = Decision(choice=refreshed.id)
+                else:
+                    decision, candidates, candidate_limit = await self.choose_with_context_pages(
+                        obs, candidates, limit=candidate_limit, offset=offset)
                 self.log(
                     "decision",
                     decision=decision.model_dump(),

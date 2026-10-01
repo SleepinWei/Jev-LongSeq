@@ -25,6 +25,66 @@ def page():
                                          value='2026-10-01')])
 
 
+async def test_context_overflow_shrinks_candidate_page_without_losing_state_or_navigation():
+    from jev_browser.context_budget import ContextBudgetExceeded
+    from jev_browser.dynamic import action_key, generate_dynamic
+    from jev_browser.protocol import Decision
+
+    obs = page()
+    obs.elements = [Element(id=f'e{i}', role='button', name=f'Record {i}') for i in range(100)]
+    policy = AsyncMock()
+    seen = []
+    controller = DynamicController(definition(), AsyncMock(), policy, feedback=None)
+    controller.pending = {'key': 'saved-write', 'dispatch_status': 'ok', 'waits': 2,
+                          'action': {'operation': 'click', 'description': 'Save vendor'}}
+    controller.memory.pending_writes['saved-write'] = controller.pending.copy()
+    snapshot = json.dumps(controller.memory.export(), sort_keys=True)
+    async def choose(task, current, memory, contract, candidates):
+        assert task is controller.task and current is obs and memory is controller.memory
+        seen.append(len(candidates))
+        if len(candidates) > 25:
+            raise ContextBudgetExceeded('too many candidates', {'after_bytes': 48005})
+        return Decision(choice=next(a.id for a in candidates if a.operation == Operation.WAIT))
+    policy.choose.side_effect = choose
+    full = generate_dynamic(obs, controller.task)
+    decision, candidates, limit = await controller.choose_with_context_pages(
+        obs, full, limit=250, offset=0)
+    assert seen == sorted(seen, reverse=True) and len(seen) > 1
+    assert next(a for a in candidates if a.id == decision.choice).operation == Operation.WAIT
+    assert any(a.operation == Operation.MORE_CANDIDATES for a in candidates)
+    # Every observed action remains reachable through pages, without dispatch.
+    reachable = set()
+    for offset in range(100):
+        reachable.update(action_key(a, obs) for a in generate_dynamic(obs, controller.task, limit=limit, offset=offset))
+    assert {action_key(a, obs) for a in full} <= reachable
+    assert json.dumps(controller.memory.export(), sort_keys=True) == snapshot
+    assert controller.pending['key'] == 'saved-write'
+    controller.backend.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize('pagination', [True, False])
+async def test_context_overflow_stops_when_protected_state_cannot_fit_or_paging_is_disallowed(pagination):
+    from jev_browser.context_budget import ContextBudgetExceeded
+    from jev_browser.dynamic import generate_dynamic
+
+    task = definition()
+    if not pagination:
+        task.allowed_operations = [op for op in task.allowed_operations if op != Operation.MORE_CANDIDATES]
+    obs = page()
+    obs.elements = [Element(id=f'e{i}', role='button', name=f'Record {i}') for i in range(40)]
+    policy = AsyncMock()
+    policy.choose.side_effect = ContextBudgetExceeded('protected state too large')
+    controller = DynamicController(task, AsyncMock(), policy, feedback=None)
+    controller.pending = {'key': 'must-retain'}
+    with pytest.raises(ContextBudgetExceeded):
+        await controller.choose_with_context_pages(obs, generate_dynamic(obs, task), limit=250, offset=0)
+    assert policy.choose.await_count <= 6
+    if not pagination:
+        assert policy.choose.await_count == 1
+    assert controller.pending == {'key': 'must-retain'}
+    controller.backend.execute.assert_not_awaited()
+
+
 async def test_outer_deadline_retains_unknown_write_and_confirmations(tmp_path):
     class Interrupted(DynamicController):
         async def _loop(self):
