@@ -1,7 +1,7 @@
 import pytest
 
 from jev_browser.browser import PlaywrightBackend
-from jev_browser.context_budget import project_request
+from jev_browser.context_budget import ContextBudgetExceeded, project_request
 from jev_browser.dynamic import DynamicController, Feedback, evidence_text, generate_dynamic
 from jev_browser.memory import Memory
 from jev_browser.models import state
@@ -54,6 +54,7 @@ async def test_grid_observation_preserves_cell_values_when_editor_collapses(foot
         before = await browser.observe()
         assert len(before.grids) == 1
         grid = before.grids[0]
+        assert len(grid.id) == 17  # Stable compact ref, rather than a repeated DOM path.
         assert grid.name == "Activities" and len(grid.rows) == 1
         add = next(e for e in before.elements if e.name == "Add row")
         assert add.grid_ref == grid.id and add.row_ref is None
@@ -85,7 +86,10 @@ async def test_pending_model_can_continue_to_fill_new_row_without_repeating_add(
                                         if a.element_ref == target.id and a.operation == operation))
 
     class Brain:
+        phases = []
+
         async def review(self, *args, **kwargs):
+            self.phases.append(kwargs["phase"])
             return Feedback(next_goal="Add a row, then populate its Activity Name.", last_outcome="pending")
 
         async def value(self, *args):
@@ -93,7 +97,8 @@ async def test_pending_model_can_continue_to_fill_new_row_without_repeating_add(
 
     async with PlaywrightBackend(task()) as browser:
         await browser.load_html(GRID_HTML)
-        agent = DynamicController(task(), browser, Policy(), feedback=Brain(),
+        brain = Brain()
+        agent = DynamicController(task(), browser, Policy(), feedback=brain,
                                   budget=Budget(max_actions=2, readback_waits=2))
         result = await agent.run()
         assert result.status == "budget_exhausted"
@@ -103,6 +108,7 @@ async def test_pending_model_can_continue_to_fill_new_row_without_repeating_add(
         proof = next(e for e in agent.events if e["kind"] == "transition_confirmed")
         assert proof["basis"] == "fresh_visible_grid_append"
         assert proof["confirmation_scope"] == "draft_row_added"
+        assert brain.phases == ["initial", "draft_row_added"]
         assert not any(e["kind"] == "brain_requested" and e["reason"] == "action_readback"
                        for e in agent.events)
 
@@ -192,3 +198,23 @@ def test_context_projection_keeps_exact_current_grid_rows_and_empty_values():
     assert current["grids"] == payload["state"]["untrusted_observation"]["grids"]
     control = {**current["control_defaults"], **current["controls"]["new-field"]}
     assert control["value"] == "" and control["row_ref"] == "2"
+
+
+async def test_context_overflow_is_not_retried_as_invalid_feedback():
+    class Brain:
+        calls = 0
+
+        async def review(self, *args, **kwargs):
+            self.calls += 1
+            raise ContextBudgetExceeded("protected context exceeds budget", {"max_bytes": 1})
+
+    brain = Brain()
+    agent = DynamicController(task(), Backend(), None, feedback=brain)
+    before, _ = observations()
+    action = next(a for a in generate_dynamic(before, task()) if a.element_ref == "add")
+    await agent.perform(action, before)
+    with pytest.raises(ContextBudgetExceeded):
+        await agent.review(before, phase="action_readback")
+    assert brain.calls == 1
+    assert agent.pending and agent.memory.pending_writes
+    assert not any(e["kind"] == "invalid_feedback" for e in agent.events)

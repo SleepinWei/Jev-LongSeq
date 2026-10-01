@@ -196,6 +196,15 @@ SNAPSHOT = r"""selector => {
     }
     return parts.join('/');
   };
+  const gridRef = scope => {
+    let a = 2166136261, b = 2246822519;
+    for (const char of scopePath(scope)) {
+      a = Math.imul(a ^ char.charCodeAt(0), 16777619);
+      b = Math.imul(b ^ char.charCodeAt(0), 3266489917);
+    }
+    return 'g' + (a >>> 0).toString(16).padStart(8, '0') +
+      (b >>> 0).toString(16).padStart(8, '0');
+  };
   const rowSelector = '.grid-row,tr,[role="row"]';
   const rowNodes = [...document.querySelectorAll(rowSelector)].filter(row => visible(row) &&
     (!front || front.m.contains(row)) && !row.closest('thead,.grid-heading-row,.grid-header') &&
@@ -204,7 +213,7 @@ SNAPSHOT = r"""selector => {
     .filter(el => visible(el) && (!front || front.m.contains(el))).map(el => gridScope(el) || el);
   const scopes = [...new Set([...rowNodes.map(gridScope), ...containers])], grids = [];
   for (const scope of scopes) {
-    const id = scopePath(scope), rows = rowNodes.filter(row => gridScope(row) === scope);
+    const id = gridRef(scope), rows = rowNodes.filter(row => gridScope(row) === scope);
     const header = scope.querySelector('thead tr,.grid-heading-row,[role="row"]:has([role="columnheader"])');
     const cellSelector = '.grid-static-col,td,[role="gridcell"],[role="cell"]';
     const headers = header ? [...header.querySelectorAll('.grid-static-col,th,[role="columnheader"]')]

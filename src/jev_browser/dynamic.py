@@ -657,6 +657,8 @@ class DynamicController(Controller):
                 if feedback.complete and (not feedback.notes or not feedback.answer.strip()):
                     raise ValueError("completion requires fresh quoted evidence and an answer")
                 break
+            except ContextBudgetExceeded:
+                raise  # A protected-context overflow cannot be repaired by regenerating JSON.
             except (ValidationError, ValueError) as exc:
                 diagnostic = (
                     [{"loc": e["loc"], "type": e["type"]} for e in exc.errors()]
@@ -1245,7 +1247,8 @@ class DynamicController(Controller):
             loading = 0
             self.confirm_visible_input(obs)
             self.confirm_visible_dialog(obs)
-            self.confirm_visible_grid_row(obs)
+            if self.confirm_visible_grid_row(obs):
+                trigger = "draft_row_added"
             # The opener may be unchanged even though its link opened successfully.
             # Switch first and inspect the destination; never confirm from a tab URL alone.
             destinations = [tab for tab, url in self.readback_tabs(obs).items()
