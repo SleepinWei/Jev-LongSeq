@@ -181,7 +181,7 @@ class ModelTransport:
         call_id = uuid.uuid4().hex
         sizes = payload_sizes(payload)
         dynamic = kind.startswith("dynamic_")
-        cap = 120 if kind in {"dynamic_feedback", "dynamic_finish"} else 60
+        cap = 120 if kind in {"dynamic_feedback", "dynamic_finish", "dynamic_readback"} else 60
         deadline = time.monotonic() + cap if dynamic else float("inf")
         run_deadline = getattr(self.observer, "deadline", None)
         if run_deadline is not None:

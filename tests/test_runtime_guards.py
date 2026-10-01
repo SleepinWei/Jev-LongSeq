@@ -110,15 +110,17 @@ async def test_dynamic_retry_is_bounded_and_run_reserve_prevents_a_request():
         assert len(requests) == 2
 
 
-async def test_planning_request_can_use_whole_logical_allowance():
+@pytest.mark.parametrize('kind,allowance', [('dynamic_feedback', 120), ('dynamic_readback', 120),
+                                          ('dynamic_input', 60)])
+async def test_model_request_can_use_whole_logical_allowance(kind, allowance):
     def respond(request):
-        assert 119 < request.extensions['timeout']['read'] <= 120
+        assert allowance - 1 < request.extensions['timeout']['read'] <= allowance
         return httpx.Response(200, json={'choices': []})
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         transport = ModelTransport('https://test.example', 'test', 'test', client=client, timeout_s=180)
         await transport.post({'messages': [{'role': 'user', 'content': json.dumps(
             state(definition(), page(), Memory(), None))}]},
-                             'dynamic_feedback')
+                             kind)
 
 
 async def test_model_timeout_is_not_run_budget_exhaustion(tmp_path):

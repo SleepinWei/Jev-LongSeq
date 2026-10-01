@@ -334,6 +334,12 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppresse
         description = f"{element.role}: {element.name} | {element.context} | value={element.value}"
         if element.row_ref:
             description += f" | grid={element.grid_ref}; row={element.row_ref}"
+        elif element.grid_ref:
+            description += f" | grid={element.grid_ref}; no row"
+            if (not element.editable and element.role == "button"
+                    and any(element.name == cell.column for g in obs.grids if g.id == element.grid_ref
+                            for row in g.rows for cell in row.cells)):
+                description += "; column header, not a row field input"
         if element.activation_key:
             description = f"Activate observed {element.activation_key} shortcut: {element.name} | {element.context}"
         if not element.editable and not element.selectable and identifiable_click(element):
@@ -1328,6 +1334,11 @@ class DynamicController(Controller):
                 (scope not in {"dialog_opened", "menu_opened_ui"} and target.get("role") == "button"
                  and command in {"save", "submit", "publish", "approve", "保存", "提交", "发布", "审批"})):
             self.stage_review_due = True
+        elif self.pending.get("grid_append") and scope != "draft_row_added":
+            # A generic model confirmation can precede the exact append proof
+            # (e.g. blur resolves an earlier link field). Reconcile the new row
+            # before choosing from the old row's advisory goal.
+            self.ui_review_due = True
         elif (self.pending.get("before_menu_signature") is not None
               and self.pending["action"]["operation"] == Operation.CLICK
               and any(e.role == "menuitem" for e in obs.elements)

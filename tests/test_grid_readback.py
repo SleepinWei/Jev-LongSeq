@@ -113,6 +113,20 @@ async def test_pending_model_can_continue_to_fill_new_row_without_repeating_add(
                        for e in agent.events)
 
 
+async def test_generic_append_confirmation_requests_new_row_guidance():
+    async with PlaywrightBackend(task()) as browser:
+        await browser.load_html(GRID_HTML)
+        before = await browser.observe()
+        agent = DynamicController(task(), browser, None, feedback=None)
+        action = next(a for a in generate_dynamic(before, task()) if a.operation == Operation.CLICK
+                      and next(e for e in before.elements if e.id == a.element_ref).name == 'Add row')
+        await agent.perform(action, before)
+        after = await browser.observe()
+        assert agent.confirm_transition('confirmed', after, 'model_readback')
+        assert agent.ui_review_due and not agent.stage_review_due
+        assert not agent.memory.confirmed_actions[-1]['business_commit_confirmed']
+
+
 def observations(initial_rows=1):
     cell = GridCell(column="Activity", value="Original activity")
     original = GridRow(key="1", cells=[cell])
