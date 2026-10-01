@@ -295,3 +295,68 @@ async def test_save_checkpoint_replans_before_dispatching_old_next_choice():
     result = await agent.run()
     assert result.status == "success" and backend.calls == 1
     assert phases == ["initial", "write_checkpoint", "finish"]
+
+
+async def test_arriving_at_report_replans_before_reusing_sidebar_guidance():
+    definition = Task(id='navigate-report', control_mode='dynamic', sandbox=True,
+                      start_url='https://example.test/form', allowed_origins=['https://example.test'],
+                      objective='Open the report and read details.')
+    phases = []
+
+    class Brain:
+        async def review(self, task, obs, memory, *, phase, **kwargs):
+            phases.append(phase)
+            complete = phase == 'finish'
+            return Feedback(next_goal='Open report' if phase == 'initial' else 'Read details',
+                            working_memory='Report verification unresolved' if not complete else 'Read',
+                            complete=complete, answer='Read details' if complete else '',
+                            notes=[{'quote': 'Details read' if complete else obs.text}])
+
+    class Backend:
+        url = definition.start_url
+        calls = []
+        count = 0
+
+        async def observe(self):
+            self.count += 1
+            return Observation(observation_id=f'o{self.count}', document_version='v', tab_id='tab',
+                               url=self.url, title='Report', http_status=200,
+                               text='Details read' if 'details' in self.calls else 'Nothing to show',
+                               elements=[Element(id='report', role='link', name='Report',
+                                                 href='https://example.test/report'),
+                                         Element(id='details', role='button', name='Read details')])
+
+        async def execute(self, action):
+            self.calls.append(action.element_ref)
+            if action.element_ref == 'report':
+                self.url = 'https://example.test/report'
+            return Receipt(action_id=action.id, status='ok')
+
+    backend = Backend()
+
+    class Policy:
+        async def choose(self, task, obs, memory, contract, candidates):
+            if obs.url.endswith('/form'):
+                target = 'report'
+            elif 'details' not in backend.calls:
+                assert phases[-1] == 'navigation_checkpoint'
+                assert memory.feedback['next_goal'] == 'Read details'
+                assert memory.feedback['working_memory'] == 'Report verification unresolved'
+                target = 'details'
+            else:
+                return Decision(choice=next(a.id for a in candidates if a.operation == Operation.FINISH),
+                                outcome='confirmed')
+            return Decision(choice=next(a.id for a in candidates if a.element_ref == target))
+
+    result = await DynamicController(definition, backend, Policy(), feedback=Brain()).run()
+    assert result.status == 'success' and backend.calls == ['report', 'details']
+    assert phases == ['initial', 'navigation_checkpoint', 'finish']
+
+
+def test_query_filters_keep_stage_but_new_tabs_and_hash_routes_change_it():
+    from jev_browser.dynamic import planning_location
+
+    obs = observation().model_copy(update={'url': 'https://example.test/report?employee=7'})
+    assert planning_location(obs) == planning_location(obs.model_copy(update={'url': 'https://example.test/report?employee=8'}))
+    assert planning_location(obs) != planning_location(obs.model_copy(update={'tab_id': 'tab2'}))
+    assert planning_location(obs) != planning_location(obs.model_copy(update={'url': 'https://example.test/report#/ledger'}))

@@ -204,6 +204,13 @@ def semantic_key(obs: Observation) -> str:
     )
 
 
+def planning_location(obs):
+    url = urlsplit(obs.url)
+    # Query filters can update within a stage; a new route/tab needs fresh
+    # guidance. Hash routes are real page boundaries in some SPAs.
+    return obs.tab_id, url.scheme, url.netloc, url.path, url.fragment
+
+
 def action_key(action: Action, obs: Observation) -> str:
     element = next((e for e in obs.elements if e.id == action.element_ref), None)
     if (action.operation == Operation.CLICK and element
@@ -331,7 +338,7 @@ class JsonFeedback:
                      retrieved_evidence=None):
         if phase != "finish" and transition and not transition.get("resolved"):
             return await self.readback(task, obs, memory, transition, diagnostic=diagnostic)
-        compact = (phase in {"initial", "step", "stage_budget", "write_checkpoint"}
+        compact = (phase in {"initial", "step", "stage_budget", "write_checkpoint", "navigation_checkpoint"}
                    and (not transition or transition.get("resolved")))
         content = {
             **state(task, obs, memory, None),
@@ -445,6 +452,12 @@ class JsonFeedback:
                         " and keyboard hint. Do not prescribe a Search button for unrelated"
                         " filters. Use only observed local refresh/query controls and current"
                         " result evidence; if results are absent, keep that uncertainty explicit."
+                        " On a new page, replace old navigation advice with guidance using its"
+                        " current controls. Do not invent a search popup for an expandable sidebar."
+                        " If a verification remains unresolved after relevant visible checks,"
+                        " record it as unresolved in working_memory and continue independent"
+                        " requested work when the user's order and dependencies allow. Never"
+                        " mark that verification complete, abandon it, or replay uncertain writes."
                         + PROMPT_VARIANTS[self.tuning.prompt_variant]
                         + " Fresh grids bind cell values to a grid and row; never transfer a value"
                         " between rows or infer a reverted value when an inline editor becomes display text."
@@ -634,6 +647,7 @@ class DynamicController(Controller):
         self.input_noop_scope = None
         self.input_noops = {}
         self.stage_review_due = False
+        self.last_brain_location = None
 
     def input_suppression(self, obs):
         scope = digest([semantic_key(obs), self.memory.feedback.get("next_goal"),
@@ -838,6 +852,7 @@ class DynamicController(Controller):
             self.memory.feedback["action_cursor"] = len(self.memory.events)
             self.last_brain_action = self.effective_actions
             self.last_brain_attempt = self.actions
+            self.last_brain_location = planning_location(obs)
         self.log("feedback", phase=phase, feedback=feedback.model_dump(),
                  effective_actions=self.effective_actions, attempted_actions=self.actions)
         return feedback
@@ -1462,9 +1477,6 @@ class DynamicController(Controller):
             self.confirm_visible_dialog(obs)
             if self.confirm_visible_grid_row(obs):
                 trigger = "draft_row_added"
-            if self.stage_review_due and not self.pending:
-                trigger = "write_checkpoint"
-                self.stage_review_due = False
             # The opener may be unchanged even though its link opened successfully.
             # Switch first and inspect the destination; never confirm from a tab URL alone.
             destinations = [tab for tab, url in self.readback_tabs(obs).items()
@@ -1481,6 +1493,12 @@ class DynamicController(Controller):
                 and 200 <= obs.http_status < 400
             ):
                 self.confirm_transition("confirmed", obs, "observed_navigation_destination")
+            if not self.pending:
+                if self.stage_review_due:
+                    trigger = "write_checkpoint"
+                    self.stage_review_due = False
+                elif self.last_brain_location is not None and planning_location(obs) != self.last_brain_location:
+                    trigger = "navigation_checkpoint"
             evidence_keys = frozenset(self.memory.evidence)
             if evidence_keys != previous_evidence:
                 visits.clear()
@@ -1488,7 +1506,7 @@ class DynamicController(Controller):
             signature = semantic_key(obs)
             visits[signature] = visits.get(signature, 0) + 1
             if (visits[signature] > self.budget.no_progress_limit and not self.pending
-                    and trigger != "write_checkpoint"):
+                    and trigger not in {"write_checkpoint", "navigation_checkpoint"}):
                 if signature in recovered_states:
                     return self.result("needs_attention", "repeated state after brain recovery")
                 recovered_states.add(signature)
@@ -1612,7 +1630,9 @@ class DynamicController(Controller):
                         if reason := await self.perform(waiting, obs):
                             return self.result("needs_attention", reason)
                         continue  # discard proposed next action until readback is confirmed
-                    if guidance_changed or self.stage_review_due:
+                    if (guidance_changed or self.stage_review_due
+                            or (self.last_brain_location is not None
+                                and planning_location(obs) != self.last_brain_location)):
                         continue  # the previous next-action proposal predates the revised guidance
                 threshold = self.budget.confidence_threshold
                 if (
