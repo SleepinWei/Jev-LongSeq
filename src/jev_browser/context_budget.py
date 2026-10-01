@@ -26,6 +26,7 @@ CONTROL_DEFAULTS = {
     "options": [], "search_query": None, "search_scope": None,
     "read_only": False, "required": False,
     "activation_key": None,
+    "grid_ref": None, "row_ref": None,
 }
 
 

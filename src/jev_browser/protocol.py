@@ -55,6 +55,25 @@ class Element(Model):
     search_query: str | None = None
     search_scope: str | None = None
     activation_key: Literal["Escape"] | None = None
+    grid_ref: str | None = None
+    row_ref: str | None = None
+
+
+class GridCell(Model):
+    column: str
+    value: str
+
+
+class GridRow(Model):
+    key: str
+    cells: list[GridCell] = Field(default_factory=list)
+    control_refs: list[str] = Field(default_factory=list)
+
+
+class VisibleGrid(Model):
+    id: str
+    name: str = ""
+    rows: list[GridRow] = Field(default_factory=list)
 
 
 class Observation(Model):
@@ -66,6 +85,7 @@ class Observation(Model):
     title: str
     text: str
     elements: list[Element] = Field(default_factory=list)
+    grids: list[VisibleGrid] = Field(default_factory=list)
     dialogs: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     loading: bool = False

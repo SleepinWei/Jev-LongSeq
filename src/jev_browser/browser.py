@@ -175,7 +175,65 @@ SNAPSHOT = r"""selector => {
       }
     }
   }
+  // Visible table structure only: row/cell identity survives an inline editor
+  // becoming display text. No application state, hidden data IDs or backend reads.
+  const renderedText = el => {
+    const texts = [], walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    while (walk.nextNode()) {
+      const n = walk.currentNode;
+      if (visible(n.parentElement) && !n.parentElement.closest('input,textarea,select'))
+        texts.push(n.textContent.trim());
+    }
+    return texts.filter(Boolean).join(' ');
+  };
+  const gridScope = el => el.closest('table,[role="grid"],[role="table"],.grid-field') ||
+    el.closest('.form-grid')?.closest('.frappe-control') || el.closest('.form-grid');
+  const scopePath = el => {
+    const parts = [];
+    for (let n = el; n && n !== document.body; n = n.parentElement) {
+      const siblings = [...n.parentElement.children].filter(x => x.tagName === n.tagName);
+      parts.unshift(n.tagName.toLowerCase() + ':' + (siblings.indexOf(n) + 1));
+    }
+    return parts.join('/');
+  };
+  const rowSelector = '.grid-row,tr,[role="row"]';
+  const rowNodes = [...document.querySelectorAll(rowSelector)].filter(row => visible(row) &&
+    (!front || front.m.contains(row)) && !row.closest('thead,.grid-heading-row,.grid-header') &&
+    !row.querySelector('th,[role="columnheader"]') && gridScope(row));
+  const containers = [...document.querySelectorAll('table,[role="grid"],[role="table"],.grid-field,.form-grid')]
+    .filter(el => visible(el) && (!front || front.m.contains(el))).map(el => gridScope(el) || el);
+  const scopes = [...new Set([...rowNodes.map(gridScope), ...containers])], grids = [];
+  for (const scope of scopes) {
+    const id = scopePath(scope), rows = rowNodes.filter(row => gridScope(row) === scope);
+    const header = scope.querySelector('thead tr,.grid-heading-row,[role="row"]:has([role="columnheader"])');
+    const cellSelector = '.grid-static-col,td,[role="gridcell"],[role="cell"]';
+    const headers = header ? [...header.querySelectorAll('.grid-static-col,th,[role="columnheader"]')]
+      .filter(visible).map(renderedText) : [];
+    const label = [...scope.querySelectorAll('caption,label,[role="heading"]')].find(visible);
+    const grid = {id, name:label ? renderedText(label) : '', rows:[]};
+    for (const [position, row] of rows.entries()) {
+      const index = [...row.querySelectorAll('.row-index,.grid-row-index,[role="rowheader"]')].find(visible);
+      const key = index ? renderedText(index) : String(position + 1);
+      if (!key) continue;
+      const cells = [...row.querySelectorAll(cellSelector)].filter(cell => visible(cell) &&
+        cell.closest(rowSelector) === row && !cell.parentElement.closest(cellSelector));
+      const values = cells.map((cell, column) => {
+        const field = controls.find(c => (c.editable || c.selectable) && cell.contains(nodes[c.index]));
+        const labels = [...cell.querySelectorAll('label')].filter(visible).map(renderedText);
+        return {column:headers[column] || labels.join(' ') || 'column-' + (column + 1),
+          value:field ? field.value : renderedText(cell)};
+      });
+      const refs = controls.filter(c => row.contains(nodes[c.index]));
+      for (const c of refs) { c.grid_ref = id; c.row_ref = key; }
+      grid.rows.push({key, cells:values, control_refs:refs.map(c => 'e' + c.index)});
+    }
+    for (const c of controls) {
+      if (!c.grid_ref && scope.contains(nodes[c.index])) c.grid_ref = id;
+    }
+    grids.push(grid);
+  }
   return {url:location.href,title:document.title,text:lines.join('\n'),controls,
+    grids,
     visible_frames:[...document.querySelectorAll('iframe,frame')].filter(visible).length,
     dialogs:modal.map(x => x.innerText),loading:document.readyState === 'loading' ||
       [...document.querySelectorAll('[aria-busy="true"]')].some(visible)};
@@ -378,6 +436,7 @@ class PlaywrightBackend:
             title=raw["title"],
             text=raw["text"],
             elements=elements,
+            grids=raw.get("grids", []),
             dialogs=raw["dialogs"],
             loading=raw["loading"],
             http_status=self.navigation_status.get(self.page, (None, None))[1],

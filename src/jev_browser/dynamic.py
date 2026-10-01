@@ -128,10 +128,14 @@ def evidence_text(obs: Observation) -> str:
     controls = [
         f"{e.role} {e.name} = {e.value}"
         + (f"; checked={str(e.checked).lower()}" if e.checked is not None else "")
+        + (f"; grid={e.grid_ref}; row={e.row_ref}" if e.row_ref else "")
         for e in obs.elements
     ]
+    grids = [f"Visible grid {g.id} ({g.name}): {len(g.rows)} visible rows" for g in obs.grids]
+    grids += [f"Grid {g.id}; row {r.key}; {c.column} = {c.value}"
+              for g in obs.grids for r in g.rows for c in r.cells]
     modal = ["Active dialog (controls below are scoped to this dialog):", *obs.dialogs] if obs.dialogs else []
-    return "\n".join([*modal, obs.text, f"URL: {obs.url}", *controls])
+    return "\n".join([*modal, obs.text, f"URL: {obs.url}", *controls, *grids])
 
 
 def historical_quote_source(quote, memory):
@@ -153,6 +157,7 @@ def semantic_key(obs: Observation) -> str:
             obs.tab_id,
             obs.text,
             [e.model_dump(exclude={"id"}) for e in obs.elements],
+            [g.model_dump(exclude={"rows": {"__all__": {"control_refs"}}}) for g in obs.grids],
         ]
     )
 
@@ -216,6 +221,8 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppresse
         if element.search_query is not None and not element.search_query.strip():
             continue  # Do not submit a rotating placeholder after an unsuccessful fill.
         description = f"{element.role}: {element.name} | {element.context} | value={element.value}"
+        if element.row_ref:
+            description += f" | grid={element.grid_ref}; row={element.row_ref}"
         if element.activation_key:
             description = f"Activate observed {element.activation_key} shortcut: {element.name} | {element.context}"
         if not element.editable and not element.selectable:
@@ -381,6 +388,12 @@ class JsonFeedback:
                         " evidence is incomplete, set complete=false and explain what remains."
                         " Do not emit complete=true while a mutation is pending or unknown.")
                         + PROMPT_VARIANTS[self.tuning.prompt_variant]
+                        + " Fresh grids bind cell values to a grid and row; never transfer a value"
+                        " between rows or infer a reverted value when an inline editor becomes display text."
+                        " Omitted control fields use control_defaults, including value='' for an empty input."
+                        " Update current row counts in working_memory from fresh grids, not old summaries."
+                        " For an Add row readback, confirm the appearance of the new editable row only;"
+                        " an empty new row is expected and filling/saving it is a separate next operation."
                         + " Under context pressure, older key nodes have quote_excerpt and archive_ref."
                         " These excerpts are historical hints, not complete quotes or fresh proof."
                         " If exact past evidence is needed, return evidence_requests containing only"
@@ -795,6 +808,16 @@ class DynamicController(Controller):
             }
             if action.operation == Operation.CLICK:
                 self.pending["click_target"] = {"role": element.role, "name": element.name}
+                if (element.role == "button" and element.grid_ref and not element.row_ref
+                        and re.fullmatch(r"(?:add|insert)(?: a)? row|添加行|新增行", element.name.strip(), re.I)):
+                    grids = [g for g in obs.grids if g.id == element.grid_ref]
+                    if len(grids) == 1:
+                        self.pending["grid_append"] = grids[0].model_dump()
+                        self.pending["expected_goal"] = (
+                            "Confirm only that the selected visible grid has one additional row, "
+                            "retains its prior row values and exposes the new row's editable controls. "
+                            "An empty new row is expected. Filling it and saving/submitting the "
+                            "document are separate operations, not prerequisites for this readback.")
                 if (len(obs.dialogs) == 1
                         and "".join(element.name.casefold().split()) in {"yes", "ok", "confirm", "是", "确定", "确认"}):
                     self.pending["confirmation_scope"] = "business_commit"
@@ -985,6 +1008,51 @@ class DynamicController(Controller):
         if len(matches) != 1:
             return False
         return self.confirm_transition("confirmed", obs, "fresh_visible_input_value")
+
+    def confirm_visible_grid_row(self, obs):
+        """Prove one local draft-row append, never document persistence or completion."""
+        pending = self.pending
+        if (not pending or pending.get("dispatch_status") != "ok"
+                or not (before := pending.get("grid_append"))
+                or pending["action"]["operation"] != Operation.CLICK
+                or obs.loading or obs.dialogs or pending.get("before_dialogs")
+                or obs.observation_id == pending["action"]["observation_id"]
+                or obs.url != pending["before"]["url"]
+                or obs.tab_id != pending["before"]["tab_id"]
+                or any(e.startswith("page_error:") and e not in pending.get("before_errors", [])
+                       for e in obs.errors)):
+            return False
+        matches = [g for g in obs.grids if g.id == before["id"]]
+        if len(matches) != 1 or matches[0].name != before["name"]:
+            return False
+        grid = matches[0]
+        prior_keys = [r["key"] for r in before["rows"]]
+        keys = [r.key for r in grid.rows]
+        if (len(keys) != len(prior_keys) + 1 or keys[:-1] != prior_keys
+                or len(set(keys)) != len(keys)):
+            return False
+        for old, current in zip(before["rows"], grid.rows[:-1], strict=True):
+            old_cells = {c["column"]: c["value"] for c in old["cells"]}
+            current_cells = {c.column: c.value for c in current.cells}
+            if (not old_cells or len(old_cells) != len(old["cells"])
+                    or len(current_cells) != len(current.cells)
+                    or any(value and current_cells.get(column) != value
+                           for column, value in old_cells.items())):
+                return False
+        added = grid.rows[-1]
+        fields = [e for e in obs.elements if e.id in added.control_refs
+                  and e.grid_ref == grid.id and e.row_ref == added.key
+                  and e.enabled and not e.read_only and (e.editable or e.selectable)]
+        if not added.cells or not fields:
+            return False
+        pending["confirmation_scope"] = "draft_row_added"
+        pending["business_commit_confirmed"] = False
+        pending["readback_proof"] = {
+            "grid_id": grid.id, "before_row_keys": prior_keys, "after_row_keys": keys,
+            "added_row": added.model_dump(), "observation_id": obs.observation_id,
+            "document_version": obs.document_version,
+        }
+        return self.confirm_transition("confirmed", obs, "fresh_visible_grid_append")
 
     def confirm_visible_dialog(self, obs):
         """Recognize a newly opened confirmation question, never its business commit."""
@@ -1177,6 +1245,7 @@ class DynamicController(Controller):
             loading = 0
             self.confirm_visible_input(obs)
             self.confirm_visible_dialog(obs)
+            self.confirm_visible_grid_row(obs)
             # The opener may be unchanged even though its link opened successfully.
             # Switch first and inspect the destination; never confirm from a tab URL alone.
             destinations = [tab for tab, url in self.readback_tabs(obs).items()
@@ -1206,6 +1275,10 @@ class DynamicController(Controller):
                 visits[signature] = 0
                 trigger = "no_progress"
             self.memory.feedback["execution_feedback"] = {
+                "fresh_visible_grid_rows": [
+                    {"grid_id": g.id, "name": g.name, "row_keys": [r.key for r in g.rows],
+                     "scope": "current visible draft only; not saved business data"}
+                    for g in obs.grids],
                 "state_visits_without_new_evidence": visits[signature],
                 "actions_since_brain": self.effective_actions - self.last_brain_action,
                 "attempts_since_brain": self.actions - self.last_brain_attempt,
