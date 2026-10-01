@@ -247,12 +247,26 @@ def _pool(payload, level):
         role, count = Counter(e.get("role") for e in observation["elements"]).most_common(1)[0]
         if role and count >= 3:
             defaults["role"] = role
+        # Dense grids repeat an exact long ID on each cell. Use the existing
+        # explicit defaults contract; non-grid and other-grid controls override
+        # it, so no row association or current capability is discarded.
+        grid, count = Counter(e.get("grid_ref") for e in observation["elements"]).most_common(1)[0]
+        if grid and count >= 3:
+            def grid_cost(default):
+                return wire_bytes({"grid_ref": default}) + sum(
+                    wire_bytes({"grid_ref": e.get("grid_ref")})
+                    for e in observation["elements"] if e.get("grid_ref") != default)
+
+            if grid_cost(grid) < grid_cost(defaults["grid_ref"]):
+                defaults["grid_ref"] = grid
     controls = {}
     for e in observation["elements"]:
         # Omitted fields have explicit shared defaults, so this is lossless.
         # In particular enabled=False and checked=False remain distinguishable.
         item = {k: v for k, v in e.items()
                 if k != "id" and (k not in defaults or v != defaults[k])}
+        if "grid_ref" not in e and defaults["grid_ref"] is not None:
+            item["grid_ref"] = None
         if e.get("context"):
             item.pop("context", None)
             item["context_ref"] = pooled(e["context"])

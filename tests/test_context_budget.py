@@ -175,6 +175,42 @@ def test_byte_budget_matches_actual_httpx_unicode_serialization():
     assert wire_bytes(payload) == len(httpx.Request('POST', 'https://example.test', json=payload).content)
 
 
+def test_dense_grid_default_is_lossless_for_multiple_grids_and_unscoped_controls():
+    from jev_browser.context_budget import _pool
+
+    task, obs, memory = sample()
+    obs.elements = [Element(id=f'cell{i}', role='button', name=f'Record {i}',
+                            grid_ref='g1234567890abcdef1234567890abcdef', row_ref=str(i // 6))
+                    for i in range(108)]
+    obs.elements.extend([Element(id='other-grid', role='button', name='Other grid',
+                                 grid_ref='gOTHER', row_ref='1'),
+                         Element(id='create', role='button', name='Vendor')])
+    raw = obs.model_dump()
+    raw['elements'].append({'id': 'missing-grid', 'role': 'button', 'name': 'Menu'})
+    payload = {'state': {'trusted_goal': task.objective, 'hard_constraints': [],
+                         'untrusted_observation': raw, 'untrusted_memory': memory.context()},
+               'questions': {'action': {'criteria': {
+                   'a1': {'operation': 'click', 'target': 'create'},
+                   'a2': {'operation': 'click', 'target': 'other-grid'}}}}}
+    saved = copy.deepcopy(payload)
+    normal, compact = _pool(payload, 2), _pool(payload, 3)
+    view = compact['state']['untrusted_observation']
+    assert view['control_defaults']['grid_ref'] == obs.elements[0].grid_ref
+    assert view['controls']['other-grid']['grid_ref'] == 'gOTHER'
+    assert view['controls']['create']['grid_ref'] is None
+    assert view['controls']['missing-grid']['grid_ref'] is None
+    for e in raw['elements']:
+        restored = {**view['control_defaults'], **view['controls'][e['id']]}
+        assert all(restored[k] == v for k, v in e.items() if k != 'id')
+    assert compact['state']['untrusted_memory']['pending_writes'] == saved['state']['untrusted_memory']['pending_writes']
+    assert compact['questions'] == saved['questions']
+    assert wire_bytes(compact) < wire_bytes(normal) - 2000
+    projected, metrics = project_request(payload, max_bytes=wire_bytes(normal) - 529)
+    assert metrics['after_bytes'] <= metrics['max_bytes']
+    assert projected['state']['trusted_goal'] == task.objective
+    assert payload == saved
+
+
 def test_old_critical_nodes_are_addressable_and_recent_quotes_remain_exact():
     task, obs, memory = sample()
     memory.key_nodes = {str(i): {'source': {'url': f'about:blank#stage-{i}',
