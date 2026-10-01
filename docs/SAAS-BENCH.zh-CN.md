@@ -404,3 +404,15 @@ Save/Submit 边界记录环境 ID、字段快照、原阶段、证据来源及�
 使用 run23 cycle101 的真实保存前后 observation 做只读离线回放：保存字段快照 9 项，
 超时后的 New Vendor 被排除，Quick find 仍可用，未调用模型或操作真实浏览器。
 实验 A 的线上评分和后续阶段约束实验分别记录，避免把多项同时修改当成因果证据。
+
+实验 A 实际结果：`arcbench-24` 官方 3/15、data_valid=true、strict_success=false，
+42 动作/50 cycles，Agent 576.57 秒，整体 593.59 秒。离职单及三条活动正确；
+尚未创建供应商。未触发规划超时保护，因此无法从此次试验判断交接保护的收益。
+新增检查点重复长阶段说明/页面摘录，使最小候选页仍为 50,399 bytes，超过
+48,000-byte 上限；pending 保留并停止。该版本存在上下文开销回归，不能宣称有效。
+
+实验 A2（`arcbench-25`）：只调整检查点的请求投影。所有检查点保留状态、环境、
+来源、最近字段及完整 archive_ref；长阶段说明/摘录在请求中限长，完整记录留在
+memory archive，可只读检索。run24 cycle50 的真实 memory/observation 离线回放
+将请求压到 47,095 bytes（level3），保留 pending，无真实模型或浏览器调用。
+相关 macmini 回归 58 通过，Ruff/diff 通过。阶段范围约束尚未加入此实验。

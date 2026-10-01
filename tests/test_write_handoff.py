@@ -115,3 +115,21 @@ async def test_old_write_snapshot_is_retrievable_after_context_aging():
     assert archived['status'] == checkpoint['status']
     assert archived['fields']['archived'] is True
     assert raw['write_checkpoints'][0]['fields'][0]['value'] == 'vendor@example.test'
+
+
+async def test_recent_write_checkpoints_bound_duplicate_evidence_but_keep_current_fields():
+    controller, _ = await saved_controller()
+    controller.memory.write_checkpoints[0]['stage_goal'] = 'Prior stage details ' * 2000
+    controller.memory.write_checkpoints[0]['visible_excerpt'] = 'Fresh result evidence ' * 2000
+    controller.memory.write_checkpoints[0]['proof'] = {'quote': 'Long evidence ' * 2000}
+    raw = controller.memory.context()
+    original = raw['write_checkpoints'][0]
+    projected = memory_view(raw, level=2)['write_checkpoints'][0]
+    assert len(projected['stage_goal']) <= 120
+    assert len(projected['visible_excerpt']) <= 160
+    assert projected['archive_ref'] == archive_ref(original)
+    assert projected['fields'] == original['fields']
+    assert projected['source'] == original['source'] and projected['before'] == original['before']
+    assert projected['status'] == original['status']
+    assert projected['proof'] == {'archived': True}
+    assert len(original['visible_excerpt']) > 10000

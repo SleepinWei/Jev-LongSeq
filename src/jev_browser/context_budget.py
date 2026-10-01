@@ -236,11 +236,15 @@ def memory_view(raw, level):
     readbacks = result.get("current_environment_readbacks", {}).get("actions", [])
     for i, checkpoint in enumerate(result.get("write_checkpoints", [])):
         original = raw["write_checkpoints"][i]
+        checkpoint["archive_ref"] = archive_ref(original)
+        checkpoint["stage_goal"] = excerpt(checkpoint["stage_goal"], 240 if level == 0 else 120)
+        checkpoint["visible_excerpt"] = excerpt(checkpoint["visible_excerpt"], 320 if level == 0 else 160)
+        checkpoint["details_excerpted"] = True
+        checkpoint.pop("meaning", None)
         if i < len(result["write_checkpoints"]) - 2:
-            checkpoint["archive_ref"] = archive_ref(original)
-            checkpoint["stage_goal"] = excerpt(checkpoint["stage_goal"], 160)
-            checkpoint["visible_excerpt"] = excerpt(checkpoint["visible_excerpt"], 160)
             checkpoint["fields"] = {"archived": True, "count": len(original["fields"])}
+            checkpoint["proof"] = {"archived": True}
+        elif wire_bytes(checkpoint.get("proof", {})) > 400:
             checkpoint["proof"] = {"archived": True}
     if level:
         originals = raw.get("current_environment_readbacks", {}).get("actions", [])
