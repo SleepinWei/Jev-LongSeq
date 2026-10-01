@@ -1138,6 +1138,15 @@ class DynamicController(Controller):
                     "popup_open": element.popup_open}
                 self.pending["before_menu_items"] = [e.model_dump() for e in obs.elements
                                                       if e.role == "menuitem"]
+                if (len(obs.dialogs) == 1 and element.role == "button"
+                        and element.name.casefold().strip() in {"close", "close (icon control)", "关闭", "關閉"}
+                        and not element.editable and not element.selectable):
+                    self.pending["dialog_close"] = True
+                    self.pending["confirmation_scope"] = "dialog_closed_ui"
+                    self.pending["business_commit_confirmed"] = False
+                    self.pending["expected_goal"] = (
+                        "Confirm only dismissal of the observed active dialog on the same page. "
+                        "Its disappearance never proves saving/submitting or completion of the task.")
                 if element.popup_kind == "menu":
                     self.pending["expected_goal"] = (
                         "Confirm only that this menu trigger exposes visible enabled menu items. "
@@ -1565,6 +1574,32 @@ class DynamicController(Controller):
         }
         return self.confirm_transition("confirmed", obs, "fresh_visible_grid_append")
 
+    def confirm_visible_dialog_close(self, obs):
+        """Prove only the dismissal of a dispatched close, never the underlying write."""
+        pending = self.pending
+        if (not pending or not pending.get("dialog_close")
+                or pending.get("dispatch_status") != "ok"
+                or pending["action"]["operation"] != Operation.CLICK
+                or pending.get("confirmation_scope") != "dialog_closed_ui"
+                or len(pending.get("before_dialogs", [])) != 1
+                or obs.dialogs or obs.loading or not obs.elements
+                or obs.observation_id == pending["action"]["observation_id"]
+                or obs.url != pending["before"]["url"]
+                or obs.tab_id != pending["before"]["tab_id"]
+                or any(e.id == pending["action"].get("element_ref") for e in obs.elements)
+                or any(e.startswith("page_error:") and e not in pending.get("before_errors", [])
+                       for e in obs.errors)):
+            return False
+        pending["readback_proof"] = {
+            "closed_dialog": pending["before_dialogs"][0],
+            "observation_id": obs.observation_id, "document_version": obs.document_version,
+            "scope": "dialog dismissal only; no business persistence implied",
+        }
+        if not self.confirm_transition("confirmed", obs, "fresh_dialog_dismissal"):
+            return False
+        self.ui_review_due = True
+        return True
+
     def confirm_visible_dialog(self, obs):
         """Recognize a newly opened confirmation question, never its business commit."""
         pending = self.pending
@@ -1671,6 +1706,7 @@ class DynamicController(Controller):
     def readback_dialog_close(self, obs, action):
         """Only the sole close control of a dialog can expose a pending result."""
         if (not self.pending or self.pending.get("dispatch_status") != "ok"
+                or self.pending.get("dialog_close")
                 or len(obs.dialogs) != 1 or action.operation != Operation.CLICK
                 or Operation.CLICK not in self.task.allowed_operations
                 or obs.url != self.pending["before"]["url"]
@@ -1758,6 +1794,7 @@ class DynamicController(Controller):
             self.confirm_visible_input(obs)
             self.confirm_visible_option(obs)
             self.confirm_visible_menu(obs)
+            self.confirm_visible_dialog_close(obs)
             self.confirm_visible_dialog(obs)
             if self.confirm_visible_grid_row(obs):
                 trigger = "draft_row_added"

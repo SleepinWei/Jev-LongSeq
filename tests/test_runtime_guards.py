@@ -170,7 +170,7 @@ async def test_dynamic_retry_is_bounded_and_run_reserve_prevents_a_request():
         assert len(requests) == 2
 
 
-@pytest.mark.parametrize('kind,allowance', [('dynamic_feedback', 120), ('dynamic_readback', 120),
+@pytest.mark.parametrize('kind,allowance', [('dynamic_feedback', 120),
                                           ('dynamic_input', 60)])
 async def test_model_request_can_use_whole_logical_allowance(kind, allowance):
     def respond(request):
@@ -181,6 +181,85 @@ async def test_model_request_can_use_whole_logical_allowance(kind, allowance):
         await transport.post({'messages': [{'role': 'user', 'content': json.dumps(
             state(definition(), page(), Memory(), None))}]},
                              kind)
+
+
+async def test_readback_reserves_retry_time_and_retries_identical_inference_only():
+    requests, allowances = [], []
+    def respond(request):
+        requests.append(request.content)
+        allowances.append(request.extensions['timeout']['read'])
+        if len(requests) == 1:
+            raise httpx.ReadTimeout('provider response headers stalled', request=request)
+        return httpx.Response(200, json={'choices': []})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        transport = ModelTransport('https://test.example', 'test', 'test', client=client, timeout_s=180)
+        await transport.post({'messages': [{'role': 'user', 'content': '{"trusted_goal":"test"}'}]},
+                             'dynamic_readback')
+    assert len(requests) == 2 and requests[0] == requests[1]
+    assert 59 < allowances[0] <= 60 and 60 < allowances[1] <= 120
+    assert transport.ledger[0]['remaining_call_seconds'] == allowances[0]
+    assert transport.ledger[0]['error'] == 'ReadTimeout' and transport.ledger[1]['status'] == 200
+
+
+async def test_dialog_dismissal_confirms_ui_only_after_animation_without_a_model_or_second_close():
+    from jev_browser.dynamic import generate_dynamic
+    from jev_browser.protocol import Receipt
+
+    before = page().model_copy(update={'dialogs': ['Message\nShared with users'],
+        'elements': [Element(id='modal-close', role='button', name='close (icon control)')]})
+    backend, brain = AsyncMock(), AsyncMock()
+    backend.execute.return_value = Receipt(action_id='a', status='ok')
+    controller = DynamicController(definition(), backend, None, feedback=brain)
+    close = next(a for a in generate_dynamic(before, controller.task) if a.element_ref == 'modal-close')
+    await controller.perform(close, before)
+    pending = controller.pending
+    animating = before.model_copy(update={'observation_id': 'o2', 'dialogs': ['Message']})
+    assert not controller.confirm_visible_dialog_close(animating)
+    assert not controller.readback_dialog_close(animating, close)
+    assert controller.pending is pending
+    after = before.model_copy(update={'observation_id': 'o3', 'document_version': 'v3', 'dialogs': [],
+        'elements': [Element(id='reports', role='button', name='Reports'),
+                     Element(id='background-close', role='button', name='close (icon control)')]})
+    assert controller.confirm_visible_dialog_close(after)
+    assert controller.pending is None and not controller.memory.pending_writes
+    record = controller.memory.confirmed_actions[-1]
+    assert record['confirmation_scope'] == 'dialog_closed_ui'
+    assert record['business_commit_confirmed'] is False
+    assert record['proof']['observation_id'] == 'o3'
+    assert controller.ui_review_due and not controller.stage_review_due
+    assert not controller.memory.feedback.get('complete')
+    brain.review.assert_not_awaited()
+    assert backend.execute.await_count == 1
+
+
+@pytest.mark.parametrize('unsafe', ['loading', 'same_observation', 'dialog_present', 'wrong_url',
+    'wrong_tab', 'page_error', 'target_present', 'empty_page', 'business_pending', 'unknown_dispatch'])
+async def test_dialog_dismissal_requires_fresh_scoped_evidence_and_never_confirms_a_business_write(unsafe):
+    from jev_browser.dynamic import generate_dynamic
+    from jev_browser.protocol import Receipt
+
+    before = page().model_copy(update={'dialogs': ['Message'],
+        'elements': [Element(id='close', role='button', name='Close')]})
+    backend = AsyncMock()
+    backend.execute.return_value = Receipt(action_id='a', status='ok')
+    controller = DynamicController(definition(), backend, None, feedback=None)
+    await controller.perform(next(a for a in generate_dynamic(before, controller.task)
+                                  if a.element_ref == 'close'), before)
+    after = before.model_copy(update={'observation_id': 'o2', 'dialogs': [],
+        'elements': [Element(id='main', role='button', name='Reports')]})
+    updates = {'loading': {'loading': True}, 'same_observation': {'observation_id': 'o1'},
+        'dialog_present': {'dialogs': ['Message']}, 'wrong_url': {'url': 'about:blank#other'},
+        'wrong_tab': {'tab_id': 'other'}, 'page_error': {'errors': ['page_error:render failed']},
+        'target_present': {'elements': before.elements}, 'empty_page': {'elements': []}}
+    if unsafe == 'business_pending':
+        controller.pending['confirmation_scope'] = 'business_commit'
+    elif unsafe == 'unknown_dispatch':
+        controller.pending['dispatch_status'] = 'unknown'
+    else:
+        after = after.model_copy(update=updates[unsafe])
+    assert not controller.confirm_visible_dialog_close(after)
+    assert controller.pending and controller.memory.pending_writes
+    assert not controller.memory.confirmed_actions
 
 
 async def test_model_timeout_is_not_run_budget_exhaustion(tmp_path):

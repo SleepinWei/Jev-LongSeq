@@ -195,6 +195,11 @@ class ModelTransport:
                 raise ModelCallTimeout(f"{kind} model call allowance exhausted; checkpoint retained")
             if self.observer:
                 self.observer.before_call()
+            attempt_seconds = min(remaining, self.timeout_s)
+            if kind == "dynamic_readback" and attempt == 0 and retries:
+                # Short outcome-only reviews usually return in seconds. Leave
+                # room to retry a stalled provider within the same logical cap.
+                attempt_seconds = min(attempt_seconds, remaining / 2)
             started = time.monotonic()
             record = {
                 "call_id": call_id,
@@ -206,7 +211,7 @@ class ModelTransport:
                 "transport": "http",
                 "model": self.model,
                 "attempt": attempt,
-                "remaining_call_seconds": min(remaining, self.timeout_s),
+                "remaining_call_seconds": attempt_seconds,
                 "prompt_hash": digest(payload),
                 "cost_usd": None,
                 "input_tokens": None,
@@ -234,7 +239,6 @@ class ModelTransport:
             if self.observer:
                 self.observer.request_started(record)
             try:
-                attempt_seconds = min(remaining, self.timeout_s)
                 async with asyncio.timeout(attempt_seconds):
                     response = await client.post(
                         self.endpoint, json=payload,
