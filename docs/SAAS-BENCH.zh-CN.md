@@ -486,3 +486,18 @@ D 机械验证：152 项定向回归通过，Ruff/diff 通过，真实 C cycle10
 Search；已有输入改值/改 ID、disabled/readonly 和未知回执的负例通过。
 全量首轮发现通用交接覆盖专用 draft_row_added 的优先级冲突；修正为 grid_append
 继续使用专用交接，包含真实浏览器表格增行回归的上述 152 项复验通过。
+
+D 实际结果：`arcbench-28` 官方 0/15、data_valid=true、strict_success=false，
+16 动作/29 cycles、11 feedback calls、Agent 486.63 秒，清理正常。新输入交接
+未触发；第一行 User 选择后，brain 的新作用域为空，只要求重新观察。fast policy
+却选择默认豁免的行内 Open Link，经 stale 刷新跳到 /desk/user/Rajesh%20Kumar，
+显示找不到记录，再去 Home 后重复状态停止。所有工作仍未保存，因而得分为零。
+不能把这次新交接未触发的偏航直接归因于 D；也不能据单次机械回放宣称它已提高
+线上成功率。此试验说明默认放行所有 href 可破坏未保存阶段。
+
+实验 E（`arcbench-29`）：仅将具有 grid_ref/row_ref 的链接从通用导航豁免中移除。
+它们需要当前可见 stage_controls 的显式授权，仍受同环境/路由/身份检查；普通
+全局链接与返回仍可用。后续的新阶段规划可以授权同一行内链接，不设永久黑名单。
+132 项最新定向回归及 Ruff/diff 通过。D cycle16 原 Open Link 动作与原 brain
+空作用域回放中，该动作被排除且 dispatch 前拒绝，无真实模型或浏览器动作。
+线上 E 保留 D 的输入揭示交接，检验此次单项导航范围改变的组合最终表现。

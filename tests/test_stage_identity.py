@@ -228,3 +228,31 @@ async def test_search_palette_handoff_discards_old_next_click_and_replans_scope(
     result = await DynamicController(task, Backend(), Policy(), feedback=Brain()).run()
     assert result.status == 'success'
     assert calls == ['quick', 'search'] and phases == ['initial', 'ui_checkpoint', 'finish']
+
+
+async def test_row_record_links_require_stage_scope_but_global_navigation_remains_available():
+    from jev_browser.dynamic import Feedback, StageControl
+    task = definition().model_copy(update={'allowed_origins': ['https://example.test']})
+    obs = form()
+    obs.elements += [Element(id='record-link', role='link', name='Open Link',
+                            href='https://example.test/users/Rajesh', grid_ref='activities', row_ref='1'),
+                     Element(id='home', role='link', name='Home', href='https://example.test/')]
+    brain = AsyncMock()
+    brain.review.return_value = Feedback(next_goal='Complete the current row',
+        stage_controls=[StageControl(element_ref='email', operations=['fill'])])
+    backend = AsyncMock()
+    controller = DynamicController(task, backend, None, feedback=brain)
+    await controller.review(obs, phase='step')
+    actions = generate_dynamic(obs, task)
+    row_link = next(a for a in actions if a.element_ref == 'record-link')
+    assert not controller.stage_action_allowed(row_link, obs)
+    assert await controller.perform(row_link, obs)
+    backend.execute.assert_not_awaited()
+    available = controller.generate_stage_candidates(obs, limit=250, offset=0)
+    assert not any(a.element_ref == 'record-link' for a in available)
+    assert any(a.element_ref == 'home' for a in available)
+    # A task may explicitly need that record; fresh planning can authorize it.
+    brain.review.return_value = Feedback(next_goal='Inspect this linked user record',
+        stage_controls=[StageControl(element_ref='record-link', operations=['click'])])
+    await controller.review(obs, phase='step')
+    assert controller.stage_action_allowed(row_link, obs)

@@ -42,7 +42,10 @@ def handoff_navigation(action, obs):
     element = next((e for e in obs.elements if e.id == action.element_ref), None)
     if not element or action.operation != Operation.CLICK:
         return False
-    return bool(element.href or (element.role == "button" and re.fullmatch(
+    # A linked record inside a grid row is a stage operation, not global
+    # navigation. Opening it can abandon the current unsaved form.
+    return bool((element.href and not (element.grid_ref and element.row_ref))
+        or (element.role == "button" and re.fullmatch(
         r"back(?: to (?:list|\w+))?|quick find|go back|返回(?:列表)?", element.name.strip(), re.I)))
 
 
