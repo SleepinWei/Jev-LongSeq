@@ -602,3 +602,20 @@ I 验证：156 项定向回归通过，全量 macmini 636 通过/3 跳过，Ruff
 fresh_scope_required=true，仅 WAIT/REPLAN 可选，旧 Add row 不可选；原始 task.objective
 和 working_memory 字节内容保持一致。没有真实模型/浏览器调用。定向测试也确认
 冷却期间没有 policy.choose 或 backend.execute，新的有效范围才能解除等待。
+
+I 实际结果：`arcbench-33` 官方 0/15、data_valid=true、strict_success=false，
+12 动作/15 cycles、8 feedback calls、Agent 335.39 秒，评分无 verifier_errors，
+环境 cleanup_error=null，进程已结束。第二条离职活动填写阶段的 dynamic_input
+请求在 cycle15 收到 Arcbench HTTP 402 Payment Required，约 0.08 秒返回，
+并非上下文超限或规划超时。当前模型调用日志没有错误响应正文，因此只能确认
+provider 的付款/额度类拒绝，不能据此断定余额已经耗尽。没有保存业务数据，故
+官方得分为零；该外部中断不能用于判断 I 是否提高或降低最终成功率。
+本轮 option_selection_handoff 触发 1 次，planning_degraded 和 planning_scope_wait
+均未触发，I 的冷却恢复在线行为仍待验证。保留 Arcbench/deepseek-v4-flash、原始
+任务、恢复点及预算；在服务可用性恢复前不重复启动相同付费请求或擅自切换 provider。
+
+G/H/I 三轮最终严格成功均为 false：G 为 4/15，H 为 0/15，I 因 HTTP 402
+中断后为 0/15。全量回归 636 通过/3 跳过和真实故障点离线回放证明相应机制的
+局部行为，不构成最终成功率提升证据。外部依赖恢复后，先验证 I 的规划超时恢复，
+再分别评估阶段导航约束、规划控件可执行性检查、Accounting 入口观察抽取、
+规划耗时缩减与结构化未完成义务记录；这些后续机制尚未实施。
