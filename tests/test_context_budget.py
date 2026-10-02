@@ -219,7 +219,8 @@ def test_verification_history_decays_without_losing_obligations_or_commit_proof(
     assert len(compact['unresolved_verifications'][0]['visible_excerpt']) < len(compact['unresolved_verifications'][-1]['visible_excerpt'])
     for old, projected in zip(raw['current_environment_readbacks']['actions'],
                               compact['current_environment_readbacks']['actions'], strict=True):
-        assert {k:v for k,v in old.items() if k != 'source'} == {k:v for k,v in projected.items() if k != 'source'}
+        assert {k:v for k,v in old.items() if k != 'source'} == {
+            k:v for k,v in projected.items() if k not in {'source', 'archive_ref', 'details_archived'}}
         assert projected['source']['observation_id'] == old['source']['observation_id']
     assert compact['current_environment_readbacks']['actions'][-2:] == raw['current_environment_readbacks']['actions'][-2:]
 
@@ -538,3 +539,24 @@ def test_emergency_defaults_reconstruct_every_control_and_candidate_losslessly()
     assert {**defaults, **controls['flag']}['checked'] is False
     assert wire_bytes(projected) < wire_bytes(_pool(payload, 2))
     assert payload == saved
+
+
+def test_max_pressure_keeps_all_pin_anchors_and_recent_facts_while_archiving_distant_hypotheses():
+    from jev_browser.context_budget import _pool
+    task, obs, memory = sample()
+    memory.key_nodes = {str(i): {'source': {'url': 'about:blank', 'quote': f'Record ID-{i}: ' + 'source fact ' * 40},
+        'verification': 'quote_grounded_only', 'interpretation': 'Earlier hypothesis ' * 20}
+        for i in range(20)}
+    original = copy.deepcopy(memory.key_nodes)
+    payload = {'state': {'trusted_goal': task.objective,
+                         'untrusted_observation': obs.model_dump(),
+                         'untrusted_memory': memory.context()}, 'questions': {}}
+    view = _pool(payload, 4)['state']['untrusted_memory']
+    catalog = view['historical_key_nodes']
+    older = [dict(zip(catalog['columns'], row, strict=True)) for row in catalog['rows']]
+    assert [n['archive_ref'] for n in older] == [archive_ref(n) for n in list(original.values())[:-4]]
+    assert catalog['verification_default'] == 'quote_grounded_only'
+    assert older[0]['interpretation_excerpt'] is None
+    assert older[-1]['interpretation_excerpt']
+    assert view['key_nodes'] == list(original.values())[-4:]
+    assert memory.key_nodes == original

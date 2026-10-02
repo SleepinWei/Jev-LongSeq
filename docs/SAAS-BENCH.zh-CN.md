@@ -435,3 +435,30 @@ harness 绑定控件角色、名称、表格/行及环境/路由，过滤阶段�
 都在首个 15-candidate 页面。回放不调用真实模型/浏览器，因此还不能证明 brain
 会正确生成范围。macmini 全量 588 通过/3 跳过，最新提示文本相关 42 通过，Ruff/diff
 通过。线上 B 验证组合效果；若得分提升，单项对成功率的贡献仍需进一步消融及重复试验。
+
+B 实际结果：`arcbench-26` 官方 4/15、data_valid=true、strict_success=false，
+102 动作/121 cycles、46 feedback calls、Agent 1297.09 秒，清理无错误。
+离职已提交，三条活动及负责人正确，供应商最终创建正确；journal/payment/Twenty
+未完成。第一次供应商 Save 因缺少 Display Name 被 UI 拒绝：brain 将菜单项提供为
+select，但真实 menuitem 只支持 click，范围过滤丢掉选项却仍保留 Save。
+后续完成显示名再 Save，pending 读回时最小请求为 49,268 bytes，超过 48,000。
+相对参考 run23 的 4/15，最终严格成功率尚无提升。
+
+实验 C（`arcbench-27`）：针对 B 的已观测机制分别增加机械验证，再检验组合的
+最终成绩。阶段控件 ID 变化只重绑同环境/路由/dialog、同角色/名称/表格/行的唯一
+新鲜控件；歧义或不同作用域需要新规划。grid input 读回依据明确格子身份和精确值，
+允许邻近下拉文本变化，仍需已知 receipt、fresh observation 和相同 URL/tab/dialog，
+只证明输入已填，不证明业务持久化。menuitem/option 的 select 意图规范为已观测
+click，排除无业务标签的纯图标菜单项。较早 readback/关键点的长详情留 archive，
+请求保留来源锚点、范围及 archive_ref，最近事实和当前 pending 不舍弃。fast policy
+最小请求仍超限且有 pending 时，转交已有必需 action_readback；只读刷新和等待次数
+有上限，禁止重提未知写入，无 pending 时仍安全停止。
+
+C 验证：macmini 全量 608 通过/3 跳过，Ruff/diff 通过。真实 run26 cycle15→16
+回放中 Activity Name 值精确匹配、邻近 context 从 Begin typing 变为 7 results，
+本地读回成立且 business_commit_confirmed=false；使用原记录 resume stage_controls
+回放 date 后 Add row 从 e2866→e2870，仍在候选中，无额外模型调用。menu select
+规范、错误行/歧义/环境拒绝、pending overflow 不重提及等待上限均有定向回归。
+run26 cycle121 真实 memory/observation 最小页回放为 46,892 bytes（level4），
+pending 保留，无真实模型调用/浏览器动作。这些证明机械机制有效，不能据此推断
+最终成功率提高；C 线上试验检验组合结果，单项成功率贡献仍需消融和重复试验。

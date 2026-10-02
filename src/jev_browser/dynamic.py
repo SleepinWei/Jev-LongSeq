@@ -357,6 +357,8 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppresse
             continue
         if element.search_query is not None and not element.search_query.strip():
             continue  # Do not submit a rotating placeholder after an unsuccessful fill.
+        if element.role == "menuitem" and element.name.endswith(" (icon control)") and not element.href:
+            continue  # An icon asset alone is not an observed business choice.
         description = f"{element.role}: {element.name} | {element.context} | value={element.value}"
         if element.row_ref:
             description += f" | grid={element.grid_ref}; row={element.row_ref}"
@@ -472,6 +474,7 @@ class JsonFeedback:
             "intended value and grid/row when applicable. These are advisory bindings, not new authorization. "
             "Populate stage_controls with current observed element_ref IDs and operations (click/fill/select) "
             "for controls needed by this stage, including fields, linked options and Save when appropriate. "
+            "Use click for menuitem/option activation; select is for selectable=true native controls. "
             "Only these controls may mutate the form. Navigation and replan remain available. "
             "Do not include controls belonging to already completed objects or another stage. "
             "Do not invent IDs for controls that are not observed. After an opener reveals new controls, "
@@ -1009,10 +1012,17 @@ class DynamicController(Controller):
                              reason="not currently observed", browser_action_dispatched=False)
                     continue
                 identity = {k: getattr(element, k) for k in ("role", "name", "grid_ref", "row_ref")}
-                bindings[control.element_ref] = {**identity, "operations": control.operations}
+                operations = list(control.operations)
+                if ("select" in operations and element.role in {"menuitem", "option"}
+                        and not element.selectable):
+                    operations = list(dict.fromkeys("click" if op == "select" else op for op in operations))
+                    self.log("stage_operation_normalized", element_ref=element.id, role=element.role,
+                             requested="select", operation="click", basis="observed option activation",
+                             browser_action_dispatched=False)
+                bindings[control.element_ref] = {**identity, "operations": operations}
             self.memory.feedback["execution_scope"] = {
                 "environment_id": self.memory.environment_id,
-                "location": list(planning_location(obs)), "bindings": bindings}
+                "location": list(planning_location(obs)), "dialogs": list(obs.dialogs), "bindings": bindings}
         route = planning_location(obs)
         if feedback.verification:
             self.arm_verification(obs)
@@ -1106,7 +1116,8 @@ class DynamicController(Controller):
         if handoff_navigation(action, obs):
             return True
         if (scope["environment_id"] != self.memory.environment_id
-                or scope["location"] != list(planning_location(obs))):
+                or scope["location"] != list(planning_location(obs))
+                or scope.get("dialogs", []) != obs.dialogs):
             return False  # A new page/environment requires a fresh stage plan.
         element = next((e for e in obs.elements if e.id == action.element_ref), None)
         binding = scope["bindings"].get(action.element_ref)
@@ -1122,6 +1133,33 @@ class DynamicController(Controller):
         return bool(element and binding and action.operation in binding["operations"]
                     and all(getattr(element, k) == binding[k]
                             for k in ("role", "name", "grid_ref", "row_ref")))
+
+    def refresh_stage_bindings(self, obs):
+        """Rebind changed DOM handles only to a unique fresh control with the same stage identity."""
+        scope = self.memory.feedback.get("execution_scope")
+        if (not scope or scope["environment_id"] != self.memory.environment_id
+                or scope["location"] != list(planning_location(obs))
+                or scope.get("dialogs", []) != obs.dialogs):
+            return
+        origins = scope.setdefault("binding_origins", scope["bindings"].copy())
+        bindings = {}
+        for original_ref, binding in origins.items():
+            matches = [e for e in obs.elements if all(getattr(e, k) == binding[k]
+                       for k in ("role", "name", "grid_ref", "row_ref"))]
+            exact = [e for e in matches if e.id == original_ref]
+            if exact:
+                current = exact[0]
+            elif len(matches) == 1:
+                current = matches[0]
+            else:
+                continue  # Missing or ambiguous identity needs fresh planning.
+            bindings[current.id] = binding
+            if current.id != original_ref and current.id not in scope["bindings"]:
+                self.log("stage_control_rebound", original_ref=original_ref, current_ref=current.id,
+                         name=current.name, grid_ref=current.grid_ref, row_ref=current.row_ref,
+                         basis="fresh_unique_same_stage_identity", operations=binding["operations"],
+                         browser_action_dispatched=False)
+        scope["bindings"] = bindings
 
     def generate_stage_candidates(self, obs, *, limit, offset):
         handoff = self.memory.feedback.get("planning_handoff")
@@ -1485,6 +1523,28 @@ class DynamicController(Controller):
                          all_controls_preserved=True)
                 candidates, limit = smaller, reduced
 
+    async def readback_after_policy_overflow(self, obs, exc):
+        """A pending outcome can use the required brain readback without a fast-policy request."""
+        self.log("policy_context_readback_fallback", **exc.metrics,
+                 pending_preserved=True, browser_action_dispatched=False,
+                 reason="protected policy context overflow; required outcome review uses fresh evidence")
+        signature = semantic_key(obs)
+        if self.pending.get("context_readback_signature") != signature:
+            assessment = await self.review(obs, phase="action_readback")
+            if self.confirm_transition(assessment.last_outcome, obs, "context_overflow_readback"):
+                return None
+            if assessment.last_outcome == "unknown":
+                if await self.refresh_unknown_readback(obs):
+                    return None
+                return self.result("needs_attention", "uncertain action after context readback; no resubmission")
+            self.pending["context_readback_signature"] = signature
+        self.pending["waits"] += 1
+        if self.pending["waits"] >= self.budget.readback_waits:
+            return self.result("needs_attention", "readback unresolved after policy context overflow; no resubmission")
+        if reason := await self.perform(self.internal_action(obs, Operation.WAIT), obs):
+            return self.result("needs_attention", reason)
+        return None
+
     def confirm_transition(self, outcome, obs, basis):
         if not self.pending:
             return True
@@ -1597,15 +1657,24 @@ class DynamicController(Controller):
                 or action.get("bound_value") in {None, "[redacted]"}
                 or obs.observation_id == action["observation_id"]
                 or obs.url != pending["before"]["url"]
-                or obs.tab_id != pending["before"]["tab_id"]):
+                or obs.tab_id != pending["before"]["tab_id"]
+                or obs.dialogs != pending.get("before_dialogs", [])):
             return False
-        matches = [e for e in obs.elements if e.id == target["id"]
+        scoped_row = bool(target.get("grid_ref") and target.get("row_ref"))
+        matches = [e for e in obs.elements if (e.id == target["id"] or scoped_row)
                    and e.role == target["role"] and e.name == target["name"]
-                   and e.context == target["context"] and e.enabled and not e.read_only
+                   and (e.grid_ref, e.row_ref) == (target.get("grid_ref"), target.get("row_ref"))
+                   and (scoped_row or e.context == target["context"]) and e.enabled and not e.read_only
                    and (e.editable if action["operation"] == Operation.FILL else e.selectable)
                    and e.value == action["bound_value"]]
         if len(matches) != 1:
             return False
+        pending["readback_proof"] = {
+            "observation_id": obs.observation_id, "document_version": obs.document_version,
+            "original_ref": target["id"], "current_ref": matches[0].id,
+            "name": matches[0].name, "grid_ref": matches[0].grid_ref, "row_ref": matches[0].row_ref,
+            "value": matches[0].value, "scope": "visible input population only; no business persistence",
+        }
         return self.confirm_transition("confirmed", obs, "fresh_visible_input_value")
 
     def confirm_visible_option(self, obs):
@@ -1924,6 +1993,7 @@ class DynamicController(Controller):
             self.cycles += 1
             self.observer.context["cycle"] = self.cycles
             obs = await self.observe_dynamic()
+            self.refresh_stage_bindings(obs)
             candidate_limit = self.candidate_page_limits.get(planning_location(obs), self.budget.candidate_limit)
             if reason := self.blocked(obs):
                 return self.result("needs_attention", reason)
@@ -2030,8 +2100,15 @@ class DynamicController(Controller):
                 if refreshed:
                     decision = Decision(choice=refreshed.id)
                 else:
-                    decision, candidates, candidate_limit = await self.choose_with_context_pages(
-                        obs, candidates, limit=candidate_limit, offset=offset)
+                    try:
+                        decision, candidates, candidate_limit = await self.choose_with_context_pages(
+                            obs, candidates, limit=candidate_limit, offset=offset)
+                    except ContextBudgetExceeded as exc:
+                        if not self.pending:
+                            raise
+                        if result := await self.readback_after_policy_overflow(obs, exc):
+                            return result
+                        continue  # No next action proposal predates the required readback.
                     self.candidate_page_limits[planning_location(obs)] = candidate_limit
                 self.log(
                     "decision",

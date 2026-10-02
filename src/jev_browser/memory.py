@@ -236,7 +236,8 @@ class Memory:
                    if self.write_checkpoints else {}),
                 **({"planning_handoff": self.feedback["planning_handoff"]}
                    if self.feedback.get("planning_handoff") else {}),
-                **({"execution_scope": self.feedback["execution_scope"]}
+                **({"execution_scope": {k: v for k, v in self.feedback["execution_scope"].items()
+                                        if k != "binding_origins"}}
                    if self.feedback.get("execution_scope") else {}),
                 "opened_pages": pages,
                 "opened_pages_total": len(self.page_registry),

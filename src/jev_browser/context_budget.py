@@ -246,9 +246,18 @@ def memory_view(raw, level):
             checkpoint["proof"] = {"archived": True}
         elif wire_bytes(checkpoint.get("proof", {})) > 400:
             checkpoint["proof"] = {"archived": True}
+        if isinstance(checkpoint["fields"], list):
+            for field in checkpoint["fields"]:
+                value = field.get("value", "")
+                if len(value) > 240:
+                    field.pop("value")
+                    field["value_excerpt"] = excerpt(value, 240 if level == 0 else 120)
+                    field["value_archived"] = True  # Complete values live in checkpoint.archive_ref.
     if level:
         originals = raw.get("current_environment_readbacks", {}).get("actions", [])
         for i, action in enumerate(readbacks[:-2]):
+            action = copy.deepcopy(action)  # Isolate shared sources from the protected recent records.
+            readbacks[i] = action
             source = action.get("source", {})
             text = source.get("visible_excerpt", "")
             limit = 240 if level == 1 else 120
@@ -260,6 +269,18 @@ def memory_view(raw, level):
                     wire_json(action["proof"]), 240 if level == 1 else 120)}
             # Target, action key, business confirmation and scope stay exact.
             # Old long proof detail is retrievable; recent two stay verbatim.
+        if level == 2:
+            for i, action in enumerate(readbacks[:-2]):
+                source = action.get("source", {})
+                readbacks[i] = {
+                    **{k: action[k] for k in ("action_key", "operation", "target", "confirmation_scope",
+                                             "business_commit_confirmed") if k in action},
+                    "archive_ref": archive_ref(originals[i]),
+                    "proof": action.get("proof", {}),
+                    "source": {**{k: source[k] for k in ("url", "observation_id") if k in source},
+                               "quote_excerpt": excerpt(source.get("visible_excerpt", ""), 96)},
+                    "details_archived": True,
+                }
     return result
 
 
@@ -355,17 +376,28 @@ def _pool(payload, level):
             rows = []
             for i, node in enumerate(historical):
                 item = dict(node)
-                if i < len(historical) - 8:
+                if level == 4:
+                    recent = i >= len(historical) - 4
+                    item["quote_excerpt"] = excerpt(item.get("quote_excerpt", ""), 64 if recent else 32)
+                    # Distant interpretations are hypotheses, not the pinned observed facts.
+                    item["interpretation_excerpt"] = (excerpt(item.get("interpretation_excerpt", ""), 48)
+                                                      if recent else None)
+                elif i < len(historical) - 8:
                     for field in ("quote_excerpt", "interpretation_excerpt"):
                         item[field] = excerpt(item.get(field, ""), 48)
                 rows.append([item.get(field) for field in columns])
             memory["historical_key_nodes"] = {
                 "columns": columns, "rows": rows, "historical": True, "excerpted": True,
             }
+            if level == 4 and len({wire_json(row[-1]) for row in rows}) == 1:
+                memory["historical_key_nodes"]["verification_default"] = rows[0][-1]
+                memory["historical_key_nodes"]["columns"] = columns[:-1]
+                memory["historical_key_nodes"]["rows"] = [row[:-1] for row in rows]
             memory["key_nodes"] = [n for n in memory["key_nodes"] if "archive_ref" not in n]
             state["context_view"]["key_node_lookup"] += (
                 " historical_key_nodes.rows follows its columns schema; all rows are historical "
-                "excerpts, with the same archive_ref lookup. key_nodes retains nearest full facts."
+                "excerpts, with the same archive_ref lookup. verification_default applies if that column "
+                "is omitted; null interpretation means archived hypothesis. key_nodes retains nearest full facts."
             )
     # Pool repeated exact literal bindings without changing any candidate ID or
     # executable value. The browser still executes the original Action object.

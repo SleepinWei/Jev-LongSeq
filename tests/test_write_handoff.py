@@ -133,3 +133,33 @@ async def test_recent_write_checkpoints_bound_duplicate_evidence_but_keep_curren
     assert projected['status'] == original['status']
     assert projected['proof'] == {'archived': True}
     assert len(original['visible_excerpt']) > 10000
+
+
+async def test_historical_readbacks_decay_but_keep_confirmation_scope_and_retrieval_anchor():
+    controller, _ = await saved_controller()
+    action = controller.memory.confirmed_actions[0]
+    action['source']['visible_excerpt'] = 'Visible source details ' * 100
+    controller.memory.confirmed_actions.extend([action.copy(), action.copy()])
+    raw = controller.memory.context()
+    projected = memory_view(raw, level=2)['current_environment_readbacks']['actions']
+    older = projected[0]
+    assert older['confirmation_scope'] == action['confirmation_scope']
+    assert older['business_commit_confirmed'] == action['business_commit_confirmed']
+    assert older['archive_ref'] == archive_ref(action)
+    assert older['source']['observation_id'] == action['source']['observation_id']
+    assert len(older['source']['quote_excerpt']) <= 96
+    assert projected[-1] == action
+    assert raw['current_environment_readbacks']['actions'][0]['source']['visible_excerpt'].endswith('details ')
+
+
+async def test_large_historical_field_values_do_not_duplicate_current_controls_in_request():
+    controller, _ = await saved_controller()
+    checkpoint = controller.memory.write_checkpoints[0]
+    checkpoint['fields'][0]['value'] = 'long saved note body ' * 1000
+    raw = controller.memory.context()
+    view = memory_view(raw, 2)['write_checkpoints'][0]
+    assert view['fields'][0]['name'] == 'Vendor Email'
+    assert 'value' not in view['fields'][0] and view['fields'][0]['value_archived']
+    assert len(view['fields'][0]['value_excerpt']) <= 120
+    assert view['archive_ref'] == archive_ref(checkpoint)
+    assert checkpoint['fields'][0]['value'].startswith('long saved note body ')
