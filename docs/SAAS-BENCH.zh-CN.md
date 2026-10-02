@@ -627,3 +627,22 @@ deepseek-flash（官方 /models 返回此名称及 deepseek-v4-pro）。只切�
 48000/96000 bytes 上下文上限以及 600 actions/1800 秒/1000 feedback calls 预算。
 沿用 I 已验证的源码，远端 controller SHA256 与本地一致。模型列表查询成功只证明
 鉴权与该读取接口可用，不代表生成请求或最终 benchmark 一定成功；成绩另记。
+
+官方 API 实际结果：`deepseek-34` 官方 3/15（20%）、data_valid=true、
+strict_success=false。离职单 docstatus=1 与三条活动/负责人通过，其余未通过。
+84 动作/103 cycles、50 feedback calls、Agent 709.22 秒；停止原因为 repeated
+state after brain recovery，评分无错误、cleanup_error=null。50 次 brain 请求
+均使用 api.deepseek.com/deepseek-flash，100 次策略请求仍使用 Jev；未出现 HTTP
+402 或其他模型请求错误。25 次阶段规划累计 575.33 秒（约 81% Agent 时间），
+readback 28.00 秒、input 18.34 秒、Jev 53.52 秒。规划仍是主要时间开销。
+一次 no_progress 规划返回额外 JSON 文本而解析失败，修复后继续；未触发规划
+退让/冻结，因此不能补充 I 的在线恢复收益证据。此单次成绩不代表任务成功率。
+
+本轮在供应商显示名处暴露了菜单状态与计划不一致：cycle87 填 Last Name 后，
+cycle88 的新鲜观察已含正确 menuitem e292（名称被抽取为重复的 Ananya Reddy），
+但下一动作仍点击 Select display name as，随后 cycle93 起选项从观察中消失。
+brain 后续反复要求查找/点击正确选项、且仅在关闭时重开，却未形成可执行的新
+选项范围；同状态 WAIT 后停止，供应商未保存。现有 G 菜单重授权未触发，具体
+被哪项前置条件阻止仍需定向回放。后续应在菜单已展开时防止不必要的 opener
+切换，及时重绑定因输入变化而更新的选项范围，并检查恢复计划是否包含当前
+可执行动作；不能把页面曾经显示过的选项当成现在仍可执行。
