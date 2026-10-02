@@ -501,3 +501,19 @@ D 实际结果：`arcbench-28` 官方 0/15、data_valid=true、strict_success=fa
 132 项最新定向回归及 Ruff/diff 通过。D cycle16 原 Open Link 动作与原 brain
 空作用域回放中，该动作被排除且 dispatch 前拒绝，无真实模型或浏览器动作。
 线上 E 保留 D 的输入揭示交接，检验此次单项导航范围改变的组合最终表现。
+
+E 实际结果：`arcbench-29` 官方仍为 0/15、data_valid=true、strict_success=false，
+26 动作/28 cycles、13 feedback calls、Agent 427.08 秒，清理正常。没有再跳出草稿，
+但第一行 User 连续填写/选择三次，之后同值 input 被正确抑制，旧 stage 仍要求
+填选该 User，连续 WAIT 到 repeated state after brain recovery。候选日志中字段
+位于完整 23/24-candidate 列表，故本次不是候选分页饥饿。导航限制阻止了偏航，
+未改善最终成功率；最新两次新增交接均未触发，仍无 D 的在线收益证据。
+
+实验 F（`arcbench-30`）：只在精确的 scoped option UI 读回成立后设置 ui_checkpoint，
+在下一动作前重新规划已选择的标识与后续字段。仍要求 fresh observation、已知
+receipt、同 URL/tab/grid/row、唯一 owner、值与实际选项匹配且 popup_closed；
+不把选择/关闭等同链接后台解析或业务持久化，不解除未知写入保护。
+E cycle7→8 的真实选项点击回放中，owner e2898 值为 rajesh.kumar@techvista.com
+且 dropdown 关闭，ui_review_due=true，无真实浏览器/模型调用。目标是避免旧的
+“输入搜索标签”计划再次覆盖已选择的标识，或在同值 input 抑制后原地等待。
+macmini 全量 617 通过/3 跳过，Ruff/diff 通过；F 线上成绩另记，不以回归测试推断成功率。

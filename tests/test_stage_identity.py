@@ -256,3 +256,31 @@ async def test_row_record_links_require_stage_scope_but_global_navigation_remain
         stage_controls=[StageControl(element_ref='record-link', operations=['click'])])
     await controller.review(obs, phase='step')
     assert controller.stage_action_allowed(row_link, obs)
+
+
+async def test_exact_option_readback_hands_off_before_repeating_old_search_input():
+    import time
+
+    from jev_browser.dynamic import Feedback, StageControl
+    before = form()
+    before.elements = [Element(id='user', role='combobox', name='User', editable=True,
+        value='Rajesh Kumar', grid_ref='activities', row_ref='1', popup_open=True),
+        Element(id='option', role='option', name='rajesh@example.test Rajesh Kumar',
+                option_owner='user', grid_ref='activities', row_ref='1')]
+    brain, backend = AsyncMock(), AsyncMock()
+    brain.review.return_value = Feedback(next_goal='Type Rajesh Kumar then choose matching option',
+        stage_controls=[StageControl(element_ref='user', operations=['fill'])])
+    backend.execute.return_value = Receipt(action_id='option', status='ok')
+    controller = DynamicController(definition(), backend, None, feedback=brain)
+    controller.started = time.monotonic()
+    await controller.review(before, phase='step')
+    action = next(a for a in generate_dynamic(before, definition()) if a.element_ref == 'option')
+    await controller.perform(action, before)
+    after = before.model_copy(deep=True, update={'observation_id': 'fresh', 'text': 'User rajesh@example.test'})
+    after.elements = [before.elements[0].model_copy(update={'value': 'rajesh@example.test', 'popup_open': False})]
+    assert controller.confirm_visible_option(after)
+    assert controller.pending is None and controller.ui_review_due
+    assert not controller.memory.write_checkpoints
+    assert controller.memory.confirmed_actions[-1]['business_commit_confirmed'] is False
+    backend.execute.assert_awaited_once()
+    assert any(e['kind'] == 'option_selection_handoff' for e in controller.events)

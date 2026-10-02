@@ -1733,6 +1733,15 @@ class DynamicController(Controller):
         }
         if not self.confirm_transition("confirmed", obs, "fresh_scoped_option_ui"):
             return False
+        # The old plan describes entering a search label; the selected value
+        # may be a different record identifier. Reconcile the fresh selection
+        # before that old plan can type the label again or wait on a suppressed
+        # same-value input. This readback still proves no business persistence.
+        self.ui_review_due = True
+        self.log("option_selection_handoff", input_ref=target["id"],
+                 grid_ref=target.get("grid_ref"), row_ref=target.get("row_ref"),
+                 current_value=matches[0].value, business_commit_confirmed=False,
+                 browser_action_dispatched=False)
         self.memory.feedback["working_memory"] = (
             self.memory.feedback.get("working_memory", "") + "\nRECENT LOCAL UI READBACK: "
             f"grid={target.get('grid_ref')}; row={target.get('row_ref')}; "
