@@ -619,3 +619,11 @@ G/H/I 三轮最终严格成功均为 false：G 为 4/15，H 为 0/15，I 因 HTT
 局部行为，不构成最终成功率提升证据。外部依赖恢复后，先验证 I 的规划超时恢复，
 再分别评估阶段导航约束、规划控件可执行性检查、Accounting 入口观察抽取、
 规划耗时缩减与结构化未完成义务记录；这些后续机制尚未实施。
+
+官方 API 对照（`deepseek-34`）：用户要求改用 DeepSeek 官方 API 后，使用 macmini
+已有 api.env，brain endpoint 为 api.deepseek.com/v1/chat/completions，model 为
+deepseek-flash（官方 /models 返回此名称及 deepseek-v4-pro）。只切换 provider 及其
+官方 flash 模型名称，不修改 harness；保留 Jev、原始任务、memory/UI 恢复点、
+48000/96000 bytes 上下文上限以及 600 actions/1800 秒/1000 feedback calls 预算。
+沿用 I 已验证的源码，远端 controller SHA256 与本地一致。模型列表查询成功只证明
+鉴权与该读取接口可用，不代表生成请求或最终 benchmark 一定成功；成绩另记。
