@@ -66,6 +66,27 @@ def test_active_allowance_survives_query_and_tab_changes():
     assert agent.verification_runs[planning_location(second)][0] == 3
 
 
+def test_explicit_verification_cannot_disable_allowance_with_an_unmatched_input():
+    from jev_browser.dynamic import StageEntry
+
+    agent = controller()
+    obs = report().model_copy(update={"elements": [Element(id="reload", role="button", name="Reload Report")]})
+    agent.memory.feedback = Feedback(next_goal="Run report once", inputs=[{"name": "Search", "value": "Employee"}],
+        stage_entry=StageEntry(intent="verify", operation="click", element_ref="reload"),
+        verification={"goal": "Find employee row", "fallback_goal": "Create vendor"}).model_dump()
+    assert not agent.verification_inputs_ready(obs)
+    agent.arm_verification(obs)
+    assert agent.verification_runs[planning_location(obs)][0] == 0
+    agent.pending = {"dispatch_status": "unknown"}
+    assert not agent.defer_verification(obs)
+    agent.pending = None
+    agent.actions = 6
+    assert agent.defer_verification(obs)
+    assert agent.memory.feedback["next_goal"] == "Create vendor"
+    assert agent.memory.unresolved_verifications[0]["status"] == "unresolved"
+    assert not agent.memory.confirmed_writes and not agent.memory.confirmed_actions
+
+
 def test_spa_routes_and_recreated_environments_have_distinct_verification_allowances():
     agent = controller()
     agent.memory.feedback = plan()

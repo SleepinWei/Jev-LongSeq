@@ -1251,9 +1251,15 @@ class DynamicController(Controller):
     def verification_exhausted(self, obs):
         return self.memory.verification_ledger.get(self.verification_key(obs), {}).get("exhausted", False)
 
+    def verification_budget_ready(self, obs):
+        # Explicit verification stages include query preparation. A stale or
+        # unrelated planned input must not disable the entire retry allowance.
+        entry = self.memory.feedback.get("stage_entry") or {}
+        return entry.get("intent") == "verify" or self.verification_inputs_ready(obs)
+
     def arm_verification(self, obs):
         if (self.memory.feedback.get("verification") and not self.pending and not self.memory.pending_writes
-                and self.verification_inputs_ready(obs)):
+                and self.verification_budget_ready(obs)):
             plan = self.memory.feedback["verification"]
             target = plan.get("target_url") or obs.url
             if verification_location(target) != verification_location(obs.url):
@@ -1270,7 +1276,7 @@ class DynamicController(Controller):
 
     def defer_verification(self, obs):
         plan = self.memory.feedback.get("verification")
-        if not plan or self.pending or self.memory.pending_writes or not self.verification_inputs_ready(obs):
+        if not plan or self.pending or self.memory.pending_writes or not self.verification_budget_ready(obs):
             return False
         target = plan.get("target_url") or obs.url
         key = self.verification_key(obs)

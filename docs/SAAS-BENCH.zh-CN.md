@@ -769,3 +769,27 @@ receipt 只证明浏览器动作超时，不能据此宣称业务写入已发生
 显式新授权、无 pending、无未知结果；Save/Submit/Publish/Approve 不参与例外。
 失败提议保留旧 memory 与 scope，补充合法重用、拒绝未知/打开/待确认/业务按钮的回归。
 N 保留 M 的其他机制及全部配置，通过 macmini 检查并 push 后自动重跑，得分另记。
+
+N 验证：macmini 全量 676 passed / 3 skipped、改动文件 Ruff 通过。以 M cycle93
+真实观察和 cycle69 确认的菜单记录离线重建：旧作用域拒绝入口、新拟议作用域接受，
+consumed 未清空，候选保留 Quick new；0 模型调用 / 0 浏览器动作。授权 generation
+在此回放中只重建新旧关系，不声称完整重放运行时状态。
+
+N 实际结果（`deepseek-39`）：官方 3/15、data_valid=true、strict_success=false，
+48 动作 / 56 cycles、24 feedback calls、Agent 232.62 秒；评分与清理正常。尚未进入
+供应商阶段，不能提供菜单修复的在线收益证据。报告 cycle45 第一次刷新返回 ok，
+cycle50 本地语义读回 confirmed，并显示 Nothing to show / 查询执行时间；cycle51
+却再次刷新，cycle56 读回 unknown 后安全停止。任务的 Search=Ananya Reddy 规划
+输入始终未匹配当前控件，verification_inputs_ready=false，使整个六动作核验额度
+从未启动（ledger 为空）。这不是报告加载无限等待，也不是未知业务写入被重放。
+
+实验 O：只修复核验额度启动条件。显式 stage_entry.intent=verify 表示核验尝试已经
+开始，查询准备也计入原六动作 / 120 秒额度；不存在或错配的 advisory inputs 不再
+关闭额度计时。旧协议没有显式入口时仍按已匹配输入启动。未确认/未知 pending
+继续阻止 defer；查询或准备动作已有当前读回确认后，额度耗尽才保留未解决义务，
+重新规划独立任务，不再重复查询。没有把空结果改成成功，也没有提高预算或放松
+未知写入保护。O 通过远端检查并 push 后自动重跑，配置与恢复点保持一致，得分另记。
+
+O 验证：macmini 全量 677 passed / 3 skipped、改动文件 Ruff 通过。以 N cycle50
+真实观察和反馈回放：原 input 匹配仍为 false，但新额度可以启动，原六动作后能
+记录未解决义务并转入 fallback；不添加业务确认记录、0 模型调用 / 0 浏览器动作。
