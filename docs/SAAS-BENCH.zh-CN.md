@@ -646,3 +646,16 @@ brain 后续反复要求查找/点击正确选项、且仅在关闭时重开，�
 被哪项前置条件阻止仍需定向回放。后续应在菜单已展开时防止不必要的 opener
 切换，及时重绑定因输入变化而更新的选项范围，并检查恢复计划是否包含当前
 可执行动作；不能把页面曾经显示过的选项当成现在仍可执行。
+
+实验 J（`deepseek-35`，2026-10-03）：仅增加已观察控件的阶段操作能力校验。
+brain 请求提供 current_control_capabilities，来自实际 candidate generator，
+与 task.allowed_operations、enabled/read_only、editable/selectable 等约束一致，
+在阶段范围、去重、输入抑制和分页之前计算；因此这一步只验证固有能力，不声称
+该动作已获阶段授权或现在允许重提。非局部规划若请求不存在的操作（如按钮 fill），
+在覆盖 memory/作用域之前拒绝，并把 element_ref、role、name、请求操作、当前
+可用操作传回既有的一次 repair。两次仍失败则按既有错误机制停止，不派发动作。
+保留 menuitem/option 的 select→click 规范；局部读回、完成审查和旧引用处理不变。
+空范围导航仍有效，本轮不修改菜单交接、导航约束、模型或预算，以隔离验证。
+真实 deepseek-34 cycle83 观察/规划离线回放精确返回 e129 button 仅支持 click，
+不支持 fill，无模型或浏览器调用。61 项定向测试通过；线上结果另记。
+macmini 全量 644 通过/3 跳过，Ruff/diff 通过；仍需官方评分验证最终结果。
