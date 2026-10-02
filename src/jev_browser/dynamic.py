@@ -1073,8 +1073,19 @@ class DynamicController(Controller):
                     raise ValueError("completion requires fresh quoted evidence and an answer")
                 if (phase in PLANNING_PHASES and not feedback._local_readback
                         and feedback.stage_controls is not None):
+                    # Evaluate confirmed-menu reuse against the proposed scope,
+                    # without installing it or releasing any transaction key.
+                    preview_scope = {
+                        "environment_id": self.memory.environment_id,
+                        "location": list(planning_location(obs)), "generation": self.scope_generation + 1,
+                        "bindings": {c.element_ref: {
+                            **{k: getattr(e, k) for k in ("role", "name", "grid_ref", "row_ref")},
+                            "operations": c.operations}
+                            for c in feedback.stage_controls
+                            if (e := next((e for e in obs.elements if e.id == c.element_ref), None))},
+                    }
                     if plan_errors := stage_plan_diagnostics(feedback, obs, self.task,
-                            consumed=self.consumed - self.reusable_menu_keys(obs)):
+                            consumed=self.consumed - self.reusable_menu_keys(obs, scope=preview_scope)):
                         self.log("stage_plan_rejected", phase=phase, diagnostic=plan_errors,
                                  browser_action_dispatched=False)
                         raise InvalidStagePlan(plan_errors)
@@ -1346,7 +1357,7 @@ class DynamicController(Controller):
                          browser_action_dispatched=False)
         scope["bindings"] = bindings
 
-    def reusable_menu_keys(self, obs):
+    def reusable_menu_keys(self, obs, *, scope=None):
         """A confirmed menu opener may be reused only by a newer explicit stage.
 
         Keep all consumed keys intact. This exception cannot release an unknown
@@ -1355,7 +1366,8 @@ class DynamicController(Controller):
         if (not self.reusable_menu_actions or self.pending or self.memory.pending_writes
                 or obs.loading or obs.dialogs):
             return set()
-        scope = self.memory.feedback.get("execution_scope", {})
+        preview = scope is not None
+        scope = scope if preview else self.memory.feedback.get("execution_scope", {})
         if (scope.get("environment_id") != self.memory.environment_id
                 or scope.get("location") != list(planning_location(obs))):
             return set()
@@ -1377,7 +1389,9 @@ class DynamicController(Controller):
                     and record["environment_id"] == self.memory.environment_id
                     and record["location"] == list(planning_location(obs))
                     and not menu_names.intersection(record["menu_names"])
-                    and self.stage_action_allowed(action, obs)):
+                    and all(getattr(element, k) == binding.get(k)
+                            for k in ("role", "name", "grid_ref", "row_ref"))
+                    and (preview or self.stage_action_allowed(action, obs))):
                 if element.popup_open is not True:
                     keys.add(key)
         return keys

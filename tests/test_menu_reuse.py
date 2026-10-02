@@ -8,6 +8,7 @@ from jev_browser.dynamic import (
     DynamicController,
     Feedback,
     StageControl,
+    StageEntry,
     action_key,
     generate_dynamic,
 )
@@ -65,6 +66,53 @@ async def test_confirmed_closed_menu_needs_new_explicit_authorization_to_reappea
     assert controller.backend.execute.await_count == 2
     assert controller.pending and not controller.reusable_menu_keys(closed)
     assert any(e["kind"] == "menu_opener_reauthorized" for e in controller.events)
+
+
+async def test_entry_precheck_uses_proposed_scope_without_installing_it_before_validation():
+    from jev_browser.dynamic import InvalidFeedbackOutput
+
+    controller, before, _, closed, action = await opened_controller()
+    key = action_key(action, before)
+    old_scope = controller.memory.feedback["execution_scope"]
+    controller.feedback_model.review.return_value = Feedback(next_goal="Open creation menu for journal",
+        stage_entry=StageEntry(intent="navigate", operation="click", element_ref="opener"),
+        stage_controls=[StageControl(element_ref="opener", operations=["click"])])
+    await controller.review(closed, phase="write_checkpoint")
+    assert key in controller.consumed and old_scope is not controller.memory.feedback["execution_scope"]
+    assert not any(e["kind"] == "stage_plan_rejected" for e in controller.events)
+    controller.backend.execute.assert_awaited_once()  # Preview is not a browser dispatch.
+    candidates = controller.generate_stage_candidates(closed, limit=8, offset=0)
+    assert any(a.element_ref == "opener" for a in candidates)
+    # A bad proposal must preserve the accepted scope and transaction ledger.
+    accepted_scope = controller.memory.feedback["execution_scope"]
+    controller.feedback_model.review.return_value = Feedback(next_goal="Fill the button",
+        stage_entry=StageEntry(intent="act", operation="fill", element_ref="opener"),
+        stage_controls=[StageControl(element_ref="opener", operations=["fill"])])
+    with pytest.raises(InvalidFeedbackOutput):
+        await controller.review(closed, phase="step")
+    assert controller.memory.feedback["execution_scope"] is accepted_scope
+    assert key in controller.consumed
+
+
+@pytest.mark.parametrize("case", ["unknown", "open", "pending", "business"])
+async def test_proposed_stage_entry_cannot_reauthorize_unconfirmed_or_business_actions(case):
+    from jev_browser.dynamic import InvalidFeedbackOutput
+
+    controller, before, after, closed, action = await opened_controller(
+        status="unknown" if case == "unknown" else "ok",
+        name="Save" if case == "business" else "Quick new")
+    obs = after if case == "open" else closed
+    if case == "open":
+        controller.consumed.add(action_key(action, obs))
+    if case == "pending":
+        controller.memory.pending_writes["other"] = {"dispatch_status": "unknown"}
+    controller.feedback_model.review.return_value = Feedback(next_goal="Reuse opener",
+        stage_entry=StageEntry(intent="navigate", operation="click", element_ref="opener"),
+        stage_controls=[StageControl(element_ref="opener", operations=["click"])])
+    with pytest.raises(InvalidFeedbackOutput):
+        await controller.review(obs, phase="step")
+    controller.backend.execute.assert_awaited_once()
+    assert action_key(action, before) in controller.consumed
 
 
 @pytest.mark.parametrize("change", ["open", "no_scope", "wrong_environment", "wrong_route", "pending"])
