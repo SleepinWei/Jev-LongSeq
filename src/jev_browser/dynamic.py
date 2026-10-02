@@ -25,7 +25,8 @@ WORKING_MEMORY_TRIGGER = 48_000
 WORKING_MEMORY_TARGET = 24_000
 WORKING_MEMORY_RECENT = 6_000
 PLANNING_PHASES = frozenset({"initial", "step", "resume", "no_progress", "draft_row_added",
-                            "stage_budget", "write_checkpoint", "navigation_checkpoint", "ui_checkpoint"})
+                            "stage_budget", "write_checkpoint", "navigation_checkpoint", "ui_checkpoint",
+                            "jev_requested", "low_confidence", "stale_target_changed"})
 
 
 def write_boundary(target):
@@ -88,6 +89,11 @@ class VerificationStage(Model):
     fallback_goal: str = Field(min_length=1, max_length=2000)
 
 
+class StageControl(Model):
+    element_ref: str = Field(min_length=1, max_length=200)
+    operations: list[Literal["click", "fill", "select"]] = Field(min_length=1, max_length=3)
+
+
 class Feedback(Model):
     _note_diagnostics: list = PrivateAttr(default_factory=list)
     _local_readback: bool = PrivateAttr(default=False)
@@ -104,6 +110,7 @@ class Feedback(Model):
     evidence_requests: list[str] = Field(default_factory=list, max_length=8)
     inputs: list[PlannedInput] = Field(default_factory=list, max_length=20)
     verification: VerificationStage | None = None
+    stage_controls: list[StageControl] | None = Field(default=None, max_length=40)
 
 
 class InputValue(Model):
@@ -166,6 +173,7 @@ class StageGuidance(Model):
     evidence_requests: list[str] = Field(default_factory=list, max_length=8)
     inputs: list[PlannedInput] = Field(default_factory=list, max_length=20)
     verification: VerificationStage | None = None
+    stage_controls: list[StageControl] = Field(default_factory=list, max_length=40)
 
 
 class CompressedMemory(Model):
@@ -311,7 +319,8 @@ def identifiable_click(element):
                 or (element.grid_ref and element.row_ref and element.context.strip()))
 
 
-def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppressed_inputs=None):
+def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppressed_inputs=None,
+                     action_filter=None):
     """All candidates come from current DOM capabilities, never task-name matching."""
     consumed = consumed or set()
     suppressed_inputs = suppressed_inputs or set()
@@ -380,7 +389,8 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppresse
                         + " | " + description, element_ref=element.id, bound_value=literal["value"]))
             if input_slot_key(element, Operation.SELECT) not in suppressed_inputs:
                 regular.append(make(Operation.SELECT, "Select " + description, element_ref=element.id))
-    controls = [a for a in controls if a.operation in task.allowed_operations]
+    controls = [a for a in controls if a.operation in task.allowed_operations
+                and (action_filter is None or action_filter(a))]
     regular = [
         a
         for a in regular
@@ -388,6 +398,7 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppresse
         and (
             a.operation in {Operation.FILL, Operation.SELECT} or action_key(a, obs) not in consumed
         )
+        and (action_filter is None or action_filter(a))
     ]
     capacity = limit - len(controls) - 1
     if capacity < 1:
@@ -458,8 +469,14 @@ class JsonFeedback:
             "Give concise guidance for the next stage; preserve completed, pending and unresolved "
             "work in working_memory. Do not add requirements beyond the user's goal. "
             "For each planned fill/select, populate inputs with the exact visible field name, "
-            "intended value and grid/row when applicable. These are advisory bindings, not new "
-            "authorization. For read-only verification, set verification={goal,fallback_goal}; "
+            "intended value and grid/row when applicable. These are advisory bindings, not new authorization. "
+            "Populate stage_controls with current observed element_ref IDs and operations (click/fill/select) "
+            "for controls needed by this stage, including fields, linked options and Save when appropriate. "
+            "Only these controls may mutate the form. Navigation and replan remain available. "
+            "Do not include controls belonging to already completed objects or another stage. "
+            "Do not invent IDs for controls that are not observed. After an opener reveals new controls, "
+            "request replanning to scope those controls. Empty stage_controls allows locating/navigation only. "
+            "For read-only verification, set verification={goal,fallback_goal}; "
             "fallback_goal is independent requested work allowed by the user's dependencies. "
             "Verification has at most six actions or 120 seconds. Empty results after an executed "
             "query are evidence of absence, not loading. Preserve that unresolved requirement "
@@ -468,11 +485,11 @@ class JsonFeedback:
             "at the end. Prefer recent information; older settled detail may be discarded. "
             "For sequential searches, distinguish entering a query, submitting it, and observing "
             "its results; preserve the requested order. "
-            "Use current_environment_readbacks over old advisory summaries. Resume warnings "
+            "Use current_environment_readbacks over old advisory summaries. "
             "write_checkpoints contain sourced field snapshots and local write effects; use them "
             "to avoid recreating already processed objects. Their status is not final verification. "
             "Check environment_id before using a checkpoint as current-environment evidence. "
-            "describe inherited work at startup only; never reclassify later confirmed actions "
+            "Resume warnings describe inherited work at startup only; never reclassify later confirmed actions "
             "as prior-session work without new contradictory evidence. A local UI readback "
             "still does not prove business persistence or whole-task completion. "
             "Prefer a directly matching page-local operation over a generic global creation "
@@ -645,6 +662,7 @@ class JsonFeedback:
                         working_memory=memory.feedback.get("working_memory", ""),
                         inputs=memory.feedback.get("inputs", []),
                         verification=memory.feedback.get("verification"),
+                        stage_controls=memory.feedback.get("stage_controls"),
                         blockers=memory.feedback.get("blockers", []),
                         last_outcome=result.last_outcome,
                         readback_quote=quotes[0] if quotes else "",
@@ -773,6 +791,7 @@ class DynamicController(Controller):
         self.verification_runs = {}
         self.exhausted_verifications = set()
         self.planning_retry_after = {}
+        self.candidate_page_limits = {}
 
     def input_suppression(self, obs):
         scope = digest([semantic_key(obs), self.memory.feedback.get("next_goal"),
@@ -976,6 +995,24 @@ class DynamicController(Controller):
         )
         previous_feedback = self.memory.feedback
         self.memory.feedback = feedback.model_dump()
+        if feedback._local_readback:
+            if previous_feedback.get("execution_scope"):
+                self.memory.feedback["execution_scope"] = previous_feedback["execution_scope"]
+            if previous_feedback.get("planning_handoff"):
+                self.memory.feedback["planning_handoff"] = previous_feedback["planning_handoff"]
+        elif feedback.stage_controls is not None:
+            bindings = {}
+            for control in feedback.stage_controls:
+                element = next((e for e in obs.elements if e.id == control.element_ref), None)
+                if element is None:
+                    self.log("stage_control_discarded", element_ref=control.element_ref,
+                             reason="not currently observed", browser_action_dispatched=False)
+                    continue
+                identity = {k: getattr(element, k) for k in ("role", "name", "grid_ref", "row_ref")}
+                bindings[control.element_ref] = {**identity, "operations": control.operations}
+            self.memory.feedback["execution_scope"] = {
+                "environment_id": self.memory.environment_id,
+                "location": list(planning_location(obs)), "bindings": bindings}
         route = planning_location(obs)
         if feedback.verification:
             self.arm_verification(obs)
@@ -1049,6 +1086,8 @@ class DynamicController(Controller):
             "visible_excerpt": obs.text[:1200]})
         self.exhausted_verifications.add(planning_location(obs))
         self.memory.feedback.update(next_goal=plan["fallback_goal"], verification=None, inputs=[])
+        if self.memory.feedback.get("execution_scope"):
+            self.ui_review_due = True  # The fallback is a new stage, not the old report's controls.
         self.log("verification_deferred", goal=plan["goal"], fallback_goal=plan["fallback_goal"],
                  reason="read-only verification allowance exhausted", business_write_released=False)
         self.checkpoint()
@@ -1059,6 +1098,47 @@ class DynamicController(Controller):
         matches = [p for p in entries if p["name"] == element.name
                    and p.get("grid_ref") == element.grid_ref and p.get("row_ref") == element.row_ref]
         return matches[0] if len(matches) == 1 and self.last_brain_location == planning_location(obs) else None
+
+    def stage_action_allowed(self, action, obs):
+        scope = self.memory.feedback.get("execution_scope")
+        if not scope or action.operation not in MUTATIONS:
+            return True
+        if handoff_navigation(action, obs):
+            return True
+        if (scope["environment_id"] != self.memory.environment_id
+                or scope["location"] != list(planning_location(obs))):
+            return False  # A new page/environment requires a fresh stage plan.
+        element = next((e for e in obs.elements if e.id == action.element_ref), None)
+        binding = scope["bindings"].get(action.element_ref)
+        if element and action.operation == Operation.CLICK and element.role == "option" and element.option_owner:
+            owner = next((e for e in obs.elements if e.id == element.option_owner), None)
+            parent = scope["bindings"].get(element.option_owner)
+            if (owner and parent and owner.popup_open is True
+                    and {"fill", "select"} & set(parent["operations"])
+                    and all(getattr(owner, k) == parent[k]
+                            for k in ("role", "name", "grid_ref", "row_ref"))
+                    and (element.grid_ref, element.row_ref) == (owner.grid_ref, owner.row_ref)):
+                return True  # Newly rendered options belong to this already scoped field.
+        return bool(element and binding and action.operation in binding["operations"]
+                    and all(getattr(element, k) == binding[k]
+                            for k in ("role", "name", "grid_ref", "row_ref")))
+
+    def generate_stage_candidates(self, obs, *, limit, offset):
+        handoff = self.memory.feedback.get("planning_handoff")
+        navigating = (handoff and handoff["environment_id"] == self.memory.environment_id)
+        removed = 0
+        def eligible(action):
+            nonlocal removed
+            allowed = (self.pending or (self.stage_action_allowed(action, obs)
+                       and (not navigating or handoff_navigation(action, obs))))
+            removed += not bool(allowed)
+            return bool(allowed)
+        candidates = generate_dynamic(obs, self.task, limit=limit, offset=offset,
+            consumed=self.consumed, suppressed_inputs=self.input_suppression(obs), action_filter=eligible)
+        if removed:
+            self.log("stage_candidates_guarded", removed=removed, allowed_candidates=len(candidates),
+                     before_pagination=True, browser_action_dispatched=False)
+        return candidates
 
     async def observe_dynamic(self, *, finish=False):
         obs = await self.observer.measure("browser.observe", self.backend.observe)
@@ -1103,6 +1183,8 @@ class DynamicController(Controller):
                 and handoff["environment_id"] == self.memory.environment_id
                 and not handoff_navigation(action, obs)):
             return "write checkpoint needs fresh planning before another form mutation"
+        if not self.pending and not self.stage_action_allowed(action, obs):
+            return "action outside current observed stage scope; fresh planning required"
         if action.operation not in {Operation.FILL, Operation.SELECT}:
             self.input_retry = None
         if action.operation not in self.task.allowed_operations:
@@ -1365,6 +1447,12 @@ class DynamicController(Controller):
     async def choose_with_context_pages(self, obs, candidates, *, limit, offset):
         """Retry only pre-dispatch context overflow with a smaller navigable page."""
         while True:
+            if not self.pending:
+                original = len(candidates)
+                candidates = [a for a in candidates if self.stage_action_allowed(a, obs)]
+                if len(candidates) != original:
+                    self.log("stage_candidates_guarded", removed=original - len(candidates),
+                             allowed_candidates=len(candidates), browser_action_dispatched=False)
             handoff = self.memory.feedback.get("planning_handoff")
             if (not self.pending and handoff
                     and handoff["environment_id"] == self.memory.environment_id):
@@ -1387,8 +1475,7 @@ class DynamicController(Controller):
                 if (Operation.MORE_CANDIDATES not in self.task.allowed_operations
                         or reduced >= limit or len(candidates) <= floor):
                     raise
-                smaller = generate_dynamic(obs, self.task, limit=reduced, offset=offset,
-                    consumed=self.consumed, suppressed_inputs=self.input_suppression(obs))
+                smaller = self.generate_stage_candidates(obs, limit=reduced, offset=offset)
                 if len(smaller) >= len(candidates):
                     raise
                 self.log("candidate_context_page_reduced", previous_limit=limit,
@@ -1837,6 +1924,7 @@ class DynamicController(Controller):
             self.cycles += 1
             self.observer.context["cycle"] = self.cycles
             obs = await self.observe_dynamic()
+            candidate_limit = self.candidate_page_limits.get(planning_location(obs), self.budget.candidate_limit)
             if reason := self.blocked(obs):
                 return self.result("needs_attention", reason)
             if self.actions >= self.budget.max_actions:
@@ -1926,13 +2014,10 @@ class DynamicController(Controller):
                 operation = Operation.FINISH
                 selected = None
             else:
-                candidates = generate_dynamic(
+                candidates = self.generate_stage_candidates(
                     obs,
-                    self.task,
                     limit=candidate_limit,
                     offset=offset,
-                    consumed=self.consumed,
-                    suppressed_inputs=self.input_suppression(obs),
                 )
                 stale_target = self.stale_click
                 refreshed = self.refreshed_stale_click(obs, candidates)
@@ -1947,6 +2032,7 @@ class DynamicController(Controller):
                 else:
                     decision, candidates, candidate_limit = await self.choose_with_context_pages(
                         obs, candidates, limit=candidate_limit, offset=offset)
+                    self.candidate_page_limits[planning_location(obs)] = candidate_limit
                 self.log(
                     "decision",
                     decision=decision.model_dump(),
@@ -2022,6 +2108,12 @@ class DynamicController(Controller):
                             or (self.last_brain_location is not None
                                 and planning_location(obs) != self.last_brain_location)):
                         continue  # the previous next-action proposal predates the revised guidance
+                if not self.stage_action_allowed(selected, obs):
+                    self.log("stage_action_rejected", target=selected.element_ref,
+                             operation=selected.operation, browser_action_dispatched=False,
+                             pending_preserved=bool(self.pending))
+                    trigger = "jev_requested"
+                    continue
                 threshold = self.budget.confidence_threshold
                 if (
                     threshold is not None
