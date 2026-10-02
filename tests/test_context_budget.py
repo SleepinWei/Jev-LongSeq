@@ -60,6 +60,44 @@ def test_temporal_decay_keeps_recent_details_and_older_mentions():
     assert view.count("detail-49") > view.count("detail-40") > view.count("detail-20")
 
 
+def test_adaptive_pressure_fits_growing_obligations_without_changing_active_state():
+    from jev_browser.context_budget import _pool
+
+    task, obs, memory = sample()
+    memory.unresolved_verifications = [{"goal": f"Report obligation {i}: " + "historical goal " * 65,
+        "status": "unresolved", "source": {"url": "about:blank", "observation_id": f"old{i}"},
+        "visible_excerpt": "old report text " * 80} for i in range(16)]
+    payload = {"state": {"trusted_goal": task.objective, "hard_constraints": ["No repeat writes"],
+        "untrusted_observation": obs.model_dump(), "untrusted_memory": memory.context()},
+        "questions": {"action": {"criteria": {"a0": {"target": "e0"}}}}}
+    saved = copy.deepcopy(payload)
+    baseline = _pool(payload, 4)
+    projected, metrics = project_request(payload, max_bytes=wire_bytes(baseline) - 4000)
+    assert metrics["memory_pressure"] > 0 and metrics["after_bytes"] <= metrics["max_bytes"]
+    assert projected["state"]["untrusted_observation"] == baseline["state"]["untrusted_observation"]
+    assert projected["state"]["trusted_goal"] == payload["state"]["trusted_goal"]
+    assert projected["questions"] == payload["questions"]
+    view = projected["state"]["untrusted_memory"]
+    assert view["pending_writes"] == baseline["state"]["untrusted_memory"]["pending_writes"]
+    assert view["key_nodes"] == baseline["state"]["untrusted_memory"]["key_nodes"]
+    assert view["recent_evidence"] == baseline["state"]["untrusted_memory"]["recent_evidence"]
+    for original, short in zip(memory.unresolved_verifications, view["unresolved_verifications"], strict=True):
+        assert short["status"] == "unresolved" and short["source"] == original["source"]
+        assert short["archive_ref"] == archive_ref(original)
+    assert payload == saved
+
+
+def test_adaptive_pressure_never_trims_a_protected_oversized_pending_action():
+    task, obs, memory = sample()
+    memory.pending_writes["pending"]["expected_goal"] = "不可丢失" * 4000
+    payload = {"state": {"trusted_goal": task.objective, "hard_constraints": [],
+        "untrusted_observation": obs.model_dump(), "untrusted_memory": memory.context()}}
+    saved = copy.deepcopy(payload)
+    with pytest.raises(ContextBudgetExceeded):
+        project_request(payload, max_bytes=12000)
+    assert payload == saved
+
+
 def test_history_counts_old_repetitions_and_retains_recent_bound_values():
     events = [{"operation": "click", "description": "button: Add row | huge form text",
                "receipt": {"status": "ok"}} for _ in range(80)]

@@ -365,7 +365,35 @@ def evidence_delta_view(records):
     return table if wire_bytes(table) < wire_bytes(records) else records
 
 
-def _pool(payload, level):
+def pressure_memory(view, raw, pressure):
+    """Age only archived history; recent facts and active execution state stay exact."""
+    size = (240, 120, 48)[pressure - 1]
+    for i, record in enumerate(view.get("unresolved_verifications", [])):
+        original = raw["unresolved_verifications"][i]
+        record["archive_ref"] = archive_ref(original)
+        record["goal"] = excerpt(original.get("goal", ""), size)
+        record["goal_excerpted"] = record["goal"] != original.get("goal", "")
+        record["visible_excerpt"] = excerpt(record.get("visible_excerpt", ""), size // 2)
+    for record in view.get("current_environment_readbacks", {}).get("actions", [])[:-2]:
+        # The original record is already indexed by memory_view; older proof is
+        # a retrieval hint, never required evidence for an unresolved action.
+        record["proof"] = {"archived": True}
+        record.get("source", {}).pop("quote_excerpt", None)
+    for record in view.get("write_checkpoints", [])[:-2]:
+        record["stage_goal"] = excerpt(record.get("stage_goal", ""), size)
+        record["visible_excerpt"] = excerpt(record.get("visible_excerpt", ""), size // 2)
+    for record in view.get("opened_pages", [])[:-2]:
+        record.pop("excerpt", None)
+    table = view.get("historical_key_nodes", {})
+    columns = table.get("columns", [])
+    for row in table.get("rows", []):
+        for field in ("quote_excerpt", "interpretation_excerpt"):
+            if field in columns and isinstance(row[columns.index(field)], str):
+                row[columns.index(field)] = excerpt(row[columns.index(field)], size // 2)
+    return view
+
+
+def _pool(payload, level, *, memory_pressure=0):
     detail_level = min(level, 2)
     result = copy.deepcopy(payload)
     state = result["state"]
@@ -532,6 +560,14 @@ def _pool(payload, level):
             state["context_view"]["control_lookup"] = lookup
     if level == 4:
         memory = state["untrusted_memory"]
+        if memory_pressure:
+            pressure_memory(memory, payload["state"]["untrusted_memory"], memory_pressure)
+            state["context_view"]["memory_pressure"] = memory_pressure
+            state["context_view"]["history_lookup"] = (
+                "Historical goal excerpts are not full obligations. Use archive_ref in evidence_requests "
+                "to retrieve exact verification goals and provenance. Recent facts, pending writes and "
+                "execution scope are unchanged; an excerpt never proves completion."
+            )
         compacted = compact_memory_layout(memory)
         lookup = (
             "Memory actions, write_checkpoints and opened_pages may be [schema_id,...values], "
@@ -553,14 +589,14 @@ def project_request(payload, *, max_bytes=DEFAULT_MAX_BYTES):
     before = wire_bytes(payload)
     target = int(max_bytes * .85)
     best = None
-    for level in range(5):
-        if level == 4 and best is not None:
+    for level, pressure in [(i, 0) for i in range(5)] + [(4, i) for i in range(1, 4)]:
+        if level == 4 and not pressure and best is not None:
             break  # Use the alternate control schema only if ordinary tiers fail.
-        projected = _pool(payload, level)
+        projected = _pool(payload, level, memory_pressure=pressure)
         after = wire_bytes(projected)
         metrics = {"before_bytes": before, "after_bytes": after,
                    "max_bytes": max_bytes, "target_bytes": target, "level": level,
-                   "sections": section_sizes(projected)}
+                   "sections": section_sizes(projected), "memory_pressure": pressure}
         if after <= max_bytes:
             if best is None or after < best[1]["after_bytes"]:
                 best = projected, metrics
@@ -616,11 +652,11 @@ def project_chat_request(payload, *, max_bytes, purpose):
     target = int(max_bytes * .85)
     best = None
     state_keys = {"trusted_goal", "hard_constraints", "untrusted_observation", "untrusted_memory"}
-    for level in range(5):
-        if level == 4 and best is not None:
+    for level, pressure in [(i, 0) for i in range(5)] + [(4, i) for i in range(1, 4)]:
+        if level == 4 and not pressure and best is not None:
             break
         state = {k: v for k, v in prepared.items() if k in state_keys}
-        wrapper = _pool({"state": state, "questions": {}}, level)
+        wrapper = _pool({"state": state, "questions": {}}, level, memory_pressure=pressure)
         content = {**{k: v for k, v in prepared.items() if k not in state_keys}, **wrapper["state"]}
         if level >= 3 and purpose == "dynamic_feedback":
             records = content.get("new_evidence_since_last_brain_call")
@@ -640,7 +676,7 @@ def project_chat_request(payload, *, max_bytes, purpose):
         after = wire_bytes(projected)
         metrics = {"purpose": purpose, "before_bytes": before, "after_bytes": after,
                    "max_bytes": max_bytes, "level": level,
-                   "target_bytes": target,
+                   "target_bytes": target, "memory_pressure": pressure,
                    "sections": {k: wire_bytes(v) for k, v in content.items()}}
         if after <= max_bytes:
             if best is None or after < best[1]["after_bytes"]:

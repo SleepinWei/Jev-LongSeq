@@ -411,8 +411,9 @@ async def test_feedback_wire_contract_and_call_ledger():
             response = {"value": "Ada"}
         elif content["phase"] == "step":
             assert "current_visible_evidence" not in content
-            assert set(content["schema"]["properties"]) == {"next_goal", "working_memory", "notes", "evidence_requests", "inputs", "verification", "stage_controls"}
-            response = {"next_goal": "Inspect", "working_memory": "Nothing completed yet"}
+            assert set(content["schema"]["properties"]) == {"next_goal", "working_memory", "notes", "evidence_requests", "inputs", "verification", "stage_controls", "stage_entry"}
+            response = {"next_goal": "Inspect", "working_memory": "Nothing completed yet",
+                        "stage_entry": {"intent": "locate", "operation": "request_replan"}}
         else:
             assert "current_visible_evidence" in content
             response = Feedback(
@@ -443,7 +444,8 @@ async def test_feedback_wire_contract_and_call_ledger():
 @pytest.mark.parametrize("phase", ["initial", "step", "finish"])
 async def test_feedback_accepts_long_memory_and_harmless_json_metadata(phase):
     long_memory = "observed state\n" * 600
-    response = {"next_goal": "Inspect", "working_memory": long_memory, "type": "object"}
+    response = {"next_goal": "Inspect", "working_memory": long_memory, "type": "object",
+                "stage_entry": {"intent": "locate", "operation": "request_replan"}}
 
     def respond(request):
         return httpx.Response(200, json={
@@ -876,7 +878,8 @@ async def test_compact_stage_keeps_unsummarized_cross_page_evidence():
             assert content['new_evidence_since_last_brain_call'] == [
                 {'url': 'https://example.test/earlier', 'quote': 'Earlier visible record: 12.34'}]
             return {'choices': [{'message': {'content': json.dumps({
-                'next_goal': 'Continue collecting records', 'working_memory': 'Earlier total: 12.34'})}}]}
+                'next_goal': 'Continue collecting records', 'working_memory': 'Earlier total: 12.34',
+                'stage_entry': {'intent': 'locate', 'operation': 'request_replan'}})}}]}
     memory = Memory()
     memory.dynamic_mode = True
     memory.evidence['earlier'] = {'source': {

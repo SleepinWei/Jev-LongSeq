@@ -91,6 +91,14 @@ class PlannedInput(Model):
 class VerificationStage(Model):
     goal: str = Field(min_length=1, max_length=1200)
     fallback_goal: str = Field(min_length=1, max_length=2000)
+    target_url: str | None = Field(default=None, max_length=2000)
+
+
+class StageEntry(Model):
+    intent: Literal["act", "navigate", "verify", "locate"]
+    operation: Literal["click", "fill", "select", "switch_tab", "scroll", "back", "request_replan", "wait"]
+    element_ref: str | None = Field(default=None, max_length=200)
+    tab_id: str | None = Field(default=None, max_length=200)
 
 
 class StageControl(Model):
@@ -115,6 +123,7 @@ class Feedback(Model):
     inputs: list[PlannedInput] = Field(default_factory=list, max_length=20)
     verification: VerificationStage | None = None
     stage_controls: list[StageControl] | None = Field(default=None, max_length=40)
+    stage_entry: StageEntry | None = None
 
 
 class InputValue(Model):
@@ -178,6 +187,7 @@ class StageGuidance(Model):
     inputs: list[PlannedInput] = Field(default_factory=list, max_length=20)
     verification: VerificationStage | None = None
     stage_controls: list[StageControl] = Field(default_factory=list, max_length=40)
+    stage_entry: StageEntry
 
 
 class CompressedMemory(Model):
@@ -332,7 +342,7 @@ def identifiable_click(element):
 
 
 def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppressed_inputs=None,
-                     action_filter=None):
+                     action_filter=None, preferred=None):
     """All candidates come from current DOM capabilities, never task-name matching."""
     consumed = consumed or set()
     suppressed_inputs = suppressed_inputs or set()
@@ -414,6 +424,8 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppresse
         )
         and (action_filter is None or action_filter(a))
     ]
+    if preferred is not None:
+        regular.sort(key=lambda action: not preferred(action))
     capacity = limit - len(controls) - 1
     if capacity < 1:
         raise ValueError("candidate budget cannot retain navigation")
@@ -441,7 +453,24 @@ def control_capabilities(obs, task):
     return {ref: sorted(operations) for ref, operations in capabilities.items()}
 
 
-def stage_plan_diagnostics(feedback, obs, task):
+def verification_location(url):
+    """Report identity survives filters/tab changes but distinguishes SPA routes."""
+    parts = urlsplit(url)
+    route = parts.path
+    if parts.fragment.startswith(("/", "!/")):
+        route += "#" + parts.fragment.split("?", 1)[0]
+    return [parts.scheme, parts.netloc, route]
+
+
+def entry_matches(entry, action):
+    operation = entry.operation
+    if operation == "select" and action.operation == Operation.CLICK:
+        operation = "click"  # The static capability check normalizes observed options.
+    return (action.operation.value == operation and action.element_ref == entry.element_ref
+            and (entry.operation != "switch_tab" or action.bound_value == entry.tab_id))
+
+
+def stage_plan_diagnostics(feedback, obs, task, *, consumed=None):
     capabilities = control_capabilities(obs, task)
     elements = {e.id: e for e in obs.elements}
     diagnostics = []
@@ -461,6 +490,31 @@ def stage_plan_diagnostics(feedback, obs, task):
                 "requested_operations": control.operations,
                 "unavailable_operations": sorted(unsupported),
                 "available_operations": capabilities[element.id]})
+    entry = feedback.stage_entry
+    if entry:
+        if entry.operation != "switch_tab" and entry.tab_id and entry.tab_id != obs.tab_id:
+            diagnostics.append({"loc": ["stage_entry", "tab_id"], "type": "stage_entry_wrong_tab"})
+        if feedback.verification and entry.intent != "verify":
+            diagnostics.append({"loc": ["verification"], "type": "verification_conflicts_with_stage_entry",
+                                "entry_intent": entry.intent})
+        if entry.intent == "verify" and feedback.verification:
+            destination = (obs.tabs.get(entry.tab_id) if entry.operation == "switch_tab" else obs.url)
+            target = feedback.verification.target_url or obs.url
+            if not destination or verification_location(target) != verification_location(destination):
+                diagnostics.append({"loc": ["verification", "target_url"],
+                                    "type": "verification_target_conflicts_with_stage_entry"})
+        candidates = generate_dynamic(obs, task, limit=2**31, consumed=consumed)
+        matching = [a for a in candidates if entry_matches(entry, a)]
+        controls = {c.element_ref: c.operations for c in feedback.stage_controls or []}
+        matching = [a for a in matching if a.operation not in MUTATIONS
+                    or handoff_navigation(a, obs)
+                    or a.operation.value in controls.get(a.element_ref, [])
+                    or (a.operation == Operation.CLICK and "select" in controls.get(a.element_ref, [])
+                        and elements[a.element_ref].role in {"option", "menuitem"})]
+        if not matching:
+            diagnostics.append({"loc": ["stage_entry"], "type": "stage_entry_not_executable",
+                                "element_ref": entry.element_ref, "operation": entry.operation,
+                                "reason": "missing control, missing stage authorization, or consumed action"})
     return diagnostics
 
 
@@ -522,6 +576,11 @@ class JsonFeedback:
             "for controls needed by this stage, including fields, linked options and Save when appropriate. "
             "Use click for menuitem/option activation; select is for selectable=true native controls. "
             "Use only operations listed in current_control_capabilities for each ID. "
+            "Populate stage_entry with intent (act/navigate/verify/locate), the first currently executable "
+            "operation, element_ref for a click/fill/select, or tab_id for switch_tab. Align next_goal, "
+            "stage_controls and verification with this single stage. If the desired control is absent, "
+            "choose an observed opener or a locate/replan entry; do not name unavailable navigation as executable. "
+            "Never attach an unrelated old verification to a new act or navigate stage. "
             "A button without fill capability cannot accept text. If schema_error reports "
             "control_operation_unavailable, revise the plan using current observed controls; "
             "do not repeat the rejected operation or invent an input. "
@@ -529,11 +588,14 @@ class JsonFeedback:
             "Do not include controls belonging to already completed objects or another stage. "
             "Do not invent IDs for controls that are not observed. After an opener reveals new controls, "
             "request replanning to scope those controls. Empty stage_controls allows locating/navigation only. "
-            "For read-only verification, set verification={goal,fallback_goal}; "
+            "For read-only verification, set verification={goal,fallback_goal,target_url} and entry.intent=verify; "
             "fallback_goal is independent requested work allowed by the user's dependencies. "
             "Verification has at most six actions or 120 seconds. Empty results after an executed "
             "query are evidence of absence, not loading. Preserve that unresolved requirement "
             "and continue independent work; do not invent a strict dependency on a visible row. "
+            "verification_ledger persists exhausted report allowances across paraphrases, tabs and query strings. "
+            "Do not revisit an exhausted target without a new confirmed write on that target. Preserve its "
+            "unresolved obligation and choose independent work with verification=null. "
             "Keep the ledger ordered from older to newer, with current state and recent actions "
             "at the end. Prefer recent information; older settled detail may be discarded. "
             "For sequential searches, distinguish entering a query, submitting it, and observing "
@@ -724,6 +786,7 @@ class JsonFeedback:
                         inputs=memory.feedback.get("inputs", []),
                         verification=memory.feedback.get("verification"),
                         stage_controls=memory.feedback.get("stage_controls"),
+                        stage_entry=memory.feedback.get("stage_entry"),
                         blockers=memory.feedback.get("blockers", []),
                         last_outcome=result.last_outcome,
                         readback_quote=quotes[0] if quotes else "",
@@ -853,6 +916,7 @@ class DynamicController(Controller):
         self.ui_review_due = False
         self.last_brain_location = None
         self.verification_runs = {}
+        self.verification_identity_runs = {}
         self.exhausted_verifications = set()
         self.planning_retry_after = {}
         self.candidate_page_limits = {}
@@ -932,7 +996,8 @@ class DynamicController(Controller):
                         break
                     records = {archive_ref(r): r for r in (
                         *self.memory.evidence.values(), *self.memory.key_nodes.values(),
-                        *self.memory.confirmed_actions, *self.memory.write_checkpoints)}
+                        *self.memory.confirmed_actions, *self.memory.write_checkpoints,
+                        *self.memory.unresolved_verifications)}
                     missing = [ref for ref in feedback.evidence_requests if ref not in records]
                     if missing:
                         raise UngroundedFeedback([{"loc": ["evidence_requests"],
@@ -1008,7 +1073,8 @@ class DynamicController(Controller):
                     raise ValueError("completion requires fresh quoted evidence and an answer")
                 if (phase in PLANNING_PHASES and not feedback._local_readback
                         and feedback.stage_controls is not None):
-                    if plan_errors := stage_plan_diagnostics(feedback, obs, self.task):
+                    if plan_errors := stage_plan_diagnostics(feedback, obs, self.task,
+                            consumed=self.consumed - self.reusable_menu_keys(obs)):
                         self.log("stage_plan_rejected", phase=phase, diagnostic=plan_errors,
                                  browser_action_dispatched=False)
                         raise InvalidStagePlan(plan_errors)
@@ -1068,6 +1134,8 @@ class DynamicController(Controller):
         previous_feedback = self.memory.feedback
         self.memory.feedback = feedback.model_dump()
         if feedback._local_readback:
+            feedback.stage_entry = StageEntry.model_validate(previous_feedback["stage_entry"]) if previous_feedback.get("stage_entry") else None
+            self.memory.feedback["stage_entry"] = feedback.stage_entry.model_dump() if feedback.stage_entry else None
             if previous_feedback.get("execution_scope"):
                 self.memory.feedback["execution_scope"] = previous_feedback["execution_scope"]
             if previous_feedback.get("planning_handoff"):
@@ -1098,7 +1166,7 @@ class DynamicController(Controller):
         route = planning_location(obs)
         if feedback.verification:
             self.arm_verification(obs)
-            if route in self.exhausted_verifications and self.defer_verification(obs):
+            if (route in self.exhausted_verifications or self.verification_exhausted(obs)) and self.defer_verification(obs):
                 feedback.next_goal = self.memory.feedback["next_goal"]
                 feedback.verification, feedback.inputs = None, []
         if not feedback.working_memory:
@@ -1140,6 +1208,7 @@ class DynamicController(Controller):
             working_memory=previous.get("working_memory", ""),
             inputs=previous.get("inputs", []) if same_route and not handoff and not needs_scope else [],
             verification=previous.get("verification") if same_route and not handoff and not needs_scope else None,
+            stage_entry=previous.get("stage_entry") if same_route and not handoff and not needs_scope else None,
         )
         self.memory.feedback.update(guidance.model_dump())
         if needs_scope:
@@ -1164,20 +1233,49 @@ class DynamicController(Controller):
                 return False
         return True
 
+    def verification_key(self, obs):
+        target = (self.memory.feedback.get("verification") or {}).get("target_url") or obs.url
+        return digest([self.memory.environment_id, verification_location(target)])
+
+    def verification_exhausted(self, obs):
+        return self.memory.verification_ledger.get(self.verification_key(obs), {}).get("exhausted", False)
+
     def arm_verification(self, obs):
         if (self.memory.feedback.get("verification") and not self.pending and not self.memory.pending_writes
                 and self.verification_inputs_ready(obs)):
-            self.verification_runs.setdefault(planning_location(obs), (self.actions, time.monotonic()))
+            plan = self.memory.feedback["verification"]
+            target = plan.get("target_url") or obs.url
+            if verification_location(target) != verification_location(obs.url):
+                return  # A plan for another report cannot consume this page's allowance.
+            key = self.verification_key(obs)
+            ledger = self.memory.verification_ledger.setdefault(key, {
+                "environment_id": self.memory.environment_id, "target": verification_location(target),
+                "exhausted": False})
+            route = planning_location(obs)
+            if ledger["exhausted"]:
+                self.exhausted_verifications.add(route)
+            allowance = self.verification_identity_runs.setdefault(key, (self.actions, time.monotonic()))
+            self.verification_runs.setdefault(route, allowance)
 
     def defer_verification(self, obs):
         plan = self.memory.feedback.get("verification")
         if not plan or self.pending or self.memory.pending_writes or not self.verification_inputs_ready(obs):
             return False
-        self.memory.unresolved_verifications.append({"goal": plan["goal"],
-            "status": "unresolved", "source": self.memory.view(obs),
-            "visible_excerpt": obs.text[:1200]})
+        target = plan.get("target_url") or obs.url
+        key = self.verification_key(obs)
+        if verification_location(target) != verification_location(obs.url) and not self.verification_exhausted(obs):
+            return False
+        previous = next((r for r in self.memory.unresolved_verifications if r.get("obligation_key") == key), None)
+        if previous is None:
+            self.memory.unresolved_verifications.append({"goal": plan["goal"], "obligation_key": key,
+                "status": "unresolved", "source": self.memory.view(obs),
+                "visible_excerpt": obs.text[:1200]})
+        self.memory.verification_ledger[key] = {
+            "environment_id": self.memory.environment_id, "target": verification_location(target),
+            "exhausted": True, "status": "unresolved"}
         self.exhausted_verifications.add(planning_location(obs))
         self.memory.feedback.update(next_goal=plan["fallback_goal"], verification=None, inputs=[])
+        self.memory.feedback["stage_entry"] = None  # Fallback requires its own observed entry.
         if self.memory.feedback.get("execution_scope"):
             self.ui_review_due = True  # The fallback is a new stage, not the old report's controls.
         self.log("verification_deferred", goal=plan["goal"], fallback_goal=plan["fallback_goal"],
@@ -1195,6 +1293,9 @@ class DynamicController(Controller):
         if self.fresh_scope_required and not self.pending:
             return action.operation in {Operation.WAIT, Operation.REPLAN}
         scope = self.memory.feedback.get("execution_scope")
+        entry = self.memory.feedback.get("stage_entry")
+        if entry and action.operation == Operation.SWITCH_TAB and not self.pending:
+            return entry["operation"] == "switch_tab" and action.bound_value == entry.get("tab_id")
         if not scope or action.operation not in MUTATIONS:
             return True
         if handoff_navigation(action, obs):
@@ -1293,7 +1394,9 @@ class DynamicController(Controller):
             return bool(allowed)
         candidates = generate_dynamic(obs, self.task, limit=limit, offset=offset,
             consumed=self.consumed - self.reusable_menu_keys(obs),
-            suppressed_inputs=self.input_suppression(obs), action_filter=eligible)
+            suppressed_inputs=self.input_suppression(obs), action_filter=eligible,
+            preferred=(lambda a: entry_matches(StageEntry.model_validate(self.memory.feedback["stage_entry"]), a))
+                      if self.memory.feedback.get("stage_entry") else None)
         if removed:
             self.log("stage_candidates_guarded", removed=removed, allowed_candidates=len(candidates),
                      before_pagination=True, browser_action_dispatched=False)
@@ -1608,7 +1711,8 @@ class DynamicController(Controller):
             return self.result("needs_attention", "feedback failed schema/evidence checks after one repair; no action replayed")
         except ContextBudgetExceeded as exc:
             self.log("context_budget_unresolved", **exc.metrics, pending_preserved=bool(self.pending))
-            return self.result("needs_attention", "protected context cannot fit; pending retained; no request or resubmission")
+            pending_text = "pending retained" if self.pending else "no pending action"
+            return self.result("needs_attention", f"protected context cannot fit; {pending_text}; no request or resubmission")
 
     async def choose_with_context_pages(self, obs, candidates, *, limit, offset):
         """Retry only pre-dispatch context overflow with a smaller navigable page."""
@@ -1721,6 +1825,15 @@ class DynamicController(Controller):
                 "meaning": "Local write readback only; no whole-task completion or independent grade.",
             }
             self.memory.write_checkpoints.append(checkpoint)
+            # Only a fresh confirmed write on this target permits another local
+            # verification allowance; writes elsewhere cannot revive an old report.
+            verification_key = digest([self.memory.environment_id, verification_location(obs.url)])
+            self.memory.verification_ledger.pop(verification_key, None)
+            self.verification_identity_runs.pop(verification_key, None)
+            for prior_route in list(self.verification_runs):
+                if list(prior_route[1:4]) == verification_location(obs.url):
+                    self.verification_runs.pop(prior_route, None)
+                    self.exhausted_verifications.discard(prior_route)
             self.memory.feedback["planning_handoff"] = {
                 "environment_id": self.memory.environment_id, "action_key": key,
                 "mode": "navigation_only_until_fresh_planning"}

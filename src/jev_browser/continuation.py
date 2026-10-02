@@ -102,6 +102,7 @@ def load_continuation(directory, task, manifest, *, ui_directory=None, _visited=
     memory.confirmed_actions = copy.deepcopy(saved.get("confirmed_actions_archive", []))
     memory.write_checkpoints = copy.deepcopy(saved.get("write_checkpoints_archive", []))
     memory.unresolved_verifications = copy.deepcopy(saved.get("unresolved_verifications", []))
+    memory.verification_ledger = copy.deepcopy(saved.get("verification_ledger", {}))
     memory.interrupted_writes = copy.deepcopy(saved.get("interrupted_writes", {}))
     memory.interrupted_writes.update(copy.deepcopy(saved.get("pending_writes", {})))
     memory.resume_context = {

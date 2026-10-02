@@ -49,6 +49,7 @@ async def test_impossible_button_fill_is_repaired_before_fast_policy_with_curren
             ref, operation = "first", "fill"
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
             "next_goal": "Fill the observed first name", "working_memory": "Other work pending",
+            "stage_entry": {"intent": "act", "operation": operation, "element_ref": ref},
             "stage_controls": [{"element_ref": ref, "operations": [operation]}]})}}]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:

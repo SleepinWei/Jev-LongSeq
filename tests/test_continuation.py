@@ -135,7 +135,8 @@ async def test_resume_preserves_prompt_ledger_archive_and_history_without_replay
         assert content["untrusted_memory"]["interrupted_operations"][0]["operation"] == "click"
         assert content.get("last_transition") is None
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(
-            {"next_goal": "Continue the draft", "working_memory": original.feedback["working_memory"]}
+            {"next_goal": "Continue the draft", "working_memory": original.feedback["working_memory"],
+             "stage_entry": {"intent": "locate", "operation": "request_replan"}}
         )}}]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:

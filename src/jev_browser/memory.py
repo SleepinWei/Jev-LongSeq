@@ -39,6 +39,7 @@ class Memory:
         self.confirmed_actions: list[dict[str, Any]] = []
         self.write_checkpoints: list[dict[str, Any]] = []
         self.unresolved_verifications: list[dict[str, Any]] = []
+        self.verification_ledger: dict[str, dict[str, Any]] = {}
         self.events: list[dict[str, Any]] = []
         self.page_notes: dict[str, dict] = {}
         self.page_registry: dict[str, dict] = {}
@@ -227,6 +228,8 @@ class Memory:
             return {
                 **({"unresolved_verifications": self.unresolved_verifications}
                    if self.unresolved_verifications else {}),
+                **({"verification_ledger": self.verification_ledger} if self.verification_ledger else {}),
+                **({"stage_entry": self.feedback["stage_entry"]} if self.feedback.get("stage_entry") else {}),
                 **({"planned_inputs": self.feedback["inputs"]} if self.feedback.get("inputs") else {}),
                 **({"verification_stage": self.feedback["verification"]}
                    if self.feedback.get("verification") else {}),
