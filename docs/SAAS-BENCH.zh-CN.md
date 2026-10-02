@@ -558,3 +558,26 @@ G 机械验证：119 项定向回归通过；F 的真实 cycle56→61→85 观�
 模型/浏览器调用。新测试覆盖同阶段/局部读回不重新授权、菜单未关闭、范围/环境/
 路由改变、pending、未知结果，以及业务提交始终不放行。线上评分另记。
 macmini 全量回归 630 通过/3 跳过，Ruff/diff 检查通过。
+
+G 实际结果：`arcbench-31` 官方仍为 4/15、data_valid=true、strict_success=false，
+95 动作/109 cycles、44 feedback calls、Agent 1458.30 秒，评分及清理正常。
+菜单展开记录在线出现 2 次，但重用尚未触发，不能给出线上收益结论。本轮先做 HR
+报告验证，verification_deferred 触发后才去财务，顺序变化发生在重用之前，不归因于 G。
+供应商已由官方确认创建正确；保存后两次必需 readback 返回不属于当前观察的 evidence_ids。
+JsonFeedback.readback 在返回 Feedback 对象前抛 UngroundedFeedback，controller.review
+第二次异常处理却访问 feedback.complete；feedback 此时为 None，继而 AttributeError。
+这是读回异常路径的独立缺陷，不是菜单被重新点击、context 超限或业务保存失败。
+21 次阶段规划累计 1227.97 秒，昂贵规划的问题仍在。
+
+实验 H（`arcbench-32`）：仅修复上述证据引用合同与异常路径。读回 schema 的
+evidence_ids.items 增加当前观察引用的 enum；提示模型逐字复制当前 ID，禁止沿用旧
+观察 ID。无效引用的 repair diagnostic 明确列出 invalid_refs，仍拒绝非当前引用。
+两次修复失败且没有 Feedback 对象时，必需读回安全转为 ReadbackUnresolved：保留
+pending/未知状态，禁止重提；finish 校验失败仍按完成审查错误处理，不弱化为局部读回。
+不从官方评分、历史引用或无效 ID 推断已保存。原 provider、prompt/恢复点、预算及 G
+菜单机制不变，自动使用新目录重跑；本轮未加入导航/观察/规划频率调整。
+H 验证：164 项定向回归通过，macmini 全量 633 通过/3 跳过，Ruff/diff 通过。
+真实 G cycle109 observation 仍包含供应商成功提示，因此此次无效引用不能解释为
+提示已经消失；新的合同与定向 repair 需要线上验证。测试覆盖首次错误引用后用
+当前 ID 修复成功、两次失败保留 pending 并 needs_attention、不重提，以及 finish
+无 Feedback 对象时仍保持严格校验。
