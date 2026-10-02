@@ -680,3 +680,26 @@ deepseek-34 Last Name 填写后正确选项出现但仍执行旧 opener 指令�
 K 验证：64 项定向、macmini 全量 653 通过/3 跳过，Ruff/diff 通过。真实
 deepseek-34 cycle87→88 原观察与 Last Name fill 动作离线回放中，输入值确认后
 ui_checkpoint=true，产生一个 input_menu_handoff，无业务保存声明或真实模型/浏览器调用。
+
+K 实际结果：`deepseek-36` 官方 3/15、data_valid=true、strict_success=false，
+96 动作/115 cycles、38 feedback calls、Agent 400.44 秒，评分无错误、清理正常。
+仅离职单和三条活动通过，没有进入供应商阶段；input_menu_handoff 未在线触发，
+不能据此判断 K 的线上收益。Employee Exits 报告反复 reload/readback；既有两次
+verification_deferred 之后，brain 又恢复报告检查，未转入财务。cycle115 的 brain
+stage_budget 请求最小为 104,310 bytes，超过 96,000 上限；其中自上次完整规划
+以来的新观察证据为 55,213 bytes（45 个不同 url/quote 记录，存在大量共同文本），
+不是原始 task 变长或业务 pending 无法解除。核验退出条件仍是独立的未解决问题。
+
+实验 L（`deepseek-37`）：只减少 context 中重复表示的开销，不调整预算或丢弃
+更多证据。在第 4 层投影共享 memory 内重复 URL 与 readback/checkpoint/page
+记录字段结构；pending_writes 不参与改写，全部已投影字段可完整还原。在 brain
+规划第 3/4 层投影中，将重复历史观察行编码为 url/line catalog，保留全部记录、
+顺序、每个 quote 的全部字符和换行；局部必需读回、当前精确证据、retrieved
+quotes、原任务/schema、完成审查不改变。只在加上解码说明后仍节省字节才启用。
+真实 J cycle149 请求从 49,103 降为 47,509 bytes，满足原 48,000 上限；真实
+K cycle115 brain 请求从 104,310 降为 57,744 bytes，45 个 quote 均逐字还原，
+满足原 96,000 上限。两次离线回放无真实模型或浏览器调用。48 项定向测试通过，
+实际最终成功率与核验循环是否改善仍需本轮官方评分，不能由压缩结果推断。
+L 验证：macmini 全量 659 通过/3 跳过，Ruff/diff 通过。新增回归验证 checkpoint
+字段和最近证据精确还原、pending/当前证据/schema 不变、Unicode/CRLF/空行与
+顺序保持、原始 notebook 不被修改，以及小请求不引入无收益的编码开销。

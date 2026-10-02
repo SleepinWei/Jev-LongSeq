@@ -284,6 +284,87 @@ def memory_view(raw, level):
     return result
 
 
+def compact_memory_layout(memory):
+    """Share exact URLs and record schemas; never excerpt additional evidence."""
+    result = copy.deepcopy(memory)
+    urls = Counter()
+
+    def count_urls(value):
+        if isinstance(value, dict):
+            if isinstance(value.get("url"), str) and "memory_url_ref" not in value:
+                urls[value["url"]] += 1
+            for child in value.values():
+                count_urls(child)
+        elif isinstance(value, list):
+            for child in value:
+                count_urls(child)
+
+    for key, value in result.items():
+        if key != "pending_writes":
+            count_urls(value)
+    refs = {url: str(i) for i, (url, _) in enumerate(
+        item for item in urls.items() if item[1] > 1 and len(item[0]) > 48)}
+
+    def pool_urls(value):
+        if isinstance(value, dict):
+            url = value.get("url")
+            if isinstance(url, str) and url in refs and "memory_url_ref" not in value:
+                value.pop("url")
+                value["memory_url_ref"] = refs[url]
+            for child in value.values():
+                pool_urls(child)
+        elif isinstance(value, list):
+            for child in value:
+                pool_urls(child)
+
+    for key, value in result.items():
+        if key != "pending_writes":
+            pool_urls(value)
+    if refs:
+        result["memory_urls"] = {ref: url for url, ref in refs.items()}
+    for owner, key in ((result.get("current_environment_readbacks", {}), "actions"),
+                       (result, "write_checkpoints"), (result, "opened_pages")):
+        records = owner.get(key, [])
+        if len(records) < 3 or not all(isinstance(record, dict) for record in records):
+            continue
+        columns, schemas, rows = {}, {}, []
+        for record in records:
+            fields = tuple(record)
+            if fields not in schemas:
+                ref = str(len(schemas))
+                schemas[fields] = ref
+                columns[ref] = list(fields)
+            rows.append([schemas[fields], *record.values()])
+        if wire_bytes(rows) + wire_bytes(columns) < wire_bytes(records):
+            owner[key], owner[key + "_columns"] = rows, columns
+    return result
+
+
+def evidence_delta_view(records):
+    """Losslessly share repeated lines in historical observation excerpts."""
+    if not isinstance(records, list) or not records or not all(
+        isinstance(r, dict) and set(r) == {"url", "quote"}
+        and isinstance(r["url"], str) and isinstance(r["quote"], str) for r in records
+    ):
+        return records
+    urls, lines, url_refs, line_refs, rows = [], [], {}, {}, []
+    for record in records:
+        url = record["url"]
+        if url not in url_refs:
+            url_refs[url] = len(urls)
+            urls.append(url)
+        refs = []
+        for line in record["quote"].split("\n"):
+            if line not in line_refs:
+                line_refs[line] = len(lines)
+                lines.append(line)
+            refs.append(line_refs[line])
+        rows.append([url_refs[url], refs])
+    table = {"columns": ["url_ref", "quote_line_refs"], "rows": rows,
+             "urls": urls, "lines": lines}
+    return table if wire_bytes(table) < wire_bytes(records) else records
+
+
 def _pool(payload, level):
     detail_level = min(level, 2)
     result = copy.deepcopy(payload)
@@ -449,6 +530,18 @@ def _pool(payload, level):
             observation["controls"] = rows
             observation["control_columns"] = columns
             state["context_view"]["control_lookup"] = lookup
+    if level == 4:
+        memory = state["untrusted_memory"]
+        compacted = compact_memory_layout(memory)
+        lookup = (
+            "Memory actions, write_checkpoints and opened_pages may be [schema_id,...values], "
+            "decoded by <field>_columns in the same container. memory_url_ref replaces url using "
+            "untrusted_memory.memory_urls[id]. All fields, values and evidence are unchanged; "
+            "this grants no navigation permission."
+        )
+        if wire_bytes(compacted) + wire_bytes(lookup) < wire_bytes(memory):
+            state["untrusted_memory"] = compacted
+            state["context_view"]["memory_lookup"] = lookup
     return result
 
 
@@ -529,6 +622,16 @@ def project_chat_request(payload, *, max_bytes, purpose):
         state = {k: v for k, v in prepared.items() if k in state_keys}
         wrapper = _pool({"state": state, "questions": {}}, level)
         content = {**{k: v for k, v in prepared.items() if k not in state_keys}, **wrapper["state"]}
+        if level >= 3 and purpose == "dynamic_feedback":
+            records = content.get("new_evidence_since_last_brain_call")
+            table = evidence_delta_view(records)
+            lookup = ("new_evidence_since_last_brain_call may be a lossless table: rows follows columns; "
+                      "url_ref indexes urls; reconstruct quote by joining lines[ref] for each "
+                      "quote_line_refs entry with a newline. Original order and all quote characters "
+                      "are retained. These are historical observations, not fresh outcome proof.")
+            if isinstance(table, dict) and wire_bytes(table) + wire_bytes(lookup) < wire_bytes(records):
+                content["new_evidence_since_last_brain_call"] = table
+                content["context_view"]["evidence_delta_lookup"] = lookup
         if level and "older_memory_to_compress" in content:
             content["older_memory_to_compress"] = excerpt(content["older_memory_to_compress"], 12000 if level == 1 else 4000)
             content["older_memory_excerpted"] = True
