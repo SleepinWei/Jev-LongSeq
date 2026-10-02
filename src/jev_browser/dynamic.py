@@ -781,6 +781,8 @@ class DynamicController(Controller):
         self.memory.recent_evidence_limit = self.tuning.recent_evidence
         self.feedback_calls = 0
         self.consumed: set[str] = set()
+        self.reusable_menu_actions: dict[str, dict] = {}
+        self.scope_generation = 0
         self.pending: dict | None = None
         self.pending_started = 0.0
         self.last_transition: dict | None = None
@@ -1007,6 +1009,7 @@ class DynamicController(Controller):
             if previous_feedback.get("planning_handoff"):
                 self.memory.feedback["planning_handoff"] = previous_feedback["planning_handoff"]
         elif feedback.stage_controls is not None:
+            self.scope_generation += 1
             bindings = {}
             for control in feedback.stage_controls:
                 element = next((e for e in obs.elements if e.id == control.element_ref), None)
@@ -1025,7 +1028,8 @@ class DynamicController(Controller):
                 bindings[control.element_ref] = {**identity, "operations": operations}
             self.memory.feedback["execution_scope"] = {
                 "environment_id": self.memory.environment_id,
-                "location": list(planning_location(obs)), "dialogs": list(obs.dialogs), "bindings": bindings}
+                "location": list(planning_location(obs)), "dialogs": list(obs.dialogs), "bindings": bindings,
+                "generation": self.scope_generation}
         route = planning_location(obs)
         if feedback.verification:
             self.arm_verification(obs)
@@ -1164,6 +1168,42 @@ class DynamicController(Controller):
                          browser_action_dispatched=False)
         scope["bindings"] = bindings
 
+    def reusable_menu_keys(self, obs):
+        """A confirmed menu opener may be reused only by a newer explicit stage.
+
+        Keep all consumed keys intact. This exception cannot release an unknown
+        dispatch, a business commit, an open menu, or an unscoped navigation.
+        """
+        if (not self.reusable_menu_actions or self.pending or self.memory.pending_writes
+                or obs.loading or obs.dialogs):
+            return set()
+        scope = self.memory.feedback.get("execution_scope", {})
+        if (scope.get("environment_id") != self.memory.environment_id
+                or scope.get("location") != list(planning_location(obs))):
+            return set()
+        keys = set()
+        menu_names = {e.name for e in obs.elements if e.role == "menuitem"}
+        for element in obs.elements:
+            if (element.role != "button" or not element.enabled or element.read_only
+                    or element.id not in scope.get("bindings", {})):
+                continue
+            action = Action(id="", operation=Operation.CLICK, observation_id=obs.observation_id,
+                document_version=obs.document_version, tab_id=obs.tab_id, frame_id=obs.frame_id,
+                element_ref=element.id, description=element.name, effect="write")
+            key = action_key(action, obs)
+            record = self.reusable_menu_actions.get(key)
+            binding = scope.get("bindings", {}).get(action.element_ref)
+            if (record and binding and action.operation == Operation.CLICK
+                    and "click" in binding["operations"]
+                    and scope.get("generation", 0) > record["generation"]
+                    and record["environment_id"] == self.memory.environment_id
+                    and record["location"] == list(planning_location(obs))
+                    and not menu_names.intersection(record["menu_names"])
+                    and self.stage_action_allowed(action, obs)):
+                if element.popup_open is not True:
+                    keys.add(key)
+        return keys
+
     def generate_stage_candidates(self, obs, *, limit, offset):
         handoff = self.memory.feedback.get("planning_handoff")
         navigating = (handoff and handoff["environment_id"] == self.memory.environment_id)
@@ -1175,7 +1215,8 @@ class DynamicController(Controller):
             removed += not bool(allowed)
             return bool(allowed)
         candidates = generate_dynamic(obs, self.task, limit=limit, offset=offset,
-            consumed=self.consumed, suppressed_inputs=self.input_suppression(obs), action_filter=eligible)
+            consumed=self.consumed - self.reusable_menu_keys(obs),
+            suppressed_inputs=self.input_suppression(obs), action_filter=eligible)
         if removed:
             self.log("stage_candidates_guarded", removed=removed, allowed_candidates=len(candidates),
                      before_pagination=True, browser_action_dispatched=False)
@@ -1262,8 +1303,13 @@ class DynamicController(Controller):
             # Count the attempt for the loop budget, but dispatch no mutation.
             self.actions += 1
             return None
-        if action.operation in MUTATIONS and key in self.consumed:
+        reusable = key in self.consumed and key in self.reusable_menu_keys(obs)
+        if action.operation in MUTATIONS and key in self.consumed and not reusable:
             return "identical mutation was already dispatched; no resubmission"
+        if reusable:
+            self.log("menu_opener_reauthorized", key=key, element_ref=element.id,
+                     basis="confirmed menu expansion; closed menu; newer explicit stage",
+                     business_commit_released=False)
         if action.operation in MUTATIONS:
             self.pending_started = time.monotonic()
             self.pending = {
@@ -1290,7 +1336,8 @@ class DynamicController(Controller):
             if action.operation == Operation.CLICK:
                 self.pending["click_target"] = {"id": element.id, "role": element.role,
                     "name": element.name, "popup_kind": element.popup_kind,
-                    "popup_open": element.popup_open}
+                    "popup_open": element.popup_open, "grid_ref": element.grid_ref,
+                    "row_ref": element.row_ref}
                 self.pending["before_menu_items"] = [e.model_dump() for e in obs.elements
                                                       if e.role == "menuitem"]
                 if write_boundary(self.pending["click_target"]):
@@ -1399,6 +1446,7 @@ class DynamicController(Controller):
         self.stale_click = None
         if action.operation in MUTATIONS:
             self.consumed.add(key)
+            self.reusable_menu_actions.pop(key, None)
         if receipt.status != "ok":
             if self.pending and self.pending.get("navigation_target") and receipt.status == "unknown":
                 # Observe once after an uncertain navigation; never replay the click.
@@ -1561,6 +1609,26 @@ class DynamicController(Controller):
         self.last_transition = {**self.pending, "resolved": True}
         scope = self.pending.get("confirmation_scope")
         target = self.pending.get("click_target", {})
+        before_menu_names = {e["name"] for e in self.pending.get("before_menu_items", [])}
+        new_menu_names = {e.name for e in obs.elements if e.role == "menuitem" and e.enabled} - before_menu_names
+        before_inputs = [c for c in self.pending.get("before_controls", [])
+                         if c.get("editable") or c.get("selectable")]
+        after_inputs = [c for c in visible_controls(obs) if c.get("editable") or c.get("selectable")]
+        if (self.pending.get("dispatch_status") == "ok" and scope in {None, "menu_opened_ui"}
+                and target.get("role") == "button" and not write_boundary(target)
+                and not target.get("grid_ref") and not target.get("row_ref")
+                and not self.pending.get("before_dialogs") and not obs.dialogs and not obs.loading
+                and obs.url == self.pending["before"]["url"]
+                and obs.tab_id == self.pending["before"]["tab_id"]
+                and not any(e.startswith("page_error:") and e not in self.pending.get("before_errors", [])
+                            for e in obs.errors)
+                and before_inputs == after_inputs and new_menu_names):
+            self.reusable_menu_actions[key] = {
+                "environment_id": self.memory.environment_id,
+                "location": list(planning_location(obs)), "generation": self.scope_generation,
+                "menu_names": sorted(new_menu_names), "observation_id": obs.observation_id}
+            self.log("menu_opener_readback_recorded", key=key,
+                     menu_names=sorted(new_menu_names), business_commit_confirmed=False)
         if (scope == "business_commit" or
                 (scope not in {"dialog_opened", "menu_opened_ui"} and write_boundary(target))):
             self.stage_review_due = True
