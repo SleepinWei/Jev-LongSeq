@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -789,6 +790,7 @@ class DynamicController(Controller):
         self.consumed: set[str] = set()
         self.reusable_menu_actions: dict[str, dict] = {}
         self.scope_generation = 0
+        self.fresh_scope_required = False
         self.pending: dict | None = None
         self.pending_started = 0.0
         self.last_transition: dict | None = None
@@ -1018,6 +1020,7 @@ class DynamicController(Controller):
                 self.memory.feedback["planning_handoff"] = previous_feedback["planning_handoff"]
         elif feedback.stage_controls is not None:
             self.scope_generation += 1
+            self.fresh_scope_required = False
             bindings = {}
             for control in feedback.stage_controls:
                 element = next((e for e in obs.elements if e.id == control.element_ref), None)
@@ -1068,22 +1071,32 @@ class DynamicController(Controller):
         handoff = previous.get("planning_handoff")
         if handoff and handoff["environment_id"] != self.memory.environment_id:
             handoff = None
+        needs_scope = (self.fresh_scope_required or
+                       (not handoff and phase in {"ui_checkpoint", "draft_row_added", "stale_target_changed"}
+                        and bool(previous.get("execution_scope"))))
         guidance = Feedback(
-            next_goal=("The last write has fresh local readback in write_checkpoints. Its task obligation "
+            next_goal=("The UI changed after the previous stage. Wait for fresh explicit planning; "
+                "do not fill, append rows, submit, or navigate away using the previous stage's controls."
+                if needs_scope else "The last write has fresh local readback in write_checkpoints. Its task obligation "
                 "may still need final verification. Navigate to locate the next requested work; "
                 "do not recreate, fill or submit the previous form until fresh planning is available."
                 if handoff else previous.get("next_goal") if same_route and previous.get("next_goal") else
                 "Continue the original task from the current observed page. Reconcile recovered history "
                 "with current state; never repeat confirmed actions or treat interrupted writes as confirmed."),
             working_memory=previous.get("working_memory", ""),
-            inputs=previous.get("inputs", []) if same_route and not handoff else [],
-            verification=previous.get("verification") if same_route and not handoff else None,
+            inputs=previous.get("inputs", []) if same_route and not handoff and not needs_scope else [],
+            verification=previous.get("verification") if same_route and not handoff and not needs_scope else None,
         )
         self.memory.feedback.update(guidance.model_dump())
+        if needs_scope:
+            self.fresh_scope_required = True
+            self.memory.feedback["execution_scope"] = {
+                "environment_id": self.memory.environment_id, "location": list(planning_location(obs)),
+                "dialogs": list(obs.dialogs), "bindings": {}, "generation": self.scope_generation}
         self.last_brain_action, self.last_brain_attempt = self.effective_actions, self.actions
         self.last_brain_location = planning_location(obs)
         self.log("planning_degraded", phase=phase, reason=reason, original_goal_preserved=True,
-                 guidance_source="write_checkpoint_navigation" if handoff else
+                 guidance_source="await_fresh_scope" if needs_scope else "write_checkpoint_navigation" if handoff else
                                  "previous_same_route" if same_route else "original_task",
                  working_memory_preserved=True, action_confirmed=False, completion_claim=False)
         self.checkpoint()
@@ -1125,6 +1138,8 @@ class DynamicController(Controller):
         return matches[0] if len(matches) == 1 and self.last_brain_location == planning_location(obs) else None
 
     def stage_action_allowed(self, action, obs):
+        if self.fresh_scope_required and not self.pending:
+            return action.operation in {Operation.WAIT, Operation.REPLAN}
         scope = self.memory.feedback.get("execution_scope")
         if not scope or action.operation not in MUTATIONS:
             return True
@@ -2116,6 +2131,13 @@ class DynamicController(Controller):
                     return self.result("needs_attention", reason)
                 continue
             loading = 0
+            if self.fresh_scope_required and not self.pending:
+                delay = self.planning_retry_after.get(planning_location(obs), 0) - time.monotonic()
+                if delay > 0:
+                    self.log("planning_scope_wait", wait_s=min(2, delay), old_stage_mutations_blocked=True)
+                    self.checkpoint()
+                    await asyncio.sleep(min(2, delay))
+                    continue  # No fast-policy call or browser dispatch during planning cooldown.
             self.confirm_visible_input(obs)
             self.confirm_visible_option(obs)
             self.confirm_visible_menu(obs)
@@ -2144,7 +2166,9 @@ class DynamicController(Controller):
             ):
                 self.confirm_transition("confirmed", obs, "observed_navigation_destination")
             if not self.pending:
-                if self.stage_review_due:
+                if self.fresh_scope_required:
+                    trigger = "ui_checkpoint"
+                elif self.stage_review_due:
                     trigger = "write_checkpoint"
                     self.stage_review_due = False
                     self.ui_review_due = False

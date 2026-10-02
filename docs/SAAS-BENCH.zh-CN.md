@@ -581,3 +581,24 @@ H 验证：164 项定向回归通过，macmini 全量 633 通过/3 跳过，Ruff
 提示已经消失；新的合同与定向 repair 需要线上验证。测试覆盖首次错误引用后用
 当前 ID 修复成功、两次失败保留 pending 并 needs_attention、不重提，以及 finish
 无 Feedback 对象时仍保持严格校验。
+
+H 实际结果：`arcbench-32` 官方 0/15、data_valid=true、strict_success=false，
+30 动作/38 cycles、8 feedback calls、Agent 419.08 秒，评分及清理正常。
+没有进入供应商保存读回，不能判断 H 的线上收益。cycle11 的 ui_checkpoint
+阶段规划超时 120 秒，之后 8 次退让/冷却沿用旧阶段的 Add row 控件与搜索输入，
+草稿最后有 8 行，随后 repeated state after brain recovery 停止。没有保存，故评分为零。
+这暴露了可选规划超时后继续复用旧表单范围的独立错误；不是 H 放行无效证据或重复业务提交。
+
+实验 I（`arcbench-33`）：仅修复 UI 交接后的规划退让。已有 scoped 阶段在
+ui_checkpoint/draft_row_added/stale_target_changed 无法取得新规划时，保留原始任务、
+working_memory 和证据，但清除旧输入与可变控件范围，标记 fresh_scope_required。
+冷却窗口内只观察并等待，不调用 fast policy、不派发浏览器动作，不因相同页面提前
+触发 no_progress；冷却结束后重新请求 ui_checkpoint 规划。只有新的有效显式 stage
+controls 才解除冻结，局部读回与旧授权不能解除。仍受原 cycles/时间预算约束，不
+修改 120 秒请求上限、120 秒冷却或 provider；已确认业务保存后的 navigation handoff
+保持原规则。原 H 证据引用合同和 G 菜单机制保留，线上成绩另记。
+I 验证：156 项定向回归通过，全量 macmini 636 通过/3 跳过，Ruff/diff 通过。
+真实 H cycle11 的规划与 observation 离线回放中，模拟已记录的规划超时后，
+fresh_scope_required=true，仅 WAIT/REPLAN 可选，旧 Add row 不可选；原始 task.objective
+和 working_memory 字节内容保持一致。没有真实模型/浏览器调用。定向测试也确认
+冷却期间没有 policy.choose 或 backend.execute，新的有效范围才能解除等待。
