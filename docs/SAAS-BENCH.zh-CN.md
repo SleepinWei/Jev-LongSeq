@@ -659,3 +659,24 @@ brain 请求提供 current_control_capabilities，来自实际 candidate generat
 真实 deepseek-34 cycle83 观察/规划离线回放精确返回 e129 button 仅支持 click，
 不支持 fill，无模型或浏览器调用。61 项定向测试通过；线上结果另记。
 macmini 全量 644 通过/3 跳过，Ruff/diff 通过；仍需官方评分验证最终结果。
+
+J 实际结果：`deepseek-35` 官方 4/15、data_valid=true、strict_success=false，
+离职单/三条活动/供应商通过；75 动作/149 cycles、45 feedback calls、Agent
+831.76 秒，评分无 verifier_errors，cleanup_error=null。阶段能力拒绝未触发，
+本轮没有按钮 fill，但只能说明提示下的路径不同，不能单独证明 repair 的在线收益。
+供应商阶段 ui_checkpoint 规划耗尽 120 秒，冻结机制在线触发：59 个冷却等待
+cycle 没有调用 Jev 或派发浏览器动作，新合法作用域恢复后选对姓名并保存供应商。
+规划累计 603.91 秒。随后供应商列表页面最小请求为 49,103 bytes，超过原定
+48,000 bytes，已没有 pending，停止；此前 50,261 bytes 的必需读回 fallback
+已确认保存。故当前明确阻塞是 context，不是重复业务提交或供应商未创建。
+真实 cycle149 原始请求离线重建精确复现 49,103 bytes；未调用浏览器/模型。
+
+实验 K（`deepseek-36`）：仅补已确认输入后的菜单交接。已知 ok 的 fill/select
+得到新鲜读回，且同页面/tab、无加载/弹窗/新运行时错误、存在有效菜单项，菜单
+语义发生变化时，设置 ui_checkpoint，在下一动作前重新规划。只发交接信号，
+不授权选项、不修改任务/记忆、不把输入值或菜单变化当成保存成功。目标是修复
+deepseek-34 Last Name 填写后正确选项出现但仍执行旧 opener 指令的问题。
+仍保留 J、DeepSeek 官方 API 和原预算；context 调整另行验证，避免混合归因。
+K 验证：64 项定向、macmini 全量 653 通过/3 跳过，Ruff/diff 通过。真实
+deepseek-34 cycle87→88 原观察与 Last Name fill 动作离线回放中，输入值确认后
+ui_checkpoint=true，产生一个 input_menu_handoff，无业务保存声明或真实模型/浏览器调用。

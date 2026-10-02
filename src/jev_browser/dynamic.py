@@ -1740,6 +1740,26 @@ class DynamicController(Controller):
             # (e.g. blur resolves an earlier link field). Reconcile the new row
             # before choosing from the old row's advisory goal.
             self.ui_review_due = True
+        elif (self.pending["action"]["operation"] in {Operation.FILL, Operation.SELECT}
+              and self.pending.get("dispatch_status") == "ok"
+              and self.pending.get("before_menu_signature") is not None
+              and obs.observation_id != self.pending["action"]["observation_id"]
+              and obs.url == self.pending["before"]["url"]
+              and obs.tab_id == self.pending["before"]["tab_id"]
+              and not obs.loading and not obs.dialogs and not self.pending.get("before_dialogs")
+              and not any(e.startswith("page_error:") and e not in self.pending.get("before_errors", [])
+                          for e in obs.errors)
+              and any(e.role == "menuitem" and e.enabled and not e.read_only
+                      and e.name.strip() and not e.name.endswith(" (icon control)") for e in obs.elements)
+              and menu_signature(obs) != self.pending["before_menu_signature"]):
+            # Filling a name can update options in an already open menu. The
+            # pre-input plan may still authorize only fields and the opener.
+            # Replan from fresh options instead of toggling that opener again.
+            self.ui_review_due = True
+            self.log("input_menu_handoff", confirmation_key=key,
+                     reason="confirmed input changed visible menu options; fresh scope required",
+                     controls_authorized=False, business_commit_confirmed=False,
+                     browser_action_dispatched=False)
         elif (self.pending.get("before_menu_signature") is not None
               and self.pending["action"]["operation"] == Operation.CLICK
               and any(e.role == "menuitem" for e in obs.elements)
