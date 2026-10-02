@@ -1,5 +1,26 @@
 import {longseqBenchmark, renderBenchmark} from './benchmark-ui.js';
 
+// Only use events up to the selected point: later instructions must not leak
+// into an earlier action, including when the user scrubs backwards.
+export function replayContext(events, selected, objective = '') {
+  let instruction=null, action=null, actionInstruction=null;
+  for (const e of events.slice(0, selected+1)) {
+    if (e.kind === 'feedback' && e.feedback?.next_goal) instruction=e;
+    if (e.kind === 'plan') instruction=e;
+    if (e.kind === 'action') { action=e; actionInstruction=instruction; }
+  }
+  const goal = event => event?.feedback?.next_goal ||
+    event?.plan?.subtasks?.map(s=>`${s.id}: ${s.objective}`).join('\n') || objective;
+  return {instruction, goal:goal(instruction), action, actionGoal:goal(actionInstruction),
+    actionInstruction, inputs:instruction?.feedback?.inputs || []};
+}
+
+export function nextReplayStep(events, selected) {
+  const stops=new Set(['feedback','plan','action','error','invalid_feedback','result']);
+  for (let i=selected+1; i<events.length; i++) if (stops.has(events[i].kind)) return i;
+  return Math.max(0,events.length-1);
+}
+
 export function mount(root, {location, history, isActive}) {
 /* Browser Use / Jev Ultrafast (MIT) inspector helpers and rendering pattern,
  * adapted for LongSeq artifacts, timeline replay and continuous live screenshots.
@@ -11,12 +32,14 @@ const escape = (value) => String(value ?? "").replace(/[&<>"']/g,
 const labels = {observation:"页面观察", decision:"模型选择", action:"执行动作", extraction:"记录证据",
   plan:"规划契约", replan_requested:"请求规划", invalid_plan:"规划校验失败", subtask_completed:"子任务完成",
   write_confirmed:"写入已读回", result:"运行结束", error:"运行错误", finish_observation:"完成前核验",
-  permission_denied:"权限拒绝"};
+  permission_denied:"权限拒绝", feedback:"Brain 指令", input_binding:"绑定输入",
+  action_started:"动作开始", invalid_feedback:"指令校验失败"};
 const statuses = {success:"已完成", failed:"失败", budget_exhausted:"预算耗尽", needs_attention:"需要处理", unfinished:"未结束"};
 let state = null, currentId = "", selected = 0, tab = "choices", etag = "", loading = false;
 let live = null, playing = false, playbackStart = 0, playbackTime = 0, lastImage = "", pendingId = "";
 let submitting = false, launcherBusy = false, watchedLaunch = "";
 let frameMetadata = null;
+let replayRequested = new URLSearchParams(location.search).get('replay') === '1';
 const n = value => Number.isFinite(value) ? value.toLocaleString() : "—";
 const seconds = value => Number.isFinite(value) ? `${value.toFixed(1)} s` : "—";
 const endpoint = (path, extra={}) => `/api/${path}?${new URLSearchParams({id:currentId, ...extra})}`;
@@ -39,12 +62,16 @@ async function runs(preferred) {
 }
 async function selectRun(id) {
   stop(); currentId = id; pendingId = ""; state = null; etag = ""; live = null; lastImage = "";
+  clearInstructions();
   $("page-warning").hidden=true;
   $("screenshot").hidden=true; $("empty").hidden=false;
   frameMetadata=null; renderTargets();
-  $("follow").checked = true;
-  history.replaceState(null, "", `?${new URLSearchParams({run:id})}`);
+  $("follow").checked = !replayRequested;
+  $("replay-view").checked = replayRequested;
+  root.querySelector('main').classList.toggle('replay-mode',replayRequested);
+  history.replaceState(null, "", `?${new URLSearchParams({run:id, ...(replayRequested ? {replay:'1'} : {})})}`);
   await update();
+  if(replayRequested && state?.events.length) {selected=0; renderSelection();}
 }
 async function update() {
   if (!currentId || loading) return;
@@ -122,6 +149,7 @@ function title(event) {
   if (event.kind === "invalid_plan") return event.errors.map(e=>e.loc.join(".")+": "+e.type).join("; ");
   if (event.kind === "error") return `${event.error_type}: ${event.detail}`;
   if (event.kind === "write_confirmed") return event.source?.quote || '写入已读回';
+  if (event.kind === "feedback") return event.feedback?.next_goal || '未记录新指令';
   return event.reason || event.observation?.title || event.kind;
 }
 function eventState() {
@@ -144,9 +172,10 @@ function eventState() {
   return {obs,decision,candidates,plan,facts,done,action,pages:[...pages.values()]};
 }
 function renderSelection() {
-  if (!state?.events.length) return;
+  if (!state?.events.length) {clearInstructions(); return;}
   selected = Math.min(selected,state.events.length-1);
   const e = state.events[selected], s = eventState();
+  renderInstructions(e);
   $("scrubber").max = state.events.length-1; $("scrubber").value = selected;
   $("position").textContent = `${selected+1} / ${state.events.length}`;
   $("selected-title").textContent = `${labels[e.kind] || e.kind} · ${title(e)}`;
@@ -168,6 +197,36 @@ function renderSelection() {
   if (!live?.active || !$("follow").checked) showFrame(e.at);
   updateStatus();
   root.querySelectorAll('.event-row').forEach(el=>el.classList.toggle('selected',Number(el.dataset.index)===selected));
+}
+function clearInstructions() {
+  $("instruction-source").textContent='等待事件';
+  $("step-instruction").textContent=state?.task?.objective || '正在读取此运行的指令…';
+  $("instruction-inputs").replaceChildren(); $("instruction-inputs").hidden=true;
+  $("replay-action-source").textContent='尚未执行动作';
+  $("replay-action").textContent=''; $("replay-receipt").textContent='';
+  $("action-instruction-wrap").hidden=true; $("action-instruction").textContent='';
+  $("instruction-memory").textContent='此时间点未记录 working_memory。';
+}
+function renderInstructions(event) {
+  const context=replayContext(state.events,selected,state.task.objective);
+  const instruction=context.instruction, actionEvent=context.action, action=actionEvent?.action;
+  const position=e=>`事件 ${e.index+1} · +${seconds(e.at-state.events[0].at)}`;
+  $("instruction-source").textContent=instruction ? `${instruction.kind==='feedback' ? 'Brain' : '规划'} · ${instruction.phase || 'plan'} · ${position(instruction)}` : '原始任务 · 尚无阶段指令';
+  $("step-instruction").textContent=context.goal || '未记录指令';
+  $("instruction-inputs").hidden=!context.inputs.length;
+  $("instruction-inputs").replaceChildren();
+  for(const input of context.inputs) {
+    const row=document.createElement('div'), name=document.createElement('dt'), value=document.createElement('dd');
+    name.textContent=[input.name,input.grid_ref,input.row_ref].filter(Boolean).join(' · ');
+    value.textContent=input.value ?? ''; row.append(name,value); $("instruction-inputs").append(row);
+  }
+  $("replay-action-source").textContent=actionEvent ? `${actionEvent===event ? '本事件已执行' : '最近已执行'} · ${position(actionEvent)}` : '尚未执行动作';
+  $("replay-action").textContent=action ? `${action.operation} · ${action.description || action.id}${action.element_ref ? '\n元素：'+action.element_ref : ''}${action.bound_value != null ? '\n实际输入：'+action.bound_value : ''}` : '当前时间点没有已执行动作。';
+  $("replay-receipt").textContent=actionEvent ? `执行结果：${actionEvent.receipt?.status || '未记录回执'}${actionEvent.receipt?.detail ? ' · '+actionEvent.receipt.detail : ''}` : '';
+  const different=!!actionEvent && context.actionInstruction!==instruction;
+  $("action-instruction-wrap").hidden=!different;
+  $("action-instruction").textContent=different ? context.actionGoal : '';
+  $("instruction-memory").textContent=instruction?.feedback?.working_memory || '此时间点未记录 working_memory。';
 }
 function renderTargets() {
   const meta=frameMetadata, boxes=meta?.overlays || [], s=state?.events.length ? eventState() : {};
@@ -219,7 +278,7 @@ function showFrame(at) {
 function renderTrail() {
   if (!state) return;
   const filter=$("filter").value, query=$("search").value.toLowerCase();
-  const important=new Set(['action','plan','invalid_plan','error','result','write_confirmed','subtask_completed','replan_requested']);
+  const important=new Set(['action','feedback','plan','invalid_plan','invalid_feedback','error','result','write_confirmed','subtask_completed','replan_requested']);
   const filtered=state.events.filter(e=>{
     const group=filter==='all'||(filter==='important'&&important.has(e.kind))||e.kind===filter||
       (filter==='plan'&&['replan_requested','invalid_plan','subtask_completed'].includes(e.kind))||
@@ -236,7 +295,14 @@ function renderTrail() {
   $("step-count").textContent=`${filtered.length} / ${state.events.length} 事件`;
 }
 function seek(index) { stop(); $("follow").checked=false; selected=index; renderSelection(); }
-function stop() { playing=false; $("play").textContent='播放 1×'; }
+function stop() { playing=false; $("play").textContent='播放'; }
+function play(fromStart=false) {
+  if (!state?.events.length) return;
+  $("follow").checked=false;
+  if(fromStart || selected>=state.events.length-1) selected=0;
+  playbackTime=state.events[selected].at; playbackStart=performance.now();
+  playing=true; $("play").textContent='暂停'; renderSelection();
+}
 $("run").addEventListener('change',()=>selectRun($("run").value));
 $("refresh").addEventListener('click',()=>runs().catch(e=>error(e.message)));
 $("scrubber").addEventListener('input',()=>seek(Number($("scrubber").value)));
@@ -251,12 +317,25 @@ root.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('cli
 $("play").addEventListener('click',()=>{
   if (!state?.events.length) return;
   if(playing) return stop();
-  $("follow").checked=false; if(selected>=state.events.length-1) selected=0;
-  playbackTime=state.events[selected].at; playbackStart=performance.now(); playing=true; $("play").textContent='暂停回放'; renderSelection();
+  play();
+});
+$("replay-start").addEventListener('click',()=>play(true));
+$("playback-rate").addEventListener('change',()=>{if(playing) play();});
+$("replay-view").addEventListener('change',()=>{
+  replayRequested=$("replay-view").checked;
+  root.querySelector('main').classList.toggle('replay-mode',replayRequested);
+  history.replaceState(null,'',`?${new URLSearchParams({run:currentId,...(replayRequested ? {replay:'1'} : {})})}`);
 });
 setInterval(()=>{
   if(!playing || !state) return;
-  const at=playbackTime+(performance.now()-playbackStart)/1000;
+  const rate=$("playback-rate").value;
+  if(rate==='steps') {
+    if(performance.now()-playbackStart<2000) return;
+    selected=nextReplayStep(state.events,selected); playbackStart=performance.now();
+    renderSelection(); if(selected>=state.events.length-1) stop();
+    return;
+  }
+  const at=playbackTime+(performance.now()-playbackStart)/1000*Number(rate);
   let next=selected; while(next+1<state.events.length && state.events[next+1].at<=at) next++;
   if(next!==selected) {selected=next; renderSelection();}
   showFrame(at); if(selected>=state.events.length-1) stop();
@@ -325,5 +404,11 @@ setInterval(()=>{if(isActive()) launcherStatus();},2000);
 setInterval(()=>{if(isActive()) update();},1000);
 setInterval(()=>{if(pendingId) runs(pendingId).catch(e=>error(e.message));},2000);
 
-return {navigate: async url => { const id=url.searchParams.get("run"); if(id && id!==currentId) await runs(id); }, activate: () => {launcherStatus();update();}, deactivate:stop};
+return {navigate: async url => {
+  const id=url.searchParams.get("run");
+  replayRequested=url.searchParams.get('replay')==='1';
+  $("replay-view").checked=replayRequested;
+  root.querySelector('main').classList.toggle('replay-mode',replayRequested);
+  if(id && id!==currentId) await runs(id);
+}, activate: () => {launcherStatus();update();}, deactivate:stop};
 }

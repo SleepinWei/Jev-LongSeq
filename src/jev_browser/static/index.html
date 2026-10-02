@@ -40,7 +40,7 @@
       <div><span>总耗时</span><strong id="elapsed">—</strong><small id="models">—</small></div>
     </section>
     <div class="toolbar"><div class="status"><span class="dot" id="status-dot"></span><span id="status" role="status">正在加载运行记录</span></div>
-      <div class="controls"><label><input id="follow" type="checkbox" checked> 跟随最新</label>
+      <div class="controls"><label><input id="replay-view" type="checkbox"> 回放视图</label><label><input id="follow" type="checkbox" checked> 跟随最新</label>
         <a id="download" class="button" download="trajectory.jsonl">导出轨迹 ↓</a></div></div>
     <section class="workspace">
       <div class="browser-panel">
@@ -50,12 +50,23 @@
           <img id="screenshot" alt="受控网页截图" hidden><div id="targets" aria-hidden="true" hidden></div></div>
         <div class="dom-controls"><label><input id="overlays" type="checkbox" checked> 显示识别到的 DOM</label><span id="dom-status">未记录 DOM 标注</span></div>
         <div class="browser-footer"><span id="page-title">—</span><span id="frame-note">真实截图 · 只读预览</span></div>
-        <div class="playback"><button id="play" aria-label="播放或暂停回放">播放 1×</button>
+        <div class="playback"><button id="replay-start">从头回放</button><button id="play" aria-label="播放或暂停回放">播放</button>
+          <label class="playback-speed" for="playback-rate">速度 <select id="playback-rate"><option value="steps">逐步 · 2 秒</option><option value="1">实时 1×</option><option value="5">实时 5×</option><option value="20">实时 20×</option></select></label>
           <button id="previous" aria-label="上一个事件">←</button><input id="scrubber" type="range" min="0" max="0" value="0" aria-label="选择轨迹事件">
           <button id="next" aria-label="下一个事件">→</button><span id="position">0 / 0</span></div>
         <div class="selection"><span class="eyebrow">SELECTED EVENT</span><strong id="selected-title">—</strong><span id="selected-time">—</span></div>
       </div>
       <aside>
+        <section class="replay-instructions" aria-label="随回放同步的指令与动作">
+          <h2>当时的指令</h2><p id="instruction-source" class="replay-meta">等待记录</p>
+          <p id="step-instruction" class="instruction-text">选择事件查看当时收到的指令。</p>
+          <dl id="instruction-inputs" aria-label="此指令指定的输入值" hidden></dl>
+          <h3>实际执行</h3><p id="replay-action-source" class="replay-meta">尚未执行动作</p>
+          <p id="replay-action" class="instruction-text"></p><p id="replay-receipt" class="replay-meta"></p>
+          <details id="action-instruction-wrap" hidden><summary>该动作收到的指令（早于当前指令）</summary><p id="action-instruction" class="instruction-text"></p></details>
+          <details><summary>当时的工作记忆</summary><pre id="instruction-memory"></pre></details>
+          <p class="replay-meta">指令、动作与截图随时间轴同步。执行成功表示动作回执，任务是否达标请查看官方评分。</p>
+        </section>
         <div class="aside-header"><div><p class="eyebrow">DECISION INSPECTOR</p><h2 id="choice-title">等待决策</h2></div><span id="confidence">—</span></div>
         <div class="tabs" role="tablist" aria-label="事件检查器">
           <button role="tab" aria-selected="true" data-tab="choices">候选</button><button role="tab" aria-selected="false" data-tab="plan">规划</button>
@@ -64,7 +75,7 @@
       </aside>
     </section>
     <section class="trace"><div class="trace-heading"><div><p class="eyebrow">THE EXECUTION TRAIL</p><h2>执行轨迹 <span id="step-count">—</span></h2></div>
-      <div class="trace-filters"><label for="filter">筛选</label><select id="filter"><option value="important">动作与关键事件</option><option value="all">全部事件</option><option value="action">动作</option><option value="plan">规划与恢复</option><option value="extraction">证据与读回</option></select>
+      <div class="trace-filters"><label for="filter">筛选</label><select id="filter"><option value="important">指令、动作与关键事件</option><option value="all">全部事件</option><option value="feedback">Brain 指令</option><option value="action">动作</option><option value="plan">规划与恢复</option><option value="extraction">证据与读回</option></select>
         <input id="search" type="search" placeholder="搜索实体、动作或错误" aria-label="搜索轨迹"></div></div>
       <div class="trace-columns"><span>序号 / 时间</span><span>事件 / 对象</span><span>结果</span></div>
       <div id="history" aria-label="轨迹事件列表"></div>
