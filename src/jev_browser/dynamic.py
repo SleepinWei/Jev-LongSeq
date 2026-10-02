@@ -1600,6 +1600,27 @@ class DynamicController(Controller):
             # route change. Replan before the fast policy can toggle its opener
             # again using pre-menu guidance. This does not confirm a business write.
             self.ui_review_due = True
+        elif (self.pending["action"]["operation"] == Operation.CLICK
+              and not self.pending.get("grid_append")
+              and "before_controls" in self.pending
+              and obs.url == self.pending["before"]["url"]
+              and obs.tab_id == self.pending["before"]["tab_id"]):
+            # Search/command palettes may expose a textbox without a dialog or
+            # menuitem role. A confirmed opener still needs a new stage plan;
+            # the old scope cannot authorize the newly revealed input.
+            identity_fields = ("role", "name", "grid_ref", "row_ref")
+            prior = {tuple(c.get(k) for k in identity_fields)
+                     for c in self.pending["before_controls"]}
+            revealed = [e for e in obs.elements if e.enabled and not e.read_only
+                        and e.name.strip() and (e.editable or e.selectable)
+                        and tuple(getattr(e, k) for k in identity_fields) not in prior]
+            if revealed:
+                self.ui_review_due = True
+                self.log("revealed_inputs_handoff", confirmation_key=key,
+                         controls=[{"element_ref": e.id, **{k: getattr(e, k) for k in identity_fields}}
+                                   for e in revealed],
+                         reason="confirmed click revealed new input identities; fresh scope required",
+                         controls_authorized=False, browser_action_dispatched=False)
         # Prior advisory quotes can still occur on this page; they are not proof
         # for a new action. Always archive the fresh observed excerpt separately.
         self.memory.confirmed_actions.append({

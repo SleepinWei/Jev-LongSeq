@@ -151,3 +151,80 @@ async def test_policy_overflow_pending_review_waits_are_bounded_and_do_not_repea
     assert brain.review.await_count == 1
     assert not controller.memory.write_checkpoints
     assert backend.execute.await_count == 2  # Original Save plus a WAIT, never a second Save.
+
+
+@pytest.mark.parametrize('case', ['new_input', 'changed_handle', 'existing_value', 'disabled', 'readonly', 'unknown'])
+async def test_confirmed_click_replans_for_new_inputs_without_authorizing_them(case):
+    before = form()
+    before.elements = [Element(id='quick', role='button', name='Quick find')]
+    if case in {'changed_handle', 'existing_value'}:
+        before.elements.append(Element(id='old-search', role='textbox', name='Search...', editable=True))
+    backend = AsyncMock()
+    backend.execute.return_value = Receipt(action_id='quick', status='unknown' if case == 'unknown' else 'ok')
+    controller = DynamicController(definition(), backend, None, feedback=None)
+    action = next(a for a in generate_dynamic(before, definition()) if a.element_ref == 'quick')
+    await controller.perform(action, before)
+    after = before.model_copy(deep=True, update={'observation_id': 'fresh', 'text': 'Vendors To select ESC To close'})
+    after.elements = [before.elements[0], Element(id='search', role='textbox', name='Search...', editable=True,
+        value='Journal Entry' if case == 'existing_value' else '',
+        enabled=case != 'disabled', read_only=case == 'readonly')]
+    confirmed = controller.confirm_transition('confirmed', after, 'scoped_model_readback')
+    assert confirmed is (case != 'unknown')
+    assert controller.ui_review_due is (case == 'new_input')
+    assert not controller.memory.write_checkpoints
+    assert controller.memory.feedback.get('stage_controls') is None
+    backend.execute.assert_awaited_once()
+
+
+async def test_search_palette_handoff_discards_old_next_click_and_replans_scope():
+    from jev_browser.dynamic import Feedback, StageControl
+    from jev_browser.protocol import Decision, Observation, Task
+    task = Task(id='palette', control_mode='dynamic', sandbox=True,
+                objective='Open search and enter "Journal Entry".')
+    phases, calls = [], []
+
+    class Backend:
+        count = 0
+
+        async def observe(self):
+            self.count += 1
+            opened = bool(calls)
+            value = 'Journal Entry' if 'search' in calls else ''
+            return Observation(observation_id=f'o{self.count}', document_version='v', tab_id='tab',
+                url='about:blank', title='Vendors', text=f'Search {value}' if opened else 'Vendors',
+                elements=[Element(id='quick', role='button', name='Quick find')]
+                    + ([Element(id='search', role='textbox', name='Search...', editable=True, value=value)]
+                       if opened else []))
+
+        async def execute(self, action):
+            calls.append(action.element_ref)
+            return Receipt(action_id=action.id, status='ok')
+
+    class Brain:
+        async def review(self, task, obs, memory, *, phase, **kwargs):
+            phases.append(phase)
+            complete = phase == 'finish'
+            return Feedback(next_goal='Open search' if phase == 'initial' else 'Enter Journal Entry',
+                stage_controls=[StageControl(element_ref='quick', operations=['click'])] if phase == 'initial'
+                    else [StageControl(element_ref='search', operations=['fill'])],
+                complete=complete, answer='Search input populated' if complete else '',
+                notes=[{'quote': obs.text}])
+
+    class Policy:
+        async def choose(self, task, obs, memory, contract, candidates):
+            if not calls:
+                target, outcome = 'quick', None
+            elif calls == ['quick'] and phases[-1] == 'initial':
+                # The action head proposes the opener again while confirming it.
+                target, outcome = 'quick', 'confirmed'
+            elif calls == ['quick']:
+                assert phases[-1] == 'ui_checkpoint'
+                assert not any(a.element_ref == 'quick' and a.operation == 'fill' for a in candidates)
+                target, outcome = 'search', None
+            else:
+                return Decision(choice=next(a.id for a in candidates if a.operation == 'request_finish'))
+            return Decision(choice=next(a.id for a in candidates if a.element_ref == target), outcome=outcome)
+
+    result = await DynamicController(task, Backend(), Policy(), feedback=Brain()).run()
+    assert result.status == 'success'
+    assert calls == ['quick', 'search'] and phases == ['initial', 'ui_checkpoint', 'finish']

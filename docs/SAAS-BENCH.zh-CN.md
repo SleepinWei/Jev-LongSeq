@@ -462,3 +462,27 @@ C 验证：macmini 全量 608 通过/3 跳过，Ruff/diff 通过。真实 run26 
 run26 cycle121 真实 memory/observation 最小页回放为 46,892 bytes（level4），
 pending 保留，无真实模型调用/浏览器动作。这些证明机械机制有效，不能据此推断
 最终成功率提高；C 线上试验检验组合结果，单项成功率贡献仍需消融和重复试验。
+
+C 实际结果：`arcbench-27` 官方仍为 4/15、data_valid=true、strict_success=false，
+91 动作/106 cycles、43 feedback calls、Agent 1218.53 秒，清理无错误。11 次阶段
+控件重绑定；date 后 Add row 在 cycle3 执行（B 为 cycle13），三条活动及负责人
+由官方评分确认正确。供应商显示名此次 brain 直接使用 click，首次 Save 即成功，
+所以 SELECT→CLICK 规范化未触发，不能单独归因。cycle105 Quick find 的 pending
+最小请求为 48,115 bytes，必需读回 fallback 完成确认，未重提未知业务写入。
+但新 Search... 输入不具有 dialog/menuitem 标记，旧计划/作用域仍只授权 Quick find；
+cycle106 再点被浮层遮挡的 opener，Playwright 超时 unknown，停止。压缩/读回修复
+跨过 B 的停止点，但未提高严格成功率。财务分录、付款及 Twenty 仍未完成。
+
+实验 D（`arcbench-28`）：只补新输入揭示后的阶段交接。在已有合法 confirmed
+click 读回后，同 URL/tab 上出现此前没有的可编辑/可选择控件身份时，设置
+ui_checkpoint，在下一动作前要求新阶段规划。按 role/name/grid/row 比较，忽略
+DOM ID/value/邻近文本变化；禁用、只读或未知 receipt 不产生此交接。它不授权新
+字段，不新增业务成功声明，不豁免未知写入重提限制。目标是修复 C 的 Search
+palette 已打开却仍使用 opener 计划的问题，不硬编码 BigCapital 路径或任务答案。
+
+D 机械验证：152 项定向回归通过，Ruff/diff 通过，真实 C cycle104→105 observation/action/receipt
+只读回放中出现 e762 Search... 后 ui_review_due=true，无真实模型或浏览器调用。
+端到端模拟验证旧 action head 的二次 Quick find 被丢弃，ui_checkpoint 后才填写
+Search；已有输入改值/改 ID、disabled/readonly 和未知回执的负例通过。
+全量首轮发现通用交接覆盖专用 draft_row_added 的优先级冲突；修正为 grid_append
+继续使用专用交接，包含真实浏览器表格增行回归的上述 152 项复验通过。
