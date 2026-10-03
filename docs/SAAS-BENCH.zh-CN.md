@@ -957,3 +957,40 @@ S 检查：macmini 定向 110 passed，全量 708 passed / 3 skipped，改动文
 通过；在线重跑结果另记。在线使用全 DS
 deepseek-flash / api.deepseek.com、90 秒动作请求等待、原 resume-03 memory /
 resume-02 UI、600 动作 / 600 cycles / 1800 秒，在新目录 ds-baseline-45 重跑。
+
+S 在线结果（`ds-baseline-45`）：官方 3/15（20%）、data_valid=true、
+strict_success=false。离职单 docstatus=1 与三条正确活动通过；供应商未保存，
+分录、付款和 Twenty 均未进入。52 动作 / 173 cycles、34 feedback calls、Agent
+1676.15 秒，端到端 Agent 1698.10 秒，环境总计 1793.50 秒。评分无错误，
+cleanup_error=null；手动进程退出、launcher 空闲、slot 0 容器全部清理。
+启动核验 104 个源码/测试文件哈希；108 次请求全部为 api.deepseek.com /
+deepseek-flash（llm_policy 71、dynamic_feedback 25、dynamic_readback 1、
+dynamic_input 11）。原任务、
+恢复记忆 hash、78 条动作 / 107 条证据、模型和预算均不变。
+
+本轮没有终止性 context 超限，也没有 policy overflow readback fallback。
+但未到达 R 保存供应商后的 cycle70 场景，因此线上未验证越过那个具体失败点；
+精确失败点能通过原预算的证据仍是离线回放与回归。官方得分比 R 少 1 分，
+不能声称最终成功率提高或仅凭此单次样本断言修复造成退化。
+
+新的失败链有两部分：
+
+1. cycle41、111、165 的 dynamic_feedback 各两次请求超时（约 90+29.5 秒），
+   cycle164 的 llm_policy 首次请求约 90.5 秒超时、随后重试成功。7 次超时
+   合计 450.52 秒；前两次规划冷却另产生 98 个 planning_scope_wait cycle
+   （显式等待合计 194.88 秒）。
+   这些是实际模型请求等待超时，不是 API 返回 context 长度错误。
+2. cycle162 规划要求先选择显示名 'Ananya Reddy - Ex Employee'，并预期之后
+   出现可编辑的 Display Name。cycle164 选择已读回，但显示名仍不符合目标
+   'Ananya Reddy'；策略提出填 First Name e109，被原执行授权拒绝，未派发。
+   cycle165 的新规划超时后，degraded_planning 沿用旧指导且进入 120 秒冷却。
+   cycles166–172 的重新规划均只返回冷却回退；cycle168 的 no_progress 也未
+   得到新模型计划，却先将该页面 signature 放入 recovered_states。
+   cycle173 因同页再次无进展停止为 repeated state after brain recovery。
+   停止时无 pending，尚余约 124 秒总预算，未保存错误显示名或重复提交。
+
+后续应分开验证：只有成功应用新的有效计划才能消耗该页面的“恢复机会”；
+冷却、超时、schema/evidence 修复失败不能计作成功恢复，也不应让同一旧指导
+在冷却期间反复触发 action policy。另需改进派生字段的规划：未观察到可编辑
+Display Name 时不能假设选择后会出现；应观察生成下拉选项的姓名字段并重新
+授权输入。S 没有更改这些恢复和规划机制，避免将多个策略同时混入一次对照。
