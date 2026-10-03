@@ -109,6 +109,7 @@ class StageControl(Model):
 class Feedback(Model):
     _note_diagnostics: list = PrivateAttr(default_factory=list)
     _local_readback: bool = PrivateAttr(default=False)
+    _planning_result: str = PrivateAttr(default="not_applied")
     next_goal: str = Field(max_length=4000)
     notes: list[EvidenceNote] = Field(default_factory=list, max_length=12)
     last_outcome: Literal["none", "confirmed", "pending", "unknown"] = "none"
@@ -584,6 +585,9 @@ class JsonFeedback:
             "A button without fill capability cannot accept text. If schema_error reports "
             "control_operation_unavailable, revise the plan using current observed controls; "
             "do not repeat the rejected operation or invent an input. "
+            "Do not assume choosing an option will reveal a free-text editor. When the required "
+            "value is absent from a derived dropdown, inspect its observed source fields, plan "
+            "authorized inputs there, then reobserve the generated options before selecting. "
             "Only these controls may mutate the form. Navigation and replan remain available. "
             "Do not include controls belonging to already completed objects or another stage. "
             "Do not invent IDs for controls that are not observed. After an opener reveals new controls, "
@@ -632,6 +636,9 @@ class JsonFeedback:
                         "working_memory; leave answer empty until completion. "
                         "Use only operations in current_control_capabilities when supplied; repair "
                         "control_operation_unavailable by revising the stage to observed capabilities. "
+                        "Do not assume an option selection will reveal a free-text editor. If a derived "
+                        "dropdown lacks the required value, inspect its observed source fields, authorize "
+                        "their inputs, and reobserve generated options before choosing. "
                         "Maintain a short rolling next_goal, not a full DAG."
                         " You are the slow LLM brain; the fast Jev policy will execute several actions"
                         " autonomously under your guidance. Give reusable guidance for the next stage,"
@@ -1193,7 +1200,10 @@ class DynamicController(Controller):
             self.last_brain_action = self.effective_actions
             self.last_brain_attempt = self.actions
             self.last_brain_location = planning_location(obs)
+            self.planning_retry_after.pop(planning_location(obs), None)
+            feedback._planning_result = "applied"
         self.log("feedback", phase=phase, feedback=feedback.model_dump(),
+                 planning_result=feedback._planning_result,
                  effective_actions=self.effective_actions, attempted_actions=self.actions)
         return feedback
 
@@ -1204,7 +1214,7 @@ class DynamicController(Controller):
         handoff = previous.get("planning_handoff")
         if handoff and handoff["environment_id"] != self.memory.environment_id:
             handoff = None
-        needs_scope = (self.fresh_scope_required or
+        needs_scope = (self.fresh_scope_required or phase in {"no_progress", "jev_requested"} or
                        (not handoff and phase in {"ui_checkpoint", "draft_row_added", "stale_target_changed"}
                         and bool(previous.get("execution_scope"))))
         guidance = Feedback(
@@ -1221,6 +1231,7 @@ class DynamicController(Controller):
             verification=previous.get("verification") if same_route and not handoff and not needs_scope else None,
             stage_entry=previous.get("stage_entry") if same_route and not handoff and not needs_scope else None,
         )
+        guidance._planning_result = "cooldown" if reason == "planning retry cooldown" else "timeout"
         self.memory.feedback.update(guidance.model_dump())
         if needs_scope:
             self.fresh_scope_required = True
@@ -1230,6 +1241,7 @@ class DynamicController(Controller):
         self.last_brain_action, self.last_brain_attempt = self.effective_actions, self.actions
         self.last_brain_location = planning_location(obs)
         self.log("planning_degraded", phase=phase, reason=reason, original_goal_preserved=True,
+                 planning_result=guidance._planning_result,
                  guidance_source="await_fresh_scope" if needs_scope else "write_checkpoint_navigation" if handoff else
                                  "previous_same_route" if same_route else "original_task",
                  working_memory_preserved=True, action_confirmed=False, completion_claim=False)
@@ -2397,7 +2409,6 @@ class DynamicController(Controller):
                     and trigger not in {"write_checkpoint", "navigation_checkpoint", "ui_checkpoint"}):
                 if signature in recovered_states:
                     return self.result("needs_attention", "repeated state after brain recovery")
-                recovered_states.add(signature)
                 visits[signature] = 0
                 trigger = "no_progress"
             self.memory.feedback["execution_feedback"] = {
@@ -2420,9 +2431,14 @@ class DynamicController(Controller):
                     self.pending["stage_readback_reviewed"] = True
                 self.log("brain_requested", reason=trigger)
                 assessment = await self.review(obs, phase=trigger)
+                if trigger == "no_progress" and assessment._planning_result == "applied":
+                    recovered_states.add(signature)
+                    self.log("recovery_plan_applied", signature=signature)
                 if self.pending and assessment.last_outcome == "confirmed":
                     self.confirm_transition("confirmed", obs, "stage_brain_review")
                 trigger = ""
+                if assessment._planning_result in {"timeout", "cooldown"} and self.fresh_scope_required:
+                    continue  # Wait before choosing again; no recovery was applied.
             if self.memory.feedback.get("complete") and not self.pending:
                 operation = Operation.FINISH
                 selected = None
@@ -2532,6 +2548,7 @@ class DynamicController(Controller):
                     self.log("stage_action_rejected", target=selected.element_ref,
                              operation=selected.operation, browser_action_dispatched=False,
                              pending_preserved=bool(self.pending))
+                    self.fresh_scope_required = True
                     trigger = "jev_requested"
                     continue
                 threshold = self.budget.confidence_threshold

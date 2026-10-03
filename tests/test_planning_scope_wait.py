@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 from jev_browser.dynamic import DynamicController, Feedback, StageControl, generate_dynamic
 from jev_browser.observability import ModelCallTimeout
-from jev_browser.protocol import Budget, Element, Observation, Operation, Task
+from jev_browser.protocol import Budget, Decision, Element, Observation, Operation, Task
 
 
 def page():
@@ -73,3 +73,47 @@ async def test_only_new_valid_stage_releases_wait_and_explicitly_scopes_remainin
     assert any(a.element_ref == "user" for a in candidates)
     assert not any(a.element_ref == "add" for a in candidates)
     assert controller.memory.feedback["working_memory"].startswith("Exact recovered memory")
+
+
+async def test_timed_out_recovery_waits_then_retries_without_consuming_successful_recovery(monkeypatch):
+    controller = await waiting_controller()
+    controller.planning_retry_after.clear()
+    controller.fresh_scope_required = False
+    controller.initial_phase = ''
+    controller.budget = Budget(max_cycles=8, no_progress_limit=1)
+    ticks = [1000.0]
+    monkeypatch.setattr('jev_browser.dynamic.time.monotonic', lambda: ticks[0])
+    async def advance(delay):
+        ticks[0] += 121  # Expire the provider cooldown without a real wait.
+    monkeypatch.setattr('jev_browser.dynamic.asyncio.sleep', advance)
+    phases = []
+    async def review(*args, phase, **kwargs):
+        phases.append(phase)
+        if len(phases) == 1:
+            raise ModelCallTimeout('provider slow')
+        return Feedback(next_goal='Inspect the visible User',
+                        stage_controls=[StageControl(element_ref='user', operations=['fill'])])
+    controller.feedback_model.review.side_effect = review
+    async def choose(task, obs, memory, contract, candidates):
+        return Decision(choice=next(a.id for a in candidates if a.operation == Operation.REPLAN))
+    controller.policy.choose.side_effect = choose
+    result = await controller.run()
+    assert phases == ['no_progress', 'ui_checkpoint', 'no_progress', 'jev_requested']
+    assert result.reason == 'repeated state after brain recovery'
+    applied = [e for e in controller.events if e['kind'] == 'recovery_plan_applied']
+    assert len(applied) == 1
+    assert applied[0]['cycle'] > next(e['cycle'] for e in controller.events
+                                    if e['kind'] == 'planning_scope_wait')
+    assert controller.policy.choose.await_count == 4
+    controller.backend.execute.assert_not_awaited()
+    assert not controller.planning_retry_after
+    assert controller.memory.feedback['working_memory'].startswith('Exact recovered memory')
+
+
+async def test_degraded_feedback_never_claims_applied_plan_or_changes_model_schema():
+    controller = await waiting_controller()
+    assessment = await controller.review(page(), phase='no_progress')
+    assert assessment._planning_result == 'cooldown'
+    assert controller.fresh_scope_required
+    assert '_planning_result' not in assessment.model_dump()
+    assert '_planning_result' not in Feedback.model_json_schema()['properties']

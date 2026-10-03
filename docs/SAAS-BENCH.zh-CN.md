@@ -994,3 +994,25 @@ dynamic_input 11）。原任务、
 在冷却期间反复触发 action policy。另需改进派生字段的规划：未观察到可编辑
 Display Name 时不能假设选择后会出现；应观察生成下拉选项的姓名字段并重新
 授权输入。S 没有更改这些恢复和规划机制，避免将多个策略同时混入一次对照。
+
+### 实验 T：恢复成功与规划等待分离
+
+针对 S 的 cycle164–173 故障链，只有 review 校验通过且实际应用新计划后，
+no_progress 才记录该页面的恢复机会；超时、冷却和本地读回均不计作成功恢复。
+事件记录 planning_result，成功恢复另记 recovery_plan_applied。动作超出当前
+阶段授权时立即要求新 scope；jev_requested / no_progress 规划超时会清除旧
+inputs 和 bindings，保留原任务及 working_memory，并在冷却期间跳过 policy
+调用与浏览器派发。成功规划清除该 route 的冷却记录。真正应用恢复计划后
+仍然反复停在同页时，继续保留 repeated-state 停止保护。
+
+同时给两种规划 prompt 加入派生字段约束：不得假设选择选项后就出现自由文本
+输入；目标选项不存在时，观察已有源字段、授权其输入，再重新观察生成选项。
+这些属于一般控件规则，没有写入 business_031 的答案或私有评分状态。
+
+回归覆盖授权拒绝→规划超时→冷却时不调用策略、超时不消耗恢复机会、冷却后
+重试，以及有效恢复后无进展仍停止。在线对照使用 ds-baseline-46 新目录，
+保持 S 的官方 DS provider/model、原任务、resume-03 memory / resume-02 UI、
+上下文预算和运行预算。该实验同时修改恢复机制和规划提示，不能单独归因提示
+的效果；单任务续跑得分也不等于全 benchmark 成功率。检查与在线结果见后文。
+
+T 远端检查：macmini 全量 710 passed / 3 skipped，修改文件 Ruff 通过。

@@ -129,6 +129,21 @@ async def test_out_of_stage_proposal_is_discarded_after_pending_ui_readback():
     assert any(e['kind'] == 'stage_action_rejected' for e in controller.events)
     controller.backend.execute.assert_awaited_once()  # Only original opener; email never dispatched.
     assert controller.pending is None and not controller.memory.write_checkpoints
+    assert controller.fresh_scope_required
+
+    # The rejected action requires a new scope. A provider timeout must block the
+    # policy too, instead of repeatedly proposing the same unauthorized action.
+    from jev_browser.observability import ModelCallTimeout
+    controller.feedback_model.review.side_effect = ModelCallTimeout('provider slow')
+    assessment = await controller.review(after, phase='jev_requested')
+    assert assessment._planning_result == 'timeout'
+    assert controller.memory.feedback['execution_scope']['bindings'] == {}
+    controller.policy.choose.reset_mock()
+    from unittest.mock import patch
+    with patch('jev_browser.dynamic.asyncio.sleep', new_callable=AsyncMock):
+        await controller.dynamic_loop()
+    controller.policy.choose.assert_not_awaited()
+    controller.backend.execute.assert_awaited_once()
 
 
 async def test_stage_filter_precedes_pagination_so_matching_target_is_not_buried():
