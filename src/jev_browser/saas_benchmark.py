@@ -43,6 +43,8 @@ def add_options(parser):
                         help="Rewind UI to an earlier empty draft checkpoint, retaining latest memory")
     parser.add_argument("--saas-resume-brain-model",
                         help="Explicitly migrate the API brain to this model during Jev draft recovery")
+    parser.add_argument("--saas-resume-policy-model",
+                        help="Explicitly migrate the API action policy during draft recovery")
 
 
 def checkout(args):
@@ -307,6 +309,8 @@ async def run_saas(args, selected, output):
     checkpoint = None
     if getattr(args, "saas_resume_brain_model", None) and not getattr(args, "saas_resume_from", None):
         raise ValueError("--saas-resume-brain-model requires --saas-resume-from")
+    if getattr(args, "saas_resume_policy_model", None) and not getattr(args, "saas_resume_from", None):
+        raise ValueError("--saas-resume-policy-model requires --saas-resume-from")
     if getattr(args, "saas_resume_ui_from", None) and not getattr(args, "saas_resume_from", None):
         raise ValueError("--saas-resume-ui-from requires --saas-resume-from")
     if getattr(args, "saas_resume_from", None):

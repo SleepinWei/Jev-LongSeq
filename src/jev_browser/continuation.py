@@ -139,25 +139,30 @@ def load_continuation(directory, task, manifest, *, ui_directory=None, _visited=
             "last_observation": last}
 
 
-def validate_continuation_models(checkpoint, policy, brain, *, brain_model=None):
-    """Require original models unless an explicit, auditable brain migration is requested."""
-    if not brain_model:
+def validate_continuation_models(checkpoint, policy, brain, *, brain_model=None, policy_model=None):
+    """Require original models unless an explicit, auditable component migration is requested."""
+    if not brain_model and not policy_model:
         if {policy.model, brain.model} != checkpoint["model_names"]:
             raise ValueError("continuation model configuration differs from the original")
         return
     calls = checkpoint.get("model_calls", [])
-    policy_calls = [r for r in calls if r.get("kind") == "jev"]
+    policy_calls = [r for r in calls if r.get("kind") in {"jev", "llm_policy"}]
     brain_calls = [r for r in calls if r.get("kind", "").startswith("dynamic_")]
     if not policy_calls or not brain_calls or len(policy_calls) + len(brain_calls) != len(calls):
-        raise ValueError("brain migration requires an unambiguous Jev/brain checkpoint ledger")
-    if {r["model"] for r in policy_calls} != {policy.model}:
+        raise ValueError("model migration requires an unambiguous policy/brain checkpoint ledger")
+    if policy_model and policy.model != policy_model:
+        raise ValueError("configured policy model differs from --saas-resume-policy-model")
+    if not policy_model and {r["model"] for r in policy_calls} != {policy.model}:
         raise ValueError("brain migration cannot change the Jev policy model")
     old_policy_hosts = {r.get("endpoint_host") for r in policy_calls}
-    if old_policy_hosts != {urlsplit(policy.endpoint).hostname}:
+    if not policy_model and old_policy_hosts != {urlsplit(policy.endpoint).hostname}:
         raise ValueError("brain migration cannot change the Jev policy provider")
-    if brain.model != brain_model:
+    if brain_model and brain.model != brain_model:
         raise ValueError("configured brain model differs from --saas-resume-brain-model")
-    checkpoint["memory"].resume_context["brain_migration"] = {
+    if not brain_model and ({r["model"] for r in brain_calls} != {brain.model}
+            or {r.get("endpoint_host") for r in brain_calls} != {urlsplit(brain.endpoint).hostname}):
+        raise ValueError("policy migration cannot change the undeclared brain model/provider")
+    migration = {
         "explicitly_requested": True,
         "previous_models": sorted({r["model"] for r in brain_calls}),
         "previous_endpoint_hosts": sorted({r.get("endpoint_host") or "unknown" for r in brain_calls}),
@@ -166,6 +171,17 @@ def validate_continuation_models(checkpoint, policy, brain, *, brain_model=None)
         "policy_model": policy.model,
         "policy_endpoint_host": urlsplit(policy.endpoint).hostname,
     }
+    if brain_model:
+        checkpoint["memory"].resume_context["brain_migration"] = migration
+    if policy_model:
+        checkpoint["memory"].resume_context["policy_migration"] = {
+            "explicitly_requested": True,
+            "previous_models": sorted({r["model"] for r in policy_calls}),
+            "previous_endpoint_hosts": sorted({r.get("endpoint_host") or "unknown" for r in policy_calls}),
+            "previous_call_kinds": sorted({r["kind"] for r in policy_calls}),
+            "model": policy.model, "endpoint_host": urlsplit(policy.endpoint).hostname,
+            "brain_model": brain.model, "brain_endpoint_host": urlsplit(brain.endpoint).hostname,
+        }
 
 
 async def replay_draft_step(browser, task, source, operation, value, observer, index):

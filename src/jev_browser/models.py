@@ -160,9 +160,10 @@ class ModelTransport:
                     raise ValueError("continued model request is missing its original goal") from None
             if not isinstance(context, dict) or context.get("trusted_goal") != self.required_goal:
                 raise ValueError("continued model request changed the original task prompt")
-        if kind.startswith("dynamic_"):
+        if kind.startswith("dynamic_") or kind == "llm_policy":
             variable, default = (
-                ("BRAIN_FINISH_CONTEXT_MAX_BYTES", DEFAULT_FINISH_MAX_BYTES)
+                ("POLICY_CONTEXT_MAX_BYTES", int(os.environ.get("JEV_CONTEXT_MAX_BYTES", DEFAULT_MAX_BYTES)))
+                if kind == "llm_policy" else ("BRAIN_FINISH_CONTEXT_MAX_BYTES", DEFAULT_FINISH_MAX_BYTES)
                 if kind == "dynamic_finish" else ("BRAIN_CONTEXT_MAX_BYTES", DEFAULT_BRAIN_MAX_BYTES))
             maximum = int(os.environ.get(variable, default))
             if maximum <= 0:

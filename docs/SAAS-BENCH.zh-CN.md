@@ -857,3 +857,22 @@ readback unresolved; no resubmission。日期、引用都不是未解决动作�
 Quick new 菜单可见，但是否造成重渲染/遮挡并无确定因果证据。下一步需区分输入
 控件的可见失败、已派发未知状态与业务提交未知状态，再决定安全的 UI 修复路径；
 不能只凭 receipt=ok 重试、把空 Account 当成功或提高等待预算掩盖问题。
+
+实验 R（全 DeepSeek baseline）：按用户要求，让所有新增模型操作均使用官方
+api.deepseek.com / deepseek-flash：JsonPolicy 做候选动作选择，JsonFeedback 做
+阶段规划、输入值生成、局部读回、记忆压缩和完成审查。保持当前浏览器/harness，
+仍由浏览器 backend 执行操作，由官方 verifier 判分；不使用 Jev 作新增动作选择。
+使用相同 business_031 原任务、resume-03 memory / resume-02 UI 恢复点、600 actions /
+600 cycles / 1800 秒 / 1000 feedback calls / 250 candidates，动作上下文 48,000 bytes、
+brain 96,000 bytes。继承的 78 条历史仍来自原运行，不改写为 DS 产生；这是一轮
+同恢复点对照，不是从零开始的独立完整 episode。
+
+新增 --saas-resume-policy-model 显式迁移开关，记录原策略 model/provider/call kind
+及新策略和 brain 的 model/provider；未声明的策略或 brain 变化仍拒绝。新增
+JsonPolicy 上下文投影/预算，复用已有共享历史投影并保留候选、任务、pending 与
+当前观察；避免 baseline 因忽略上下文限制而获得额外预算。策略请求格式为生成
+JSON，与 Jev 分类接口不同；baseline 成绩衡量当前有限候选 harness 中模型替换，
+不代表 DeepSeek 完全自主操纵浏览器的上限。本轮先固定浏览器行为，暂停修改
+输入自动 Tab 等疑似机制，以免同时更换模型和执行语义；官方结果另记。
+
+R 检查：macmini 定向 86 passed，全量 699 passed / 3 skipped，改动文件 Ruff 通过。

@@ -142,6 +142,52 @@ def test_brain_migration_records_provenance_without_changing_goal_or_memory(chec
     assert migration["policy_model"] == policy.model
 
 
+@pytest.mark.parametrize("old_kind", ["jev", "llm_policy"])
+def test_explicit_policy_migration_preserves_task_memory_and_audits_provider(checkpoint_files, old_kind):
+    path, task, manifest, _, _ = checkpoint_files
+    calls = [{"kind": old_kind, "model": "jev-latest", "endpoint_host": "api.typesafe.ai"},
+             {"kind": "dynamic_feedback", "model": "deepseek-flash", "endpoint_host": "api.deepseek.com"}]
+    (path / "model-calls.jsonl").write_text("\n".join(json.dumps(r) for r in calls))
+    checkpoint = load_continuation(path, task, manifest)
+    before = checkpoint["memory"].export()
+    policy = ModelTransport("https://api.deepseek.com/v1/chat/completions", "test", "deepseek-flash")
+    brain = ModelTransport("https://api.deepseek.com/v1/chat/completions", "test", "deepseek-flash")
+    validate_continuation_models(checkpoint, policy, brain, policy_model="deepseek-flash")
+    after = checkpoint["memory"].export()
+    migration = after["resume_context"].pop("policy_migration")
+    assert after == before
+    assert migration["previous_models"] == ["jev-latest"]
+    assert migration["previous_endpoint_hosts"] == ["api.typesafe.ai"]
+    assert migration["previous_call_kinds"] == [old_kind]
+    assert migration["model"] == migration["brain_model"] == "deepseek-flash"
+    assert migration["endpoint_host"] == migration["brain_endpoint_host"] == "api.deepseek.com"
+
+
+@pytest.mark.parametrize("change", ["undeclared", "declaration", "brain", "brain_provider", "ledger"])
+def test_policy_migration_does_not_silently_change_other_components(checkpoint_files, change):
+    path, task, manifest, _, _ = checkpoint_files
+    calls = [{"kind": "jev", "model": "jev-latest", "endpoint_host": "api.typesafe.ai"},
+             {"kind": "dynamic_feedback", "model": "deepseek-flash", "endpoint_host": "api.deepseek.com"}]
+    (path / "model-calls.jsonl").write_text("\n".join(json.dumps(r) for r in calls))
+    checkpoint = load_continuation(path, task, manifest)
+    policy = ModelTransport("https://api.deepseek.com/v1/chat/completions", "test", "deepseek-flash")
+    brain = ModelTransport("https://api.deepseek.com/v1/chat/completions", "test", "deepseek-flash")
+    declaration = "deepseek-flash"
+    if change == "undeclared":
+        declaration = None
+    elif change == "declaration":
+        declaration = "other-policy"
+    elif change == "brain":
+        brain.model = "other-brain"
+    elif change == "brain_provider":
+        brain.endpoint = "https://other.example/v1/chat/completions"
+    else:
+        checkpoint["model_calls"] = [{"model": "legacy"}]
+    with pytest.raises(ValueError):
+        validate_continuation_models(checkpoint, policy, brain, policy_model=declaration)
+    assert "policy_migration" not in checkpoint["memory"].resume_context
+
+
 def test_legacy_checkpoint_keeps_strict_default_model_check(checkpoint_files):
     path, task, manifest, _, _ = checkpoint_files
     checkpoint = load_continuation(path, task, manifest)

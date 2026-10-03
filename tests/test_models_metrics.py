@@ -6,6 +6,7 @@ import pytest
 from test_protocol import observation
 
 from jev_browser.candidates import generate
+from jev_browser.context_budget import ContextBudgetExceeded
 from jev_browser.evaluation import (
     calibration,
     candidate_recall,
@@ -59,6 +60,24 @@ async def test_json_planner_and_policy_wire_contracts():
     assert choice.choice == "a0"
     assert [record["kind"] for record in transport.ledger] == ["planner", "llm_policy"]
     assert all(record["input_tokens"] == 200 for record in transport.ledger)
+
+
+@pytest.mark.parametrize("variable", ["POLICY_CONTEXT_MAX_BYTES", "JEV_CONTEXT_MAX_BYTES"])
+async def test_json_policy_obeys_action_context_budget_before_http(monkeypatch, variable):
+    monkeypatch.delenv("POLICY_CONTEXT_MAX_BYTES", raising=False)
+    monkeypatch.setenv(variable, "64")
+    monkeypatch.setenv("BRAIN_CONTEXT_MAX_BYTES", "96000")
+
+    def respond(request):
+        pytest.fail("Protected action context overflow must not dispatch a model request")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        transport = ModelTransport("https://model.test/v1/chat/completions", "test", "test", client=client)
+        task, obs, memory = demo_task(1), observation(), Memory()
+        transport.required_goal = task.objective
+        with pytest.raises(ContextBudgetExceeded):
+            await JsonPolicy(transport).choose(task, obs, memory, None, generate(obs, task, memory, None))
+    assert not transport.ledger
 
 
 async def test_jev_wire_contract_and_metering():

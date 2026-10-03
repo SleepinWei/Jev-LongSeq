@@ -209,7 +209,8 @@ async def run_trial(args, *, count=None, output=None):
 
             validate_continuation_models(
                 checkpoint, policy.transport, planner.transport,
-                brain_model=getattr(args, "saas_resume_brain_model", None))
+                brain_model=getattr(args, "saas_resume_brain_model", None),
+                policy_model=getattr(args, "saas_resume_policy_model", None))
             for client in transports:
                 client.required_goal = task.objective
             manifest["continuation"]["per_request_prompt_guard"] = True
