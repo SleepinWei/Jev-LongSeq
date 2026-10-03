@@ -932,3 +932,28 @@ protected context cannot fit; no pending action; no request or resubmission。
 JsonPolicy 的紧凑候选/Chat 请求构造，以及无 pending 时压缩 context 后继续规划
 的恢复路径；保留原任务、当前控件、执行授权和关键写入证据，并在相同预算下
 重新对照。Journal autocomplete 的 fill/自动 Tab 问题仍需独立验证。
+
+实验 S（修复全 DS 策略 context）：不提高 48,000 bytes / 96,000 bytes 预算。
+动态 JsonPolicy 与 Jev 共享模型侧候选表示，保留 ID、operation、target、精确
+绑定值（包括空字符串）及表格列头警告；观测版本、tab/frame、receipt 等执行
+元数据仍留在原 Action，由 controller 原样执行，不重复发送给模型。
+
+无 pending 时，JsonPolicy 的控件视图仅保留当前候选页的目标、递归弹窗归属及
+所涉表格行的其他控件。保留完整页面文字和所有可见表格，再按既有时间衰减机制
+投影旧记忆。候选分页、执行授权、controller/browser 的完整观察与原始记忆均
+不改；其他控件仍可通过 next_candidates / request_replan 访问。有 pending 或
+候选含未知目标时不缩小控件视图；原 outcome 读回、unknown 不重放及真正保护
+内容超限时的停止机制不放宽。静态 JsonPolicy 格式与 Jev 选择语义保持原样。
+
+macmini 离线用 R cycle70 的最终记忆、观察和 8 个候选精确重建原失败请求，
+确认旧实现投影后 51,082 bytes；S 后为 47,737 bytes，在 level3 /
+memory_pressure0 即可放入 48,000 bytes。该候选页只有 1 个目标控件，129 个
+观察控件中的 128 个不进入本次选择请求；任务、原始记忆、完整表格和候选 ID
+均不变。无模型调用、无浏览器动作，真实 payload 仅留在远端 /tmp。
+回归检查弹窗 owner 递归、同行关联、全表格证据、候选空字符串与列头警告、
+pending / 未知目标不裁剪、原 Action 不修改和 HTTP 实际预算。
+
+S 检查：macmini 定向 110 passed，全量 708 passed / 3 skipped，改动文件 Ruff
+通过；在线重跑结果另记。在线使用全 DS
+deepseek-flash / api.deepseek.com、90 秒动作请求等待、原 resume-03 memory /
+resume-02 UI、600 动作 / 600 cycles / 1800 秒，在新目录 ds-baseline-45 重跑。

@@ -341,6 +341,52 @@ def state(task: Task, obs: Observation, memory: Memory, contract: Contract | Non
     return content
 
 
+def dynamic_policy_options(obs, candidates):
+    """Model-facing choices; execution keeps the original observed Action objects."""
+    columns = {g.id: {c.column for r in g.rows for c in r.cells} for g in obs.grids}
+    headers = {e.id for e in obs.elements if e.grid_ref and not e.row_ref and e.role == "button"
+               and not e.editable and e.name in columns.get(e.grid_ref, set())}
+    return {
+        a.id: {"operation": a.operation,
+               **({"target": a.element_ref} if a.element_ref else {"description": a.description}),
+               **({"description": "Grid column header, not a row field input"}
+                  if a.element_ref in headers else {}),
+               **({"value": a.bound_value} if a.bound_value is not None else {})}
+        for a in candidates
+    }
+
+
+def policy_page_observation(content, obs, memory, candidates):
+    """Scope a new choice to its page; outcome review always keeps all controls."""
+    if memory.pending_writes:
+        return
+    controls = {e.id: e for e in obs.elements}
+    targets = {a.element_ref for a in candidates if a.element_ref}
+    if not targets <= controls.keys():
+        return  # Unknown targets must not make the observation less informative.
+    relevant = set(targets)
+    while True:
+        previous = set(relevant)
+        rows = {(controls[ref].grid_ref, controls[ref].row_ref) for ref in relevant
+                if controls[ref].grid_ref and controls[ref].row_ref}
+        relevant.update(e.id for e in obs.elements if (e.grid_ref, e.row_ref) in rows)
+        for ref in list(relevant):
+            element = controls[ref]
+            relevant.update(owner for owner in (element.option_owner, element.menu_owner)
+                            if owner in controls)
+        if relevant == previous:
+            break
+    observation = content["untrusted_observation"]
+    observation["elements"] = [e for e in observation["elements"] if e["id"] in relevant]
+    content["policy_page_scope"] = {
+        "omitted_controls": len(controls) - len(relevant),
+        "meaning": "Only this candidate page, popup owners and targeted grid rows are shown. "
+                   "Page text and all visible grids are retained. Other controls remain in the full "
+                   "browser observation; use next_candidates or request_replan. Candidate IDs and "
+                   "execution permissions are unchanged. This view is never used for pending readback.",
+    }
+
+
 class JevPolicy:
     def __init__(self, transport: ModelTransport, *, context_max_bytes: int | None = None):
         self.transport = transport
@@ -360,18 +406,7 @@ class JevPolicy:
     ) -> Decision:
         options = {a.id: a.model_dump(mode="json") for a in candidates}
         if task.control_mode == "dynamic":
-            columns = {g.id: {c.column for r in g.rows for c in r.cells} for g in obs.grids}
-            headers = {e.id for e in obs.elements if e.grid_ref and not e.row_ref and e.role == "button"
-                       and not e.editable and e.name in columns.get(e.grid_ref, set())}
-            options = {
-                a.id: {"operation": a.operation,
-                       **({"target": a.element_ref} if a.element_ref else
-                          {"description": a.description}),
-                       **({"description": "Grid column header, not a row field input"}
-                          if a.element_ref in headers else {}),
-                       **({"value": a.bound_value} if a.bound_value is not None else {})}
-                for a in candidates
-            }
+            options = dynamic_policy_options(obs, candidates)
         questions = {
             "action": {"type": "choice", "instructions": instructions(task), "criteria": options}
         }
@@ -438,8 +473,13 @@ class JsonPolicy:
     async def choose(self, task, obs, memory, contract, candidates) -> Decision:
         content = {
             **state(task, obs, memory, contract),
-            "candidates": [a.model_dump(mode="json") for a in candidates],
+            "candidates": ([{"id": key, **option} for key, option in
+                            dynamic_policy_options(obs, candidates).items()]
+                           if task.control_mode == "dynamic" else
+                           [a.model_dump(mode="json") for a in candidates]),
         }
+        if task.control_mode == "dynamic":
+            policy_page_observation(content, obs, memory, candidates)
         data = await self.transport.post(
             {
                 "model": self.transport.model,
