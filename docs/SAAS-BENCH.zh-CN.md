@@ -1016,3 +1016,40 @@ inputs 和 bindings，保留原任务及 working_memory，并在冷却期间跳�
 的效果；单任务续跑得分也不等于全 benchmark 成功率。检查与在线结果见后文。
 
 T 远端检查：macmini 全量 710 passed / 3 skipped，修改文件 Ruff 通过。
+
+T 在线结果（`saas-longseq-business031-20261003-ds-baseline-46`，源码
+`f377711`）：官方 4/15（26.7%）、data_valid=true、strict_success=false。
+离职单已提交、三条活动及 assignees 正确，供应商名称/显示名/邮箱通过；
+分录、付款和 Twenty 尚未执行。60 动作 / 75 cycles、43 feedback calls，
+Agent 1261.46 秒，端到端 Agent 1280.46 秒，环境总计 1361.83 秒。
+评分无错误、cleanup_error=null；进程退出、launcher 空闲、slot 0 无残留容器。
+104 个源码/测试文件哈希核验一致，原 prompt / working_memory hash、78 条
+恢复动作 / 107 条证据及 provider/model/budgets 均与 S 一致。
+108 次请求全部 api.deepseek.com / deepseek-flash 且 HTTP 200：llm_policy 65、
+dynamic_feedback 22、dynamic_input 12、dynamic_readback 9。无请求超时。
+
+本轮观察到的改善：cycle55 计划已明确先授权 First Name=Ananya、Last Name=Reddy、
+Company Name 和 Email，然后再打开派生显示名菜单；cycle62 选择生成的
+Ananya Reddy，cycle64 保存，cycle66 完成写入读回。正式评分验证供应商通过。
+相对 S 增加 1/15，Agent 用时减少约 415 秒。但 S 有 7 次模型超时而 T 没有，
+不能将全部耗时改善归因于代码；本轮未触发 planning_degraded / cooldown，
+因此“超时不算恢复成功”的线上分支仍仅有回归测试证据。cycle39 有一次
+stage_action_rejected（报表阶段请求切换 tab），新 scope 规划后正常继续。
+这是同任务、同恢复点单次对照，不是全量成功率估计，也未超过 R 的 4/15。
+
+T 新的终止机制：保存后为核验供应商进入列表 Filter。cycle73 点击字段选项
+`vendor.field.display_name`（e838）；cycle74、75 策略上下文压缩到 53,795 / 51,930
+bytes，仍超 48,000 bytes，转入 required action_readback。两次 DS 均返回
+unknown；额外刷新后菜单消失，但目标字段 e773 仍显示 `Select an item ...`，
+未见字段绑定成功的证据。最终停止 `uncertain action after context readback;
+no resubmission`，剩余运行时限约 539 秒。全程共 8 次 policy context readback
+fallback，没有 context_budget_unresolved；不能把“没有终止性 overflow”写成
+“没有上下文压力”。没有误报成功或重复提交。
+
+这暴露了独立于 T 修复的设计问题：通用菜单点击被标为 effect=write，使一个
+筛选控件的未知结果沿用业务写入的全局停止规则；只读核验预算即使到期也不能
+越过 pending。后续应验证分层 effect（持久化写入与可逆的界面状态变化）、
+保存核验的可延期边界，以及 pending 读回的专用紧凑上下文。不能仅凭菜单关闭
+确认字段选择成功，也不能通过忽略所有 unknown 或扩大预算来掩盖证据缺失。
+观测还出现 localhost:9000 socket.io blocked_request，但现有 trace 不能证明
+其导致字段选择未生效，不能将它当作已确认根因。
