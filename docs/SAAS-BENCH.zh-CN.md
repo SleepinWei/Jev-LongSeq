@@ -876,3 +876,20 @@ JSON，与 Jev 分类接口不同；baseline 成绩衡量当前有限候选 harn
 输入自动 Tab 等疑似机制，以免同时更换模型和执行语义；官方结果另记。
 
 R 检查：macmini 定向 86 passed，全量 699 passed / 3 skipped，改动文件 Ruff 通过。
+
+R 初次 baseline（`ds-baseline-43`）：官方 3/15（20%）、data_valid=true、
+strict_success=false。提交离职单及三条活动通过，尚未进入财务/Twenty。
+26 动作 / 41 cycles、21 feedback calls、Agent 689.47 秒，64 次 HTTP 尝试均为
+api.deepseek.com / deepseek-flash，包括 llm_policy / dynamic_*；评分无错误，清理正常。
+cycle41 的 llm_policy 连续三次约 30 秒超时，没有 HTTP 响应；此时总预算尚未用完。
+transport 将最后一次 asyncio TimeoutError 原样抛出，Controller 把它误报为
+wall-clock deadline reached。不能按该 stop reason 断言 1800 秒耗尽，也不能把
+这轮受 API 等待限制的分数当 DeepSeek 能力上限。
+
+R 补跑：只将 POLICY_TIMEOUT_SECONDS 从 30 调为 90，与 DS brain 的请求等待一致，
+整体 1800 秒、动作/反馈/候选/context 预算和恢复点保持不变。另修复 llm_policy
+超时分类：保留原重试次数、原请求和记录，耗尽后抛 ModelCallTimeout，报告模型
+调用超时而不是整轮 deadline；不增加浏览器动作、不清除 pending、不重放。
+这是明确不同等待上限的第二个配置，分别保存成绩，不混算为同配置重复成功率。
+
+R 补跑检查：macmini 定向 47 passed，全量 701 passed / 3 skipped，Ruff 通过。

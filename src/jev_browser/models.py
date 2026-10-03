@@ -294,7 +294,7 @@ class ModelTransport:
                 if attempt < retries and deadline - time.monotonic() > .5:
                     await asyncio.sleep(min(0.5 * 2**attempt, 2))
                     continue
-                if dynamic and isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+                if (dynamic or kind == "llm_policy") and isinstance(exc, (httpx.TimeoutException, TimeoutError)):
                     raise ModelCallTimeout(
                         f"{kind}: {self.model} timed out after {attempt + 1} attempts; "
                         "run budget not exhausted; pending retained, no action replayed"

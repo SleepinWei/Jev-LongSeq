@@ -170,6 +170,36 @@ async def test_dynamic_retry_is_bounded_and_run_reserve_prevents_a_request():
         assert len(requests) == 2
 
 
+@pytest.mark.parametrize("failure", ["asyncio", "httpx"])
+async def test_action_model_timeout_is_not_reported_as_run_deadline(failure):
+    def respond(request):
+        if failure == "asyncio":
+            raise TimeoutError("inference timed out")
+        raise httpx.ReadTimeout("inference timed out", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        transport = ModelTransport("https://model.test/v1/chat/completions", "test", "test",
+                                   client=client, retries=0)
+
+        class InferenceController(DynamicController):
+            async def _loop(self):
+                self.pending = {"key": "write", "dispatch_status": "ok", "waits": 0,
+                                "action": {"operation": "click", "description": "Save vendor"}}
+                self.memory.pending_writes["write"] = self.pending
+                await transport.post({"messages": [{"role": "user", "content": json.dumps(
+                    state(self.task, page(), self.memory, None))}]}, "llm_policy")
+
+        backend = AsyncMock()
+        controller = InferenceController(definition(), backend, None, feedback=None)
+        result = await controller.run()
+    assert result.status == "needs_attention", result.reason
+    assert "llm_policy" in result.reason and "run budget not exhausted" in result.reason
+    assert "wall-clock deadline" not in result.reason
+    assert controller.pending and controller.memory.pending_writes
+    assert len(transport.ledger) == 1 and transport.ledger[0]["error"] in {"TimeoutError", "ReadTimeout"}
+    backend.execute.assert_not_awaited()
+
+
 @pytest.mark.parametrize('kind,allowance', [('dynamic_feedback', 120),
                                           ('dynamic_input', 60)])
 async def test_model_request_can_use_whole_logical_allowance(kind, allowance):
