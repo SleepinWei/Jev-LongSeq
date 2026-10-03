@@ -819,3 +819,17 @@ P 验证：macmini 全量 689 passed / 3 skipped，改动文件 Ruff 通过。�
 随后发出 dynamic_feedback / StageGuidance，scope generation 从 6 到 7，memory 更新。
 保留 receipt=stale，不增加 consumed 或业务确认；0 模型调用 / 0 浏览器动作。
 回放使用模拟新计划验证分流与授权替换，不声称 DeepSeek 必然生成同一恢复计划。
+
+P 在线重跑（`deepseek-41`）无有效分数：三个应用启动正常，但原恢复 recipe 的
+derived-reselect 点击 Employee 选项返回 unknown，detail 为 Element is not attached
+to the DOM。恢复没有重放，0 controller actions / 0 cycles / 0 模型请求；随后
+run_trial 的异常报告调用 controller.result，因 run() 尚未初始化 started 抛出
+AttributeError，掩盖原恢复异常并跳过官方评分。data_valid=false，清理正常。
+这不是 P 的模型规划在线验证，也不能计作 0/15 或最终成功率变化。
+
+补充修复 Q：构造控制器时初始化报告计时，run() 开始时仍重置原预算计时，
+确保恢复阶段失败能报告原异常并继续官方评分与清理。回归用真实 unknown 类型
+模拟原选项点击，验证只派发一次、报告原 ValueError/no replay: unknown、无成功记录；
+不放宽 unknown 重放规则。保留 P 修改及原实验配置，用新环境和目录重新尝试。
+
+Q 验证：macmini 定向 111 passed；全量 690 passed / 3 skipped，改动文件 Ruff 通过。

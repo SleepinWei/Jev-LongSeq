@@ -6,6 +6,7 @@ import pytest
 from jev_browser.continuation import (
     load_continuation,
     reconstruct_ui,
+    replay_draft_step,
     restore_controller,
     validate_continuation_models,
 )
@@ -14,6 +15,42 @@ from jev_browser.memory import Memory
 from jev_browser.models import ModelTransport, state
 from jev_browser.observability import Observer
 from jev_browser.protocol import Action, Element, Observation, Operation, Receipt, Task
+
+
+async def test_unknown_recovery_before_run_reports_original_error_without_replaying(tmp_path, monkeypatch):
+    definition = Task(id="recovery", control_mode="dynamic", objective="Finish the draft", sandbox=True)
+    option = Element(id="employee", role="option", name="HR-EMP-00007 Ananya Reddy")
+    obs = Observation(observation_id="o", document_version="v", tab_id="tab", url="about:blank",
+                      title="Draft", text="Not Saved", elements=[option])
+
+    class Browser:
+        calls = 0
+
+        async def observe(self):
+            return obs
+
+        async def execute(self, action):
+            self.calls += 1
+            return Receipt(action_id=action.id, status="unknown", detail="Element is not attached to the DOM")
+
+    browser = Browser()
+    observer = Observer(tmp_path)
+    monkeypatch.setattr("jev_browser.controller.time.monotonic", lambda: 100.0)
+    controller = DynamicController(definition, browser, None, feedback=None)
+    try:
+        await replay_draft_step(browser, definition, option.model_dump(), Operation.CLICK,
+                               None, observer, "derived-reselect")
+    except ValueError as exc:
+        monkeypatch.setattr("jev_browser.controller.time.monotonic", lambda: 102.0)
+        result = controller.result("failed", f"{type(exc).__name__}: {exc}")
+    else:
+        pytest.fail("Unknown recovery must stop without replay")
+    assert result.reason == "ValueError: recovery UI action was not confirmed; no replay: unknown"
+    assert result.elapsed_s == 2.0 and result.actions == result.cycles == 0
+    assert browser.calls == 1
+    assert not controller.memory.confirmed_actions and not controller.memory.confirmed_writes
+    event = json.loads((tmp_path / "resume-bootstrap.jsonl").read_text())
+    assert event["receipt"]["status"] == "unknown"
 
 
 @pytest.fixture

@@ -56,6 +56,9 @@ class Controller:
             mode,
         )
         self.budget, self.output = budget or Budget(), output
+        # Setup/recovery can fail before run(); reporting must retain that error.
+        # run() resets this clock when the actual controller budget begins.
+        self.started = time.monotonic()
         self.observer = observer or Observer(output)
         self.memory = Memory()
         self.plan: Plan | None = None
