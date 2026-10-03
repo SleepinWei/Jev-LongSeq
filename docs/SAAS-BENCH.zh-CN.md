@@ -893,3 +893,42 @@ R 补跑：只将 POLICY_TIMEOUT_SECONDS 从 30 调为 90，与 DS brain 的请�
 这是明确不同等待上限的第二个配置，分别保存成绩，不混算为同配置重复成功率。
 
 R 补跑检查：macmini 定向 47 passed，全量 701 passed / 3 skipped，Ruff 通过。
+
+R 补跑结果（`ds-baseline-44`）：官方 4/15（26.7%）、data_valid=true、
+strict_success=false。离职单 docstatus=1、三条正确活动、供应商显示名/邮箱通过；
+分录、付款和 Twenty 均未完成。50 动作 / 70 cycles、44 feedback calls、Agent
+1415.09 秒，端到端 Agent 1434.47 秒，环境总计 1514.22 秒。评分无错误，
+cleanup_error=null；进程退出、Studio launcher 空闲、slot 0 容器全部清理。
+
+109 次 HTTP 尝试全部为 api.deepseek.com / deepseek-flash：llm_policy 65、
+dynamic_feedback 28、dynamic_input 11、dynamic_readback 5。两个 llm_policy
+请求各约 90 秒超时，均重试恢复，没有成为最终停止原因。策略请求中位耗时
+4.792 秒；混合 `deepseek-42` 的 Jev 请求中位耗时 0.460 秒。已知 token 用量
+为输入 1,564,434 / 输出 256,285，两个超时请求用量未知，费用不可据此完整估算。
+运行报告与 memory.json 均记录显式 policy/brain migration；任务 hash、恢复
+78 条动作 / 107 条证据、原始 working-memory hash 和 600 动作 / 1800 秒预算不变。
+
+具体终止机制：供应商 Save 已成功。cycle69 策略 context 超限时仍有 pending，
+进入局部 dynamic_readback；第一次响应 finish_reason=length、内容为空，校验失败，
+修复请求后确认保存。cycle70 brain 将下一阶段设为只读验证供应商列表；此时
+pending 已清除。JsonPolicy 请求原始 163,072 bytes，历史投影至 level4 /
+memory_pressure3，候选由 9 缩至 8 后仍为 51,082 bytes > 48,000。主要内容为
+memory 22,831、observation 10,372、task 5,229、candidates 3,130 bytes，另有
+系统指令、Chat 封装及转义开销。没有派发该次 HTTP 或浏览器操作，最终停止为
+protected context cannot fit; no pending action; no request or resubmission。
+尚余约 385 秒总预算，并非 DS 服务返回 context 超限，也未进入 Journal 科目输入。
+这是当前 JsonPolicy 请求构造与预算恢复机制的限制；不能用本轮证明 DS 对科目
+控件会产生与 Jev 相同的错误，也不能将其归为 DS 的任务推理能力上限。
+
+| 同恢复点对照 | 官方加权得分 | 严格整任务成功 | 停止原因 | Agent 秒 |
+| --- | --- | --- | --- | --- |
+| Jev + DS / deepseek-42 | 4/15（26.7%） | 否 | Rent 输入读回未解决 | 660.02 |
+| 全 DS / ds-baseline-43（30 秒请求等待） | 3/15（20%） | 否 | 动作 API 三次超时，旧报告误分类 | 689.47 |
+| 全 DS / ds-baseline-44（90 秒请求等待） | 4/15（26.7%） | 否 | 本地策略 context 预算无法容纳 | 1415.09 |
+
+结论：当前 harness 下全 DS 的本次参考得分为 26.7%，没有高于混合方案；
+严格成功为 0/1。这是 business_031 的单次同恢复点对照，不是全套 benchmark
+成功率或目标能力上限。43/44 等待配置不同，不合并样本。下一步应优先验证
+JsonPolicy 的紧凑候选/Chat 请求构造，以及无 pending 时压缩 context 后继续规划
+的恢复路径；保留原任务、当前控件、执行授权和关键写入证据，并在相同预算下
+重新对照。Journal autocomplete 的 fill/自动 Tab 问题仍需独立验证。
