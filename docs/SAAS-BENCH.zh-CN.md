@@ -833,3 +833,27 @@ AttributeError，掩盖原恢复异常并跳过官方评分。data_valid=false�
 不放宽 unknown 重放规则。保留 P 修改及原实验配置，用新环境和目录重新尝试。
 
 Q 验证：macmini 定向 111 passed；全量 690 passed / 3 skipped，改动文件 Ruff 通过。
+
+P/Q 联合重跑（`deepseek-42`）：官方 4/15（26.7%）、data_valid=true、
+strict_success=false。离职单提交、三条正确活动和供应商通过；分录、付款、Twenty
+未完成。106 动作 / 127 cycles、56 feedback calls、Agent 660.02 秒，端到端 Agent
+683.16 秒（含恢复等）、环境总计 787.44 秒；评分无错误，cleanup_error=null。
+提供方仍为 api.deepseek.com / deepseek-flash 和 api.typesafe.ai / jev-latest，
+任务 hash、恢复 78 条动作及原始 working-memory hash 不变。
+
+本轮未重现 O 的 Pooja stale 选项消失：stale 发生在 Add row、User fill、Save 等
+操作，原有安全重新定位继续生效，没有 stale_target_changed 规划现场。因此 P
+修复该分流的证据仍是实际失败点离线回放与回归，不能把本轮越过第三条活动全部
+归因于 P。Q 的正常恢复路径没有再次抛出异常，错误报告修复同样只有定向证据。
+本轮空 Employee Exits 报告只有一条 ledger/unresolved obligation，耗尽后转入财务，
+提供 O 的额度机制在线证据；无终止性 context 超限。总分仍与 deepseek-37/38 的
+4/15 持平，单次恢复实验不能证明最终成功率提升。
+
+新停止点：cycle120 填 Posting date=06/30/2026，cycle121 页面规范化为 6/30/2026
+并读回确认；Reference # 在 cycle122 也已确认。cycle122 填第一行 Account Search
+e198=Rent 返回 ok，但 cycles123–127 同一控件 value 始终为空，未出现对应科目结果。
+cycle127 局部读回 unknown 后，一次只读刷新仍无变化，保留 pending，停止原因为
+readback unresolved; no resubmission。日期、引用都不是未解决动作；残留日历和
+Quick new 菜单可见，但是否造成重渲染/遮挡并无确定因果证据。下一步需区分输入
+控件的可见失败、已派发未知状态与业务提交未知状态，再决定安全的 UI 修复路径；
+不能只凭 receipt=ok 重试、把空 Account 当成功或提高等待预算掩盖问题。
