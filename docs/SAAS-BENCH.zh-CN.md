@@ -1081,3 +1081,31 @@ cycle73 为 field_option，cycle75 能归档为 deferred_unconfirmed 并进入�
 
 U 检查：macmini 全量 724 passed / 3 skipped；修改文件 Ruff 与真实失败序列
 离线回放通过。启动前核验 105 个源码/测试文件。
+
+U 在线结果（`saas-longseq-business031-20261003-ds-baseline-47`，源码
+`b8197df`）：官方 4/15（26.7%）、data_valid=true、strict_success=false；
+离职单已提交、三条正确活动及供应商通过，与 T 同分，分录/付款/Twenty 未执行。
+45 动作 / 60 cycles、36 feedback calls，Agent 939.67 秒、端到端 Agent 957.08 秒，
+环境总计 1026.32 秒。评分无错误、cleanup_error=null；launcher 空闲、手动进程
+退出、slot 0 容器已清理。原任务及 working_memory hashes、78 条动作和 107 条
+证据一致；105 文件启动哈希核验通过。92 次请求均官方 deepseek-flash 且 HTTP
+200（llm_policy 56、dynamic_feedback 23、dynamic_input 11、dynamic_readback 2）。
+
+本轮未到达 Filter 来源链，因此没有 query_controls_observed / query_action_deferred；
+U 的新分支在线效果尚未验证，现有证据仅限定向回归及第 46 轮观测离线回放。
+不能声称已提升成功率或在线解决原卡点。
+
+新停止点在 cycle60 供应商 Save 的持久化读回。策略 protected context 从
+153,530 压到 48,108 bytes，比 48,000 上限多 108 bytes，转入 required
+readback。两次 dynamic_readback 均 HTTP 200、finish_reason=length、
+response_content_chars=0、output_tokens=4096，输入分别 25,732/25,735 tokens，
+约各 19.2 秒；本地报 readback response truncated，一次修复重试后停止为
+feedback failed schema/evidence checks after one repair; no action replayed。
+读回请求约 76.5 KB，其中 visible_control_delta 32,748 bytes、readback_evidence
+19,637 bytes、schema 6,894 bytes。现有证据确认输出额度耗尽，不能证明空正文
+具体是否由于模型内部推理消耗；不是 HTTP 错误或供应商保存失败。
+
+后续应优先紧凑化持久化读回的输入/输出契约：围绕单个 pending 操作保留必要
+前后证据，将全列表控件与无关字段从默认读取中分离并可检索，避免用宽大的
+通用 schema 处理局部结果。保持未知写入不重放，不能用跳过读回或截断 JSON
+来假装成功。本轮未更改 4096 输出上限或 provider/model/运行预算。
