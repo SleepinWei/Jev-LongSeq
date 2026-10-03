@@ -927,6 +927,9 @@ class DynamicController(Controller):
         self.exhausted_verifications = set()
         self.planning_retry_after = {}
         self.candidate_page_limits = {}
+        # Ephemeral provenance, never restored across browser sessions. A field
+        # option is reversible only when reached through an observed query UI.
+        self.query_controls = {}
 
     def input_suppression(self, obs):
         scope = digest([semantic_key(obs), self.memory.feedback.get("next_goal"),
@@ -1312,6 +1315,89 @@ class DynamicController(Controller):
         self.checkpoint()
         return True
 
+    def query_control_key(self, obs, element):
+        return (self.memory.environment_id, planning_location(obs), element.id,
+                element.role, element.name)
+
+    def record_query_controls(self, obs):
+        """Trace a confirmed Filter → field selector → option interaction.
+
+        Names alone, a planner's verify intent, or an arbitrary menu are not
+        enough to release an unknown write. Require a rendered query composer
+        and newly exposed controls at each confirmed step.
+        """
+        pending = self.pending
+        if (not pending.get('verification_key') or obs.dialogs or pending.get('before_dialogs')
+                or pending.get('dispatch_status') != 'ok'
+                or obs.url != pending['before']['url'] or obs.tab_id != pending['before']['tab_id']):
+            return
+        target = pending.get('click_target', {})
+        before = {(c.get('role'), c.get('name')) for c in pending.get('before_controls', [])}
+        fresh = [e for e in obs.elements if e.enabled and not e.read_only and not e.href
+                 and not e.grid_ref and not e.row_ref and (e.role, e.name) not in before]
+        if target.get('role') == 'button' and target.get('name', '').casefold().strip() in {'filter', 'filters', '筛选'}:
+            # Structural evidence of a query composer, not a business form.
+            names = {e.name.casefold().strip() for e in fresh}
+            if (not any(e.editable and e.name.casefold().strip() == 'value' for e in fresh)
+                    or not names & {'contain', 'contains', 'equals', 'is equal to'}
+                    or not any(re.fullmatch(r'\+?\s*(?:new|add) (?:conditional|condition|filter)', n) for n in names)):
+                return
+            selected = [e for e in fresh if e.role == 'button' and re.fullmatch(
+                r'select (?:an item|a field|a column)(?:\s*\.{3}|…)?', e.name.strip(), re.I)]
+            kind = 'field_selector'
+        elif pending.get('query_ui_kind') == 'field_selector':
+            selected = [e for e in fresh if e.role in {'menuitem', 'option'} and e.name.strip()
+                        and not re.search(r'\b(save|submit|publish|delete|remove|pay|send|approve)\b', e.name, re.I)]
+            kind = 'field_option'
+        else:
+            return
+        for element in selected:
+            self.query_controls[self.query_control_key(obs, element)] = {
+                'kind': kind, 'verification_key': pending['verification_key']}
+        if selected:
+            self.log('query_controls_observed', kind_of_control=kind,
+                     element_refs=[e.id for e in selected], business_write_released=False)
+
+    def defer_uncertain_query(self, obs, reason):
+        """Archive an unconfirmed query-field selection, never confirm or replay it."""
+        pending = self.pending
+        plan = self.memory.feedback.get('verification')
+        if (not pending or pending.get('query_ui_kind') != 'field_option'
+                or pending.get('dispatch_status') != 'ok' or not plan
+                or pending.get('verification_key') != self.verification_key(obs)
+                or set(self.memory.pending_writes) != {pending['key']}
+                or obs.dialogs or pending.get('before_dialogs') or obs.loading
+                or obs.url != pending['before']['url'] or obs.tab_id != pending['before']['tab_id']
+                or not self.verification_budget_ready(obs)):
+            return False
+        key = pending['key']
+        self.pending = None
+        self.memory.pending_writes.pop(key)
+        if not self.defer_verification(obs):
+            self.pending = pending
+            self.memory.pending_writes[key] = pending
+            return False
+        record = next(r for r in self.memory.unresolved_verifications
+                      if r.get('obligation_key') == pending['verification_key'])
+        record.setdefault('unconfirmed_ui_actions', []).append({
+            'key': key, 'action': pending['action'], 'before': pending['before'],
+            'dispatch_status': pending['dispatch_status'], 'query_ui_kind': pending['query_ui_kind'],
+            'status': 'deferred_unconfirmed', 'reason': reason,
+            'latest_source': self.memory.view(obs), 'action_confirmed': False})
+        self.last_transition = None  # Outcome remains in the unresolved archive.
+        self.query_controls.clear()
+        self.memory.feedback['next_goal'] += (
+            ' This query-field selection remains unconfirmed and must not be replayed. '
+            'Keep the verification unresolved; choose independent remaining work from the '
+            'original task, respecting its actual dependencies. Do not recreate the saved record.')
+        self.fresh_scope_required = True
+        if self.memory.feedback.get('execution_scope'):
+            self.memory.feedback['execution_scope']['bindings'] = {}
+        self.log('query_action_deferred', key=key, reason=reason,
+                 action_confirmed=False, replay_allowed=False, business_write_released=False)
+        self.checkpoint()
+        return True
+
     def planned_input(self, obs, element):
         entries = self.memory.feedback.get("inputs", [])
         matches = [p for p in entries if p["name"] == element.name
@@ -1545,6 +1631,13 @@ class DynamicController(Controller):
                     "a local UI transition such as opening or closing a dialog."
                 ),
             }
+            verification = self.memory.feedback.get('verification')
+            if (verification and self.verification_budget_ready(obs)
+                    and verification_location(verification.get('target_url') or obs.url) == verification_location(obs.url)):
+                self.pending['verification_key'] = self.verification_key(obs)
+                proof = self.query_controls.get(self.query_control_key(obs, element), {})
+                if (action.operation == Operation.CLICK and proof.get('verification_key') == self.verification_key(obs)):
+                    self.pending['query_ui_kind'] = proof['kind']
             if action.operation == Operation.CLICK:
                 self.pending["click_target"] = {"id": element.id, "role": element.role,
                     "name": element.name, "popup_kind": element.popup_kind,
@@ -1803,10 +1896,14 @@ class DynamicController(Controller):
             if assessment.last_outcome == "unknown":
                 if await self.refresh_unknown_readback(obs):
                     return None
+                if self.defer_uncertain_query(obs, 'unknown context readback'):
+                    return None
                 return self.result("needs_attention", "uncertain action after context readback; no resubmission")
             self.pending["context_readback_signature"] = signature
         self.pending["waits"] += 1
         if self.pending["waits"] >= self.budget.readback_waits:
+            if self.defer_uncertain_query(obs, 'context readback allowance exhausted'):
+                return None
             return self.result("needs_attention", "readback unresolved after policy context overflow; no resubmission")
         if reason := await self.perform(self.internal_action(obs, Operation.WAIT), obs):
             return self.result("needs_attention", reason)
@@ -1819,6 +1916,7 @@ class DynamicController(Controller):
             return False
         if not self.transition_is_observed(obs):
             return False
+        self.record_query_controls(obs)
         key = self.pending["key"]
         self.memory.pending_writes.pop(key, None)
         self.memory.confirmed_writes.add(key)
@@ -2370,7 +2468,8 @@ class DynamicController(Controller):
             self.arm_verification(obs)
             allowance = self.verification_runs.get(planning_location(obs))
             if allowance and (self.actions - allowance[0] >= 6 or time.monotonic() - allowance[1] >= 120):
-                self.defer_verification(obs)
+                if not self.defer_uncertain_query(obs, 'read-only verification allowance exhausted'):
+                    self.defer_verification(obs)
             # The opener may be unchanged even though its link opened successfully.
             # Switch first and inspect the destination; never confirm from a tab URL alone.
             destinations = [tab for tab, url in self.readback_tabs(obs).items()
@@ -2497,6 +2596,8 @@ class DynamicController(Controller):
                         if outcome == "unknown":
                             if await self.refresh_unknown_readback(obs):
                                 continue
+                            if self.defer_uncertain_query(obs, 'unknown action readback'):
+                                continue
                             return self.result(
                                 "needs_attention", "uncertain mutation; no resubmission"
                             )
@@ -2529,6 +2630,8 @@ class DynamicController(Controller):
                                     continue  # Re-decide from the revised guidance and fresh state.
                                 if assessment.last_outcome == "unknown" and await self.refresh_unknown_readback(obs):
                                     continue
+                            if self.defer_uncertain_query(obs, 'action readback allowance exhausted'):
+                                continue
                             return self.result(
                                 "needs_attention", "readback unresolved; no resubmission"
                             )

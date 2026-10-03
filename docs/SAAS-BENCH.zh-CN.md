@@ -1053,3 +1053,31 @@ fallback，没有 context_budget_unresolved；不能把“没有终止性 overfl
 确认字段选择成功，也不能通过忽略所有 unknown 或扩大预算来掩盖证据缺失。
 观测还出现 localhost:9000 socket.io blocked_request，但现有 trace 不能证明
 其导致字段选择未生效，不能将它当作已确认根因。
+
+### 实验 U：筛选字段的未确认状态可延期
+
+针对 T 的 cycle67→70→73→75，加入保守的只读 query UI 来源链：已确认的
+Filter/Filters/筛选按钮揭示可见 query composer（Value 输入、比较运算符、
+Add/New Condition/Conditional/Filter 控件）后，记录新出现的字段选择器；
+选择器确认揭示的新 menuitem/option 才记为 field_option。限定同环境、同 tab、
+同 URL、无 dialog/行控件/链接，并排除保存、删除、付款等命令名。仅 verify
+阶段意图或按钮名称本身不足以证明可逆性。不调整模型 API、预算或评分器。
+来源链仅保留在当前 controller，跨会话不恢复，未识别的 UI 保持严格处理。
+
+当上述 field_option 的已派发点击（receipt=ok）读回 unknown / 等待耗尽，或
+只读核验预算耗尽，允许结束当前操作的等待：将动作、来源与未确认状态记入
+unresolved_verifications，保留 consumed 去重键，不生成 confirmed_actions / 
+write_checkpoints，不重放、不自动关闭 UI。只有它是唯一 pending、核验目标
+一致且无模态窗口、未换页时才适用。后续清空旧授权并要求新规划，保留原任务、
+working_memory、独立任务与依赖；不能因此宣布供应商不存在或整题成功。
+Save/Submit、未知 dispatch、其他 pending 写入与缺失来源链均继续阻塞。
+
+第 46 轮真实观测离线回放通过：cycle67 未分类，cycle70 来源为 field_selector，
+cycle73 为 field_option，cycle75 能归档为 deferred_unconfirmed 并进入新规划。
+回放仅在 macmini 使用历史观测及模拟 receipt，无模型请求、无浏览器派发；
+不等价于在线成功。定向回归 123 passed；全量及在线结果另记。第 47 轮使用与 T
+相同的全 DS 官方 deepseek-flash、原任务、resume-03 memory / resume-02 UI、
+600 actions / 600 cycles / 1800 秒及原上下文预算，在全新目录自动重跑。
+
+U 检查：macmini 全量 724 passed / 3 skipped；修改文件 Ruff 与真实失败序列
+离线回放通过。启动前核验 105 个源码/测试文件。
