@@ -147,6 +147,61 @@ async def test_light_readback_retains_goal_memory_and_resolves_current_reference
     assert profile["by_component"]["brain"]["attempts"] == 1
 
 
+@pytest.mark.parametrize("status", ["stale", "rejected", "ok", "unknown"])
+@pytest.mark.parametrize("phase", ["stale_target_changed", "jev_requested", "no_progress"])
+async def test_replanning_after_nondispatched_action_does_not_inherit_local_readback(status, phase):
+    before = observation()
+    fresh = before.model_copy(deep=True)
+    fresh.observation_id = "o2"
+    fresh.elements = [fresh.elements[0]]  # The old option disappeared.
+    fresh.elements[0].value = "Rajesh Kumar"
+    backend = AsyncMock()
+    backend.execute.return_value = Receipt(action_id="a", status=status)
+    nondispatched = status in {"stale", "rejected"}
+
+    def respond(request):
+        content = json.loads(json.loads(request.content)["messages"][-1]["content"])
+        if nondispatched:
+            assert content["phase"] == phase
+            assert "stage_entry" in content["schema"]["required"]
+            assert "last_outcome" not in content["schema"]["properties"]
+            assert content["current_control_capabilities"]["field"]
+            response = {"next_goal": "Reset User and query a partial name",
+                        "working_memory": "The option was not clicked; the third activity is unfinished.",
+                        "stage_controls": [{"element_ref": "field", "operations": ["fill"]}],
+                        "stage_entry": {"intent": "act", "operation": "fill", "element_ref": "field"}}
+        else:
+            assert set(content["schema"]["properties"]) == {"last_outcome", "evidence_ids"}
+            response = {"last_outcome": "unknown", "evidence_ids": []}
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(response)}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        transport = ModelTransport("https://test.example", "test", "test", client=client)
+        agent = DynamicController(task(), backend, None, feedback=JsonFeedback(transport))
+        agent.memory.feedback = {"next_goal": "Select the old option", "working_memory": "Unfinished activity"}
+        selected = next(a for a in generate_dynamic(before, task()) if a.element_ref == "choice")
+        await agent.perform(selected, before)
+        result = await agent.review(fresh, phase=phase)
+
+    assert backend.execute.await_count == 1
+    assert not agent.memory.confirmed_actions and not agent.memory.confirmed_writes
+    if nondispatched:
+        assert not agent.pending and not agent.memory.pending_writes and not agent.consumed
+        assert agent.last_transition["resolved"] and agent.last_transition["receipt"]["status"] == status
+        assert not result._local_readback and not result.complete
+        assert agent.memory.feedback["next_goal"] == "Reset User and query a partial name"
+        assert agent.memory.feedback["working_memory"].startswith("The option was not clicked")
+        assert agent.memory.feedback["execution_scope"]["generation"] == 1
+        assert set(agent.memory.feedback["execution_scope"]["bindings"]) == {"field"}
+        assert transport.ledger[0]["kind"] == "dynamic_feedback"
+    else:
+        assert agent.pending and agent.memory.pending_writes and agent.consumed
+        assert result._local_readback
+        assert agent.memory.feedback["next_goal"] == "Select the old option"
+        assert agent.scope_generation == 0
+        assert transport.ledger[0]["kind"] == "dynamic_readback"
+
+
 @pytest.mark.parametrize("response,finish,error", [
     ({"last_outcome": "confirmed", "evidence_ids": ["old-frame"]}, "stop", UngroundedFeedback),
     ({"last_outcome": "confirmed", "evidence_ids": []}, "stop", UngroundedFeedback),

@@ -1631,7 +1631,10 @@ class DynamicController(Controller):
         self.memory.events.append(event)
         self.log("action", action=action.model_dump(), receipt=receipt.model_dump())
         self.checkpoint()
-        self.last_transition = {**event, "resolved": receipt.status == "ok"}
+        # Preflight rejection is terminal: no action was dispatched, so there
+        # is no effect to read back. Pending still owns readback for ok writes;
+        # unknown dispatch outcomes must remain unresolved and never replay.
+        self.last_transition = {**event, "resolved": receipt.status in {"ok", "stale", "rejected"}}
         if receipt.status in {"stale", "rejected"}:
             self.grounding_rejections += 1
             if self.pending and self.pending["key"] == key:

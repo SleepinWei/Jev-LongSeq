@@ -793,3 +793,29 @@ cycle50 本地语义读回 confirmed，并显示 Nothing to show / 查询执行�
 O 验证：macmini 全量 677 passed / 3 skipped、改动文件 Ruff 通过。以 N cycle50
 真实观察和反馈回放：原 input 匹配仍为 false，但新额度可以启动，原六动作后能
 记录未解决义务并转入 fallback；不添加业务确认记录、0 模型调用 / 0 浏览器动作。
+
+O 实际结果（`deepseek-40`）：官方 0/15、data_valid=true、strict_success=false，
+15 动作 / 31 cycles、24 feedback calls、Agent 181.36 秒，评分和清理正常。
+尚未保存离职单或进入报告，无法提供核验额度修改的在线效果证据。
+cycle17 第三行 Pooja 选项点击在派发前返回 stale；pending 已清除，但 last_transition
+仍为 resolved=false。cycle19 stale_target_changed、cycles20–30 jev_requested 和
+cycle26 no_progress 全被 JsonFeedback 分流到 dynamic_readback，继承旧 stage_goal、
+memory 和 scope generation=6。此时活动名已经填好、User 弹窗只剩 Create a new User /
+Advanced Search，旧规划却仍要求填空行。最终 repeated state after brain recovery 停止。
+这是确定未派发动作被错误保留为读回义务，导致新规划无法执行；没有证据说明
+请求超过上下文上限，也不应把它归为模型无法恢复或已填字段必须重复输入。
+
+实验 P：只修复未派发动作的读回分流。stale/rejected receipt 使 last_transition
+成为已结束的尝试，保留原 receipt、原始事件和 grounding rejection；不写入确认档案，
+不把动作放入 consumed。下一次规划阶段使用完整 StageGuidance，可更新 memory 和
+当前控件授权。ok 写入仍通过 pending 进入读回；unknown 仍未解决、保留 pending / consumed，
+禁止重放。resolved 在此表示该尝试无后续读回义务，不表示业务成功。
+回归覆盖 stale/rejected/ok/unknown 与 stale_target_changed/jev_requested/no_progress
+三种触发组合，检查真实 controller → JsonFeedback 请求 schema、memory、scope 和档案。
+P 保持原提供方、模型、恢复点、任务和预算；远端验证并 push 后自动重跑，官方结果另记。
+
+P 验证：macmini 全量 689 passed / 3 skipped，改动文件 Ruff 通过。以 O cycle17
+真实 Pooja stale receipt、点击前观察和 cycle19 新观察回放，controller 清除 pending，
+随后发出 dynamic_feedback / StageGuidance，scope generation 从 6 到 7，memory 更新。
+保留 receipt=stale，不增加 consumed 或业务确认；0 模型调用 / 0 浏览器动作。
+回放使用模拟新计划验证分流与授权替换，不声称 DeepSeek 必然生成同一恢复计划。
