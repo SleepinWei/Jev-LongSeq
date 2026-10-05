@@ -134,3 +134,15 @@ macmini 已恢复临时直连：原域名在开发机解析到 `198.18.0.97` 后
 新增可选 `--saas-startup-timeout 900`：只覆盖本次所选应用的就绪等待秒数，默认仍遵循上游配置。原始/实际等待上限记录在 manifest 和 environment 的 `startup` 中；不修改上游 apps.yaml、任务、评分器、fixture hash 或 agent 的运行预算。启动失败也记录实际 `setup_s`，不再误报为 0。此项是环境启动实验，不能视为已证明 Twenty 迁移问题修复。
 
 相关 macmini 回归 **79 passed**，本轮源代码和测试 lint 通过。下一次有效运行仍保留官方 DeepSeek `deepseek-flash`、business_031、resume-03 memory、resume-02 UI 恢复点、600 actions / 1,800 seconds 及原 context 上限；全新输出目录用于验证真实调用证据、官方评分和清理。
+
+实现已推送为 `69a9d6e`。本次首次 Git 提交因沙箱无法写 index.lock 而失败，实验启动后立即完成提交和推送；因此本轮未严格满足 push-before-launch 的时间顺序，但启动前已验证 115 个运行文件的 SHA-256 与测试源码一致，推送内容和运行内容相同。
+
+`saas-longseq-business031-20261006-ds-baseline-49/saas-bench-business_031` 已完成官方评分和清理：**4/15（26.7%），data_valid=true，strict_success=false**，与上次有效 baseline-47 相同。58 个动作、69 个 cycle，agent 耗时 860.37 秒；setup 73.35 秒、verification 3.63 秒、总环境流程 982.08 秒，cleanup_error=null，launcher 空闲，slot 0 容器清空。Twenty 本次 72.4 秒就绪，HRMS 28.0 秒、BigCapital 14.1 秒；没有用到额外等待窗口，不能据此断言 900 秒上限修好了前一次迁移停滞。
+
+官方通过项为已提交的 Employee Separation、三个正确指派的 exit activities、Vendor；未完成 settlement journal、payment、Twenty tasks 和 note。停止原因为 `readback unresolved after policy context overflow; no resubmission`。cycle 69 的事件记录 policy 从 151,622 字节压缩至 48,237 字节，仍超过 48,000 上限；候选页缩小后走 required readback fallback，等待额度耗尽而停止，没有重复提交。该 cycle 未发起新的 policy HTTP 请求，不应把本地 context overflow 说成 DeepSeek API 拒绝。
+
+本轮 **92 次调用全部为官方 api.deepseek.com / deepseek-flash**，92 份请求、92 份响应证据均捕获；finish_reason 全部 stop，没有空响应和 transport 错误。首个 resume 请求的 trusted_goal 与 task.json.objective 相同，哈希为 `28f8182189c063e9b7202312b2086b9c31ebaa2eae84446830663070061eb503`，与 manifest 一致；证据文件权限 0600、目录 0700。CLI 和 Studio HTTP 实测可以通过 `/data/messages/1/content/trusted_goal`、`/data/body/choices/0/finish_reason` 等 pointer 选取历史字段，字符串分页返回 next_cursor；无需读整份 memory 或 trajectory。
+
+最终部分报告保存在 macmini 的 `/tmp/jev-baseline49-summary.json` 和 `/tmp/jev-baseline49-step69.json`，分别为有界摘要及停止 cycle 的一页证据；step 页仍有 next_cursor，不能把这一页视为该 cycle 的完整记录。可用文档前述 scp 命令取回，或重新生成；临时目录不是长期归档。本次观测 HTTP 曾超时，最终确认旧 SSH 隧道失去响应，替换本轮创建的隧道后 8768 接口恢复；没有重启运行中的 Studio，也未触碰 8767。
+
+这次有效实跑完成了历史模型输入/响应及终态取证验证，但没有提高任务分数；下一步成功率优化应调查 protected context 的最小表示和 pending readback 确认机制，不能把更完整的观测误报为 agent 能力提升。
