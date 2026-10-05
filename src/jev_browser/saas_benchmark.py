@@ -36,6 +36,8 @@ def add_options(parser):
     )
     parser.add_argument("--saas-task-ids", nargs="+", default=DEFAULT_TASKS)
     parser.add_argument("--saas-slot", type=int, default=0)
+    parser.add_argument("--saas-startup-timeout", type=int,
+                        help="Override selected applications' readiness timeout in seconds; separate from agent budget")
     parser.add_argument("--saas-agent", choices=["longseq", "jev-ultrafast"], default="longseq")
     parser.add_argument("--saas-history-context", action="store_true",
                         help="Experimental observed history context for the original Ultrafast agent")
@@ -80,6 +82,19 @@ def configuration(root):
     import yaml
 
     return yaml.safe_load((root / "saas_bench/apps.yaml").read_text())["apps"]
+
+
+def startup_configuration(apps, sites, timeout=None):
+    if timeout is not None and (type(timeout) is not int or timeout <= 0):
+        raise ValueError("--saas-startup-timeout must be a positive integer")
+    effective = copy.deepcopy(apps)
+    waits = {}
+    for site in sites:
+        original = apps[site].get("startup_wait", 600)
+        if timeout is not None:
+            effective[site]["startup_wait"] = timeout
+        waits[site] = {"original_s": original, "effective_s": timeout or original}
+    return effective, {"timeout_override_s": timeout, "apps": waits}
 
 
 def selected_tasks(args, root):
@@ -127,6 +142,7 @@ def _preflight(args):
             raise ValueError("--saas-history-context requires --saas-agent jev-ultrafast")
         tasks = selected_tasks(args, root)
         apps = configuration(root)
+        startup_configuration(apps, [], getattr(args, "saas_startup_timeout", None))
         _, slots, _ = upstream(root)
         slot = slots.SlotManager(apps, args.saas_slot)
         for task in tasks:
@@ -259,7 +275,8 @@ async def run_saas(args, selected, output):
     task = next(t for t in selected_tasks(args, root) if t["task_id"] == selected["id"])
     apps = configuration(root)
     sites = task["meta"]["meta_data"]["sites"]
-    slot = slots.SlotManager(apps, args.saas_slot)
+    startup_apps, startup = startup_configuration(apps, sites, getattr(args, "saas_startup_timeout", None))
+    slot = slots.SlotManager(startup_apps, args.saas_slot)
     ports = slot.get_port_map(sites)
     prompt, _, _ = loader.build_prompt(task, ports, "localhost")
     urls = [f"http://localhost:{ports[site]}" for site in sites]
@@ -300,6 +317,7 @@ async def run_saas(args, selected, output):
         "upstream_verifier_hash": digest(original_verifier),
         "verifier_patch": verifier_patch,
         "image_ids": image_ids,
+        "startup": startup,
         "port_map": ports,
         "slot_id": args.saas_slot,
         "slot_prefix": slots._SLOT_PREFIX,
@@ -340,8 +358,11 @@ async def run_saas(args, selected, output):
         owned = True
         register_phase(output, "setup", task_id=browser_task.id, kind="saas-bench",
                        slot=args.saas_slot)
-        await completed_thread(slot.start_apps, sites, hostname="localhost")
-        setup_s = time.monotonic() - started
+        setup_started = time.monotonic()
+        try:
+            await completed_thread(slot.start_apps, sites, hostname="localhost")
+        finally:
+            setup_s = time.monotonic() - setup_started
         register_phase(output, "running")
         if not getattr(args, "environment_only", False) and getattr(args, "saas_agent", "longseq") == "jev-ultrafast":
             from .saas_ultrafast import run_original
@@ -421,6 +442,7 @@ async def run_saas(args, selected, output):
                 cleanup_error = f"{type(exc).__name__}: {exc}"
         lock.close()
     report["environment"] = {
+        "startup": startup,
         "setup_s": setup_s,
         "verification_s": verify_s,
         "total_s": time.monotonic() - started,

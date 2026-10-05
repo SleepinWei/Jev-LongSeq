@@ -128,3 +128,9 @@ macmini 已恢复临时直连：原域名在开发机解析到 `198.18.0.97` 后
 本次真实运行验证了手动实验从 setup、cleanup 到 failed 的状态和缺失评分表达；真实模型输入/响应捕获未进入执行阶段，已由远端模拟 transport 测试覆盖，仍需环境恢复后做一次有效模型运行验证。单元测试和历史 HTTP 读取验证不替代新的有效 benchmark 成绩。
 
 清理后还修正了状态扫描的开销：不再遍历 preview、model-artifacts 等大产物目录，终态记录也不逐一查询 PID。相关远端回归 **53 passed, 1 skipped**，lint 通过；实际隧道请求 launcher 约 **0.226 秒**，失败 run 的 **3,185 字节**部分摘要约 **0.128 秒**。此改动仅影响 Codex/Studio 的状态查询，不改变 agent 的输入、动作或模型请求。
+
+## 环境冷启动验证（2026-10-06）
+
+新增可选 `--saas-startup-timeout 900`：只覆盖本次所选应用的就绪等待秒数，默认仍遵循上游配置。原始/实际等待上限记录在 manifest 和 environment 的 `startup` 中；不修改上游 apps.yaml、任务、评分器、fixture hash 或 agent 的运行预算。启动失败也记录实际 `setup_s`，不再误报为 0。此项是环境启动实验，不能视为已证明 Twenty 迁移问题修复。
+
+相关 macmini 回归 **79 passed**，本轮源代码和测试 lint 通过。下一次有效运行仍保留官方 DeepSeek `deepseek-flash`、business_031、resume-03 memory、resume-02 UI 恢复点、600 actions / 1,800 seconds 及原 context 上限；全新输出目录用于验证真实调用证据、官方评分和清理。

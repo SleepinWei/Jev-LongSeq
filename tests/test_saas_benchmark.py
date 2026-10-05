@@ -59,7 +59,7 @@ def environment(tmp_path, monkeypatch):
 
     class Slot:
         def __init__(self, apps, slot_id):
-            pass
+            self.apps = apps
 
         def get_port_map(self, sites):
             return {site: 31000 + i for i, site in enumerate(sites)}
@@ -76,7 +76,9 @@ def environment(tmp_path, monkeypatch):
 
     monkeypatch.setattr(saas, "checkout", lambda args: root)
     monkeypatch.setattr(saas, "selected_tasks", lambda args, root: [task])
-    monkeypatch.setattr(saas, "configuration", lambda root: {})
+    monkeypatch.setattr(saas, "configuration", lambda root: {
+        "hrms": {"startup_wait": 600}, "twenty": {"startup_wait": 360},
+    })
     monkeypatch.setattr(saas, "images_for", lambda root, apps, sites: ["fixture:latest"])
     monkeypatch.setattr(saas, "command", lambda *args: SimpleNamespace(stdout="revision"))
     monkeypatch.setattr(
@@ -180,6 +182,47 @@ async def test_partial_start_failure_still_cleans_owned_containers(environment):
     assert report["result"]["strict_success"] is None
     assert report["grade"]["data_valid"] is False
     assert summarize([report])["graded_runs"] == 0
+    assert report["environment"]["setup_s"] > 0
+
+
+def test_startup_configuration_isolated_selected_override():
+    apps = {"twenty": {"startup_wait": 360}, "hrms": {"startup_wait": 600}, "other": {}}
+    default, waits = saas.startup_configuration(apps, ["twenty"])
+    assert default == apps and default is not apps
+    assert waits["apps"]["twenty"] == {"original_s": 360, "effective_s": 360}
+    effective, waits = saas.startup_configuration(apps, ["twenty"], 900)
+    assert effective["twenty"]["startup_wait"] == 900
+    assert effective["hrms"] == apps["hrms"]
+    assert apps["twenty"]["startup_wait"] == 360
+    assert waits["timeout_override_s"] == 900
+    _, implicit = saas.startup_configuration(apps, ["other"])
+    assert implicit["apps"]["other"]["effective_s"] == 600
+
+
+@pytest.mark.parametrize("timeout", [0, -1, 1.5, True])
+def test_invalid_startup_timeout(timeout):
+    with pytest.raises(ValueError, match="positive integer"):
+        saas.startup_configuration({}, [], timeout)
+
+
+async def test_startup_override_preserves_fixture_task_and_agent_budget(environment, monkeypatch):
+    args, _, slot, output = environment
+    args.max_seconds = 1800
+    original = await saas.run_saas(args, {"id": "business_023"}, output)
+    args.saas_startup_timeout = 900
+
+    def start(self, sites, hostname):
+        assert all(self.apps[site]["startup_wait"] == 900 for site in sites)
+
+    slot.start_apps = start
+    report = await saas.run_saas(args, {"id": "business_023"}, output.parent / "override")
+    assert args.max_seconds == 1800
+    for key in ("task_hash", "fixture_hash", "verifier_hash"):
+        assert report["manifest"][key] == original["manifest"][key]
+    assert report["environment"]["startup"] == report["manifest"]["startup"]
+    assert report["manifest"]["startup"]["apps"]["twenty"] == {
+        "original_s": 360, "effective_s": 900,
+    }
 
 
 async def test_environment_smoke_is_not_an_agent_score(environment):
