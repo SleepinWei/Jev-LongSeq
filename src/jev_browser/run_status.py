@@ -78,9 +78,22 @@ def read_status(output):
 def activities(root):
     root = Path(root).resolve()
     result, known = [], set()
-    for target in root.rglob('.run-status/*.json'):
+    targets = []
+    # Status directories are siblings of output directories. Do not traverse
+    # thousands of preview frames or private model files on every UI heartbeat.
+    for current, directories, files in os.walk(root):
+        if '.run-status' in directories:
+            targets.extend((Path(current) / '.run-status').glob('*.json'))
+        directories[:] = [name for name in directories if name not in {
+            '.run-status', 'preview', 'model-artifacts', '.git', '.venv',
+            '.browsers', 'node_modules', 'screenshots', '__pycache__'}]
+        if 'manifest.json' in files or 'meta.json' in files:
+            directories.clear()
+    for target in targets:
         try:
             row = json.loads(target.read_text())
+            if row.get('phase') in TERMINAL:
+                continue
             output = Path(row['output']).resolve()
             if not output.is_relative_to(root):
                 continue

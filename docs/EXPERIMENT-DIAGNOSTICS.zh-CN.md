@@ -126,3 +126,5 @@ macmini 已恢复临时直连：原域名在开发机解析到 `198.18.0.97` 后
 该次重跑因环境启动失败结束：Twenty 在 **360 秒**内未通过 31004 端口的就绪检查（最后错误为 `RemoteDisconnected`），容器仍停在数据库 setup/migrations；HRMS 就绪耗时约 459 秒。**0 个模型调用、0 个动作，官方分数不可用、data_valid=false**，不能计作模型 0 分或成功率对比。总环境耗时约 650 秒，清理完成且 `cleanup_error=null`，slot 0 的容器已清空，launcher 回到空闲。
 
 本次真实运行验证了手动实验从 setup、cleanup 到 failed 的状态和缺失评分表达；真实模型输入/响应捕获未进入执行阶段，已由远端模拟 transport 测试覆盖，仍需环境恢复后做一次有效模型运行验证。单元测试和历史 HTTP 读取验证不替代新的有效 benchmark 成绩。
+
+清理后还修正了状态扫描的开销：不再遍历 preview、model-artifacts 等大产物目录，终态记录也不逐一查询 PID。相关远端回归 **53 passed, 1 skipped**，lint 通过；实际隧道请求 launcher 约 **0.226 秒**，失败 run 的 **3,185 字节**部分摘要约 **0.128 秒**。此改动仅影响 Codex/Studio 的状态查询，不改变 agent 的输入、动作或模型请求。

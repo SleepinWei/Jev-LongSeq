@@ -197,6 +197,21 @@ def test_launcher_includes_registered_manual_task(tmp_path):
     assert store.launch_status()['running'] is False
 
 
+def test_activity_scan_prunes_run_artifacts_and_finds_nested_trials(tmp_path):
+    from jev_browser.run_status import activities
+
+    trial = tmp_path / 'study' / 'trial-000'
+    trial.mkdir(parents=True)
+    path = run_fixture(trial)
+    register_phase(path, 'running')
+    # A marker file hidden in a preview directory must not become a real run.
+    hidden = path / 'preview' / 'fake'
+    hidden.mkdir(parents=True)
+    register_phase(hidden, 'running')
+    rows = activities(tmp_path)
+    assert [row['id'] for row in rows] == ['study/trial-000/trial']
+
+
 def test_cli_and_http_use_identical_bounded_query(tmp_path):
     run_fixture(tmp_path)
     arguments = ['--root', str(tmp_path), '--run', 'trial', '--view', 'artifact',
