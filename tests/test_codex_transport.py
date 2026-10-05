@@ -54,6 +54,12 @@ async def test_codex_cli_uses_chatgpt_high_and_accounts_subscription_usage(tmp_p
     record = transport.ledger[0]
     assert record["transport"] == "codex_cli" and record["input_tokens"] == 30
     assert record["cost_usd"] is None and record["cached_input_tokens"] == 15
+    request = json.loads((tmp_path / "telemetry" / record["request_artifact"]["path"]).read_text())
+    response = json.loads((tmp_path / "telemetry" / record["response_artifact"]["path"]).read_text())
+    assert "USER:" in request["data"]["stdin_prompt"]
+    assert request["data"]["output_schema"]["required"] == ["value"]
+    assert json.loads(response["data"]["answer"])["value"] == "Ada"
+    assert "turn.completed" in response["data"]["stdout"]
     profile = efficiency_profile(transport.ledger, actions=1, elapsed_s=1)
     assert profile["total"]["http_attempts"] == 0
     assert profile["total"]["codex_invocations"] == 1

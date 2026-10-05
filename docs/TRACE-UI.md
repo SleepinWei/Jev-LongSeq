@@ -23,15 +23,17 @@
 ## 使用
 
 ```bash
-.venv/bin/python -m jev_browser.inspector --runs runs --port 8767 --env-file /path/to/your.env
+.venv/bin/python -m jev_browser.inspector --runs runs --port 8768 --env-file /path/to/your.env
 # 或在 uv 同步安装后：
-uv run jev-trace --runs runs --port 8767 --env-file /path/to/your.env
+uv run jev-trace --runs runs --port 8768 --env-file /path/to/your.env
 
 # 另一个终端运行；输出路径应位于查看器的 runs 根目录内
 .venv/bin/python -m jev_browser demo --records 12 --live-preview --output runs/live-demo
 ```
 
-当前服务使用 `http://127.0.0.1:8767`。输入 prompt 或点击“填入示例 prompt”后点击“运行 prompt”即可启动真实模型任务；任务预算为 300 秒、150 动作、40 次反馈调用。可选择目录样例（1–100 条）或 http/https 起始网址。自定义目标的 `strict_success` 保持未知，不用固定样例判分器评价不同的目标。查看/回放已有记录不会调用模型，规则演示也不会调用模型。启动错误显示在表单旁，完成后显示回答及停止原因。
+当前服务在 macmini 使用 `http://127.0.0.1:8768`，通过 SSH 隧道访问；8767 属于其他应用。Codex 按需读取摘要和部分报告的方法见[实验诊断文档](EXPERIMENT-DIAGNOSTICS.zh-CN.md)。以下历史验证章节中的旧端口仅记录当时情况。
+
+输入 prompt 或点击“填入示例 prompt”后点击“运行 prompt”即可启动真实模型任务；任务预算为 300 秒、150 动作、40 次反馈调用。可选择目录样例（1–100 条）或 http/https 起始网址。自定义目标的 `strict_success` 保持未知，不用固定样例判分器评价不同的目标。查看/回放已有记录不会调用模型，规则演示也不会调用模型。启动错误显示在表单旁，完成后显示回答及停止原因。
 
 ## 验证
 

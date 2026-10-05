@@ -47,6 +47,7 @@ async def test_custom_prompt_uses_catalog_without_fixed_goal_grading(tmp_path, m
 
 
 def test_prompt_launch_preserves_text_and_rejects_overlap(tmp_path, monkeypatch):
+    monkeypatch.setattr("jev_browser.run_status.activities", lambda root: [])
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-only")
     child = Mock()
     child.poll.return_value = None
@@ -60,7 +61,8 @@ def test_prompt_launch_preserves_text_and_rejects_overlap(tmp_path, monkeypatch)
     assert command[command.index("--mode") + 1] == "dynamic"
     assert command[command.index("--policy") + 1] == "jev"
     assert "--live-preview" in command
-    assert store.launch_status() == {"id": result["id"], "running": True, "exit_code": None}
+    assert store.launch_status() == {"id": result["id"], "running": True, "exit_code": None,
+                                     "activities": []}
     with pytest.raises(RuntimeError):
         store.launch_demo()
     with pytest.raises(RuntimeError):

@@ -94,8 +94,6 @@ class CodexTransport:
             "cost_basis": "Codex subscription; no API dollar price inferred",
             **({"run_id": self.observer.run_id, **self.observer.context} if self.observer else {}),
         }
-        if self.observer:
-            self.observer.request_started(record)
         started = time.monotonic()
         process = None
         try:
@@ -168,6 +166,13 @@ class CodexTransport:
                 ):
                     command.extend(["--disable", feature])
                 command.extend(["--enable", "skip_host_skill_discovery", "-"])
+                if self.observer:
+                    record["request_artifact"] = self.observer.model_artifact(
+                        record["attempt_id"], "request", {
+                            "payload": payload, "stdin_prompt": prompt,
+                            "output_schema": strict_schema(schema), "command": command,
+                            "scope": "CLI input; internal provider HTTP request unavailable"})
+                    self.observer.request_started(record)
                 process = await asyncio.create_subprocess_exec(
                     *command,
                     stdin=asyncio.subprocess.PIPE,
@@ -180,6 +185,13 @@ class CodexTransport:
                     process.communicate(prompt.encode()), timeout=self.timeout_s
                 )
                 record["exit_code"] = process.returncode
+                if self.observer:
+                    record["response_artifact"] = self.observer.model_artifact(
+                        record["attempt_id"], "response", {
+                            "stdout": stdout.decode(errors="replace"),
+                            "stderr": stderr.decode(errors="replace"),
+                            "answer": answer_path.read_text() if answer_path.exists() else None,
+                            "exit_code": process.returncode})
                 record["stderr_hash"] = digest(stderr.decode(errors="replace"))
                 completed = False
                 errors = [stderr.decode(errors="replace")]
@@ -224,6 +236,11 @@ class CodexTransport:
             record.update(success=False, error=type(exc).__name__)
             raise
         finally:
+            if self.observer:
+                record.setdefault("request_artifact", {
+                    "available": False, "reason": "request_not_prepared"})
+                record.setdefault("response_artifact", {
+                    "available": False, "reason": "no_completed_cli_response"})
             if process and process.returncode is None:
                 try:
                     os.killpg(process.pid, signal.SIGTERM)

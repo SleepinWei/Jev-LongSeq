@@ -62,12 +62,16 @@ class Store:
         self.child_id = None
 
     def launch_status(self):
+        from .run_status import activities
+
+        active = activities(self.root)
         with self.lock:
             code = self.child.poll() if self.child else None
             return {
                 "id": self.child_id,
-                "running": bool(self.child and code is None),
+                "running": bool((self.child and code is None) or active),
                 "exit_code": code,
+                "activities": active,
             }
 
     def launch_prompt(self, body):
@@ -372,7 +376,7 @@ class Store:
             return {"id": self.child_id}
 
 
-def make_server(root, port=8767):
+def make_server(root, port=8768):
     store, token = Store(root), secrets.token_urlsafe(32)
 
     class Handler(BaseHTTPRequestHandler):
@@ -405,6 +409,20 @@ def make_server(root, port=8767):
             args = parse_qs(url.query)
             run_id = args.get("id", [""])[0]
             try:
+                if url.path == "/api/diagnostics":
+                    from .diagnostics import Diagnostics, encode
+
+                    allowed = {"view", "max_bytes", "cursor", "limit", "cycle", "kind", "file",
+                               "pointer", "line", "baseline", "call_id", "attempt_id", "span_id",
+                               "observation_id"}
+                    if set(args) - allowed - {"id"}:
+                        return self.send(400, json.dumps({"error": "unknown diagnostics parameter"}))
+                    try:
+                        result = Diagnostics(store.root, run_id).query(
+                            **{key: value[0] for key, value in args.items() if key in allowed})
+                    except (ValueError, KeyError, IndexError, OSError):
+                        return self.send(400, json.dumps({"error": "invalid or unavailable diagnostics query"}))
+                    return self.send(200, encode(result))
                 if url.path == "/api/runs":
                     return self.send(200, json.dumps(store.listing()))
                 if url.path.startswith("/api/ultrafast/"):
@@ -546,7 +564,7 @@ def make_server(root, port=8767):
 def main():
     parser = argparse.ArgumentParser(description="Jev LongSeq trace inspector")
     parser.add_argument("--runs", default="runs")
-    parser.add_argument("--port", type=int, default=8767)
+    parser.add_argument("--port", type=int, default=8768)
     parser.add_argument("--env-file", help="Model configuration; credentials stay server-side")
     parser.add_argument("--ultrafast-root", help="Optional original jev-ultrafast checkout")
     args = parser.parse_args()

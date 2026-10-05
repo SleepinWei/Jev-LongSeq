@@ -23,6 +23,7 @@ chrome = [
 [project.scripts]
 jev-browser = "jev_browser.cli:main"
 jev-trace = "jev_browser.inspector:main"
+jev-diagnostics = "jev_browser.diagnostics:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/jev_browser"]

@@ -15,3 +15,5 @@ external/
 .playwright-cli/
 # Generated recordings, screenshots and reports stay on the execution host.
 output/
+.run-status/
+model-artifacts/

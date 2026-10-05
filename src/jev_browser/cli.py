@@ -9,10 +9,12 @@ import platform
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .browser import PlaywrightBackend
 from .codex_transport import CodexTransport
 from .config import load_env_file, use_text_model_for_planner
+from .context_budget import DEFAULT_BRAIN_MAX_BYTES, DEFAULT_FINISH_MAX_BYTES, DEFAULT_MAX_BYTES
 from .controller import Controller
 from .dynamic import DynamicController, JsonFeedback
 from .evaluation import calibration, efficiency_profile, summarize
@@ -197,10 +199,28 @@ async def run_trial(args, *, count=None, output=None):
     manifest.update(getattr(args, "_benchmark_manifest", {}))
     write_json(output / "manifest.json", manifest)
     write_json(output / "task.json", task.model_dump(mode="json"))
+    from .run_status import register_phase
+
+    register_phase(output, "running", task_id=task.id, kind="agent")
     transports, grade, controller = [], {}, None
     connection_tasks = []
     try:
         policy, planner, transports = adapters(args)
+        manifest["models"] = {
+            role: {"model": adapter.transport.model,
+                   "transport": type(adapter.transport).__name__,
+                   "endpoint_host": urlsplit(getattr(adapter.transport, "endpoint", "")).hostname,
+                   "timeout_s": getattr(adapter.transport, "timeout_s", None)}
+            for role, adapter in (("policy", policy), ("brain", planner))
+            if adapter is not None and hasattr(adapter, "transport")}
+        jev_limit = int(os.environ.get("JEV_CONTEXT_MAX_BYTES", DEFAULT_MAX_BYTES))
+        manifest["context_limits"] = {
+            "JEV_CONTEXT_MAX_BYTES": jev_limit,
+            "POLICY_CONTEXT_MAX_BYTES": int(os.environ.get("POLICY_CONTEXT_MAX_BYTES", jev_limit)),
+            "BRAIN_CONTEXT_MAX_BYTES": int(os.environ.get("BRAIN_CONTEXT_MAX_BYTES", DEFAULT_BRAIN_MAX_BYTES)),
+            "BRAIN_FINISH_CONTEXT_MAX_BYTES": int(os.environ.get("BRAIN_FINISH_CONTEXT_MAX_BYTES", DEFAULT_FINISH_MAX_BYTES)),
+        }
+        write_json(output / "manifest.json", manifest)
         checkpoint = getattr(args, "_resume_checkpoint", None)
         if checkpoint:
             if len(transports) != 2 or any(not isinstance(client, ModelTransport) for client in transports):
@@ -402,6 +422,8 @@ async def run_trial(args, *, count=None, output=None):
     write_json(output / "result.json", result.model_dump())
     write_json(output / "report.json", report)
     save_analysis(output, report)
+    register_phase(output, "agent_complete" if hasattr(args, "_benchmark_task") else "finished",
+                   result_status=result.status)
     return report
 
 

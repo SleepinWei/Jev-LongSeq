@@ -15,6 +15,7 @@ from jev_browser.inspector import Store, make_server
 
 @pytest.fixture
 def configured(tmp_path, monkeypatch):
+    monkeypatch.setattr("jev_browser.run_status.activities", lambda root: [])
     root = tmp_path / "source"
     package = root / "jev_ultrafast"
     package.mkdir(parents=True)

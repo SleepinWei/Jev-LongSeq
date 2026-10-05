@@ -22,6 +22,7 @@ from pathlib import Path
 from .evaluation import efficiency_profile
 from .observability import save_analysis, write_json
 from .protocol import RunResult, Task, digest, now
+from .run_status import register_phase
 from .saas_verifier import verifier_source
 
 DEFAULT_TASKS = ["business_023", "business_031"]
@@ -337,8 +338,11 @@ async def run_saas(args, selected, output):
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         owned = True
+        register_phase(output, "setup", task_id=browser_task.id, kind="saas-bench",
+                       slot=args.saas_slot)
         await completed_thread(slot.start_apps, sites, hostname="localhost")
         setup_s = time.monotonic() - started
+        register_phase(output, "running")
         if not getattr(args, "environment_only", False) and getattr(args, "saas_agent", "longseq") == "jev-ultrafast":
             from .saas_ultrafast import run_original
 
@@ -361,6 +365,7 @@ async def run_saas(args, selected, output):
         if verifier_patch:
             verifier_path.write_text(effective_verifier)
         verify_started = time.monotonic()
+        register_phase(output, "grading")
         verification = await completed_thread(
             verifier.run_verify, verification_task, args.saas_slot, ports, "localhost", str(output)
         )
@@ -409,6 +414,7 @@ async def run_saas(args, selected, output):
         }
     finally:
         if owned:
+            register_phase(output, "cleanup")
             try:
                 await completed_thread(slot.stop_apps, sites)
             except Exception as exc:
@@ -435,6 +441,9 @@ async def run_saas(args, selected, output):
         write_json(output / f"{name}.json", report[name])
     write_json(output / "report.json", report)
     save_analysis(output, report)
+    register_phase(output, "failed" if cleanup_error or not report["grade"].get("data_valid")
+                   else "finished", result_status=report["result"]["status"],
+                   cleanup_error=cleanup_error)
     return report
 
 

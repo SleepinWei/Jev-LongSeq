@@ -238,6 +238,8 @@ class ModelTransport:
                     if outcome == "failed":
                         attempt_record["network_error_phase"] = phase
             if self.observer:
+                record["request_artifact"] = self.observer.model_artifact(
+                    record["attempt_id"], "request", payload, secrets=(self.api_key,))
                 self.observer.request_started(record)
             try:
                 async with asyncio.timeout(attempt_seconds):
@@ -248,6 +250,11 @@ class ModelTransport:
                     )
                 record["status"] = response.status_code
                 record["request_id"] = response.headers.get("x-request-id")
+                if self.observer:
+                    record["response_artifact"] = self.observer.model_artifact(
+                        record["attempt_id"], "response",
+                        {"status": response.status_code, "body": response.text},
+                        secrets=(self.api_key,))
                 if response.status_code in {429, 502, 503, 529} and attempt < retries:
                     await asyncio.sleep(min(0.25 * 2**attempt, 2))
                     continue
@@ -312,6 +319,9 @@ class ModelTransport:
                 record["error"] = type(exc).__name__  # never log credentials or response headers
                 raise
             finally:
+                if self.observer:
+                    record.setdefault("response_artifact", {
+                        "available": False, "reason": "no_response_received"})
                 record["latency_s"] = time.monotonic() - started
                 self.ledger.append(record)
                 if self.observer:

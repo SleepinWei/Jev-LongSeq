@@ -117,6 +117,20 @@ class Observer:
     def request_started(self, record):
         self.append("model-request-starts.jsonl", record)
 
+    def model_artifact(self, attempt_id, direction, value, *, secrets=()):
+        """Capture separately from metadata; telemetry must never break model execution."""
+        import os
+
+        from .model_artifacts import capture
+
+        if not self.output or os.environ.get("JEV_CAPTURE_MODEL_ARTIFACTS") == "0":
+            return {"available": False, "reason": "capture_disabled"}
+        try:
+            return {"available": True, **capture(self.output, attempt_id, direction, value,
+                                                 secrets=secrets)}
+        except Exception as exc:
+            return {"available": False, "reason": "capture_failed", "error": type(exc).__name__}
+
     def model_call(self, record):
         self.calls.append(dict(record))
         self.append("model-calls.jsonl", record)

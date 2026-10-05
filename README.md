@@ -67,12 +67,14 @@ SaaS-Bench 轨迹还显示官方严格成功、部分得分和逐项检查；评
 
 ```bash
 # 读取已有 runs/，包括历史失败和成功的真实模型任务
-uv run jev-trace --runs runs --port 8767 --env-file /path/to/your.env
+uv run jev-trace --runs runs --port 8768 --env-file /path/to/your.env
 # 不更新安装也可直接启动
-.venv/bin/python -m jev_browser.inspector --runs runs --port 8767 --env-file /path/to/your.env
+.venv/bin/python -m jev_browser.inspector --runs runs --port 8768 --env-file /path/to/your.env
 ```
 
-打开 **http://127.0.0.1:8767**。切换运行记录后，可筛选/搜索事件、拖动时间线、逐事件前进后退、以 1× 原始时间回放，并查看候选及置信度、契约、证据来源和原始事件。已有运行的网页画面读取 `trace.zip` 内真实 screencast 截图，无需重新调用模型。没有录制帧时仅显示明确标注的最终截图。
+服务在 macmini 上启动，通过 SSH 隧道打开 **http://127.0.0.1:8768**；8767 属于其他应用。切换运行记录后，可筛选/搜索事件、拖动时间线、逐事件前进后退、以 1× 原始时间回放，并查看候选及置信度、契约、证据来源和原始事件。已有运行的网页画面读取 `trace.zip` 内真实 screencast 截图，无需重新调用模型。没有录制帧时仅显示明确标注的最终截图。
+
+Codex 分析实验时使用[按需诊断接口](docs/EXPERIMENT-DIAGNOSTICS.zh-CN.md)：先取 12 KB 以内摘要，再按 cycle、调用或字段读取部分报告，避免把整条 trace 输入 context。新调用独立记录脱敏的实际请求/响应；历史缺失证据明确标注。
 
 页面默认“网页任务 · 当前 Chrome”，只填 prompt 即可点击“运行 prompt”。起始网址可留空：优先使用手动网址，其次识别 prompt 中的 URL/域名（例如 `打开X.com依次搜索…`），否则由所选规划模型判断；页面及 manifest 会显示选址结果和理由。不明确的“当前页面”任务会提示补充信息。也可切换为本地目录样例（1–100 条）。也可先点“填入示例 prompt”。页面默认 DeepSeek API（当前配置为 `deepseek-flash`），真实执行使用 Jev + 所选规划模型（已登录的 Codex CLI 或已配置的 API）；API 支持 `PLANNER_*` 或现有 `TEXT_MODEL_*` 配置，Codex 认证失败时不会暗中切换到 API。密钥从服务端 `--env-file` 读取，不进入页面。任务最多 5 分钟 / 150 动作，同一查看器一次运行一个任务，自动跟随实时画面并展示最终回答。自定义 prompt 不使用固定目录任务的独立判分。规则演示仍无需模型配置。
 
