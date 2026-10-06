@@ -78,7 +78,8 @@ def handoff_navigation(action, obs):
         return False
     # A linked record inside a grid row is a stage operation, not global
     # navigation. Opening it can abandon the current unsaved form.
-    return bool((element.href and not (element.grid_ref and element.row_ref))
+    return bool((element.href and element.href != obs.url
+        and not (element.grid_ref and element.row_ref))
         or (element.role == "button" and re.fullmatch(
         r"back(?: to (?:list|\w+))?|quick find|go back|返回(?:列表)?", element.name.strip(), re.I)))
 

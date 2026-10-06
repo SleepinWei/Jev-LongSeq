@@ -262,6 +262,37 @@ async def test_row_record_links_require_stage_scope_but_global_navigation_remain
     assert controller.stage_action_allowed(row_link, obs)
 
 
+async def test_current_page_link_cannot_bypass_stage_scope_but_can_be_explicitly_planned():
+    from jev_browser.dynamic import Feedback
+
+    task = definition().model_copy(update={"allowed_origins": ["https://example.test"]})
+    obs = form().model_copy(update={"url": "https://example.test/draft"})
+    obs.elements.extend([
+        Element(id="self", role="link", name="Current draft", href=obs.url),
+        Element(id="home", role="link", name="Home", href="https://example.test/"),
+        Element(id="query", role="link", name="Filtered view", href=obs.url + "?page=2"),
+        Element(id="anchor", role="link", name="Details", href=obs.url + "#details"),
+    ])
+    brain, backend = AsyncMock(), AsyncMock()
+    brain.review.return_value = Feedback(next_goal="Fill the current form field",
+        stage_controls=[StageControl(element_ref="email", operations=["fill"])])
+    controller = DynamicController(task, backend, None, feedback=brain)
+    await controller.review(obs, phase="step")
+    actions = generate_dynamic(obs, task)
+    self_link = next(a for a in actions if a.element_ref == "self")
+    assert not controller.stage_action_allowed(self_link, obs)
+    assert await controller.perform(self_link, obs)
+    backend.execute.assert_not_awaited()
+    assert not controller.pending and not controller.memory.pending_writes
+    available = controller.generate_stage_candidates(obs, limit=250, offset=0)
+    assert not any(a.element_ref == "self" for a in available)
+    assert {"home", "query", "anchor"} <= {a.element_ref for a in available}
+    brain.review.return_value = Feedback(next_goal="Explicitly revisit current document",
+        stage_controls=[StageControl(element_ref="self", operations=["click"])])
+    await controller.review(obs, phase="step")
+    assert controller.stage_action_allowed(self_link, obs)
+
+
 async def test_exact_option_readback_hands_off_before_repeating_old_search_input():
     import time
 

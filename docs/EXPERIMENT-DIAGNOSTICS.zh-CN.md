@@ -260,3 +260,13 @@ cycle-77 的原观察新增一个匿名 native combobox：value=20，options=[20
 下一项修复只让明确命名的分页尺寸控件不阻断列表观察：浏览器将一个 select 周围的精确可见 `Page size` / `Rows per page` caption 关联为 name（最多三个局部祖先，单一字段，隐藏 caption/其他文字不匹配）。guard 同时要求非 editable、非 required、无 form/row context、无 grid/row 身份、当前值属于至少两个正整数选项。匿名数字框和业务 Quantity/Currency 等仍阻止该路径。该控件本身不进入 inspection 候选，不授权 SELECT 或字段写入；原最多四次 inspection、pending/consumed 和无重提交规则保持。静态 readback 与 inspection 共享同一 guard，避免判断分叉。远端相关 **162 passed**，lint 通过；完整回归和 push 后自动重跑 baseline-58，仍保留原配置。部分报告在 macmini `/tmp/jev-baseline57-summary.json`。
 
 分页控件修复的最终 macmini 完整回归 **831 passed, 3 skipped**。浏览器测试使用实际渲染 DOM，验证局部可见 caption、隐藏 caption 和业务 Quantity 的区别；guard 测试验证匿名、required、editable、row、form context、非数字选项和未观察值均拒绝；inspection 测试验证允许后续列头/Next/滚动，但不产生 page-size SELECT，也不确认原 Save。
+
+### baseline-58：当前页自链绕过阶段范围
+
+baseline-58（`64e312f`）已完成有效官方评分和清理：**0/15**，18 actions / 20 cycles / 231.51 秒，stop=`readback unresolved; no resubmission`，setup 67.01 秒，总流程 342.78 秒，cleanup_error=null。27 份响应全 stop，0 transport 错误、length 或空答案；没有 Vendor、列表包或 inspection。因此未验证分页修复，不能把 0 分归因于该尚未触发路径。部分报告在 macmini `/tmp/jev-baseline58-summary.json`。
+
+真实失败动作是当前草稿的 `New Employee Separation` 面包屑 link，href 与当前 obs.url 完全相同。当时阶段规划要求填写第三条活动，候选 guard 已过滤掉 55 个其他动作，但全局 navigation 例外无条件放行非行级 link，让这个自链绕过阶段范围。点击后 5 次有界查证无法取得有效新语义；cycle-20 首次输出违反证据要求，修复后的实际响应为 confirmed + 三个当前引用，但原 visibility guard 仍拒绝确认，没有保存或提交。不要以模型声称 confirmed 当作运行时确认，也不能因这一类无变化点击扩大所有业务写入的确认条件。
+
+新增窄修复：只有 href 不等于当前 obs.url 的 link 才能走全局 navigation 例外；自链仍可由阶段规划明确列为 click 控件后使用。不同页面、query、fragment 导航保持。候选生成前范围过滤与 perform 前范围复核共享该规则，避免派发这个无计划的自链再等待到截止。它不自动确认、不重试或删除 pending。测试验证未授权自链不进入阶段候选且不派发，而明确规划后允许；其他实际导航仍可用。完整远端回归和 push 后自动重跑 baseline-59；任务、模型、恢复点、预算不变，新增实验变量为上述 stage/navigation 规则。若到达列表，可同时验证前一轮未触发的分页标签修复，但总体分数不能单独归因于其中一项。
+
+最终 macmini 完整回归 **832 passed, 3 skipped**，lint 与相关 44 项检查通过。新测试最初使用 about:blank fixture，未授权比较用导航的 origin，造成预期错误；改为授权的实际 HTTP URL 后通过，运行源码没有为此放宽 origin 检查。baseline-58 的 27 份历史 trusted_goal 均与原任务一致，task digest 不变。
