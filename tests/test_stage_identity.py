@@ -126,7 +126,7 @@ async def test_required_readback_can_resolve_pending_write_when_fast_context_can
     assert brain.review.call_args.kwargs['phase'] == 'action_readback'
 
 
-async def test_policy_overflow_pending_review_waits_are_bounded_and_do_not_repeat_same_model_call():
+async def test_policy_overflow_cached_waits_have_one_final_fresh_review_without_replaying_save():
     import time
 
     from jev_browser.context_budget import ContextBudgetExceeded
@@ -141,6 +141,7 @@ async def test_policy_overflow_pending_review_waits_are_bounded_and_do_not_repea
     save = next(a for a in generate_dynamic(before, definition()) if a.element_ref == 'save')
     await controller.perform(save, before)
     after = before.model_copy(update={'observation_id': 'fresh'})
+    backend.observe.return_value = after
     response = Feedback(next_goal='Wait', last_outcome='pending')
     response._local_readback = True
     brain.review.return_value = response
@@ -148,7 +149,10 @@ async def test_policy_overflow_pending_review_waits_are_bounded_and_do_not_repea
     assert await controller.readback_after_policy_overflow(after, overflow) is None
     result = await controller.readback_after_policy_overflow(after, overflow)
     assert result.status == 'needs_attention' and controller.pending
-    assert brain.review.await_count == 1
+    assert brain.review.await_count == 2  # Initial review plus one fresh deadline review.
+    assert brain.review.call_args.kwargs['transition']['readback_deadline']['exhausted']
+    await controller.readback_after_policy_overflow(after, overflow)
+    assert brain.review.await_count == 2  # No unbounded model retry after the deadline.
     assert not controller.memory.write_checkpoints
     assert backend.execute.await_count == 2  # Original Save plus a WAIT, never a second Save.
 

@@ -340,6 +340,41 @@ def compact_memory_layout(memory):
     return result
 
 
+CONTROL_TABLE_LOOKUP = (
+    "A control snapshot may be a lossless table with columns, rows and contexts. "
+    "Each row is [schema_id,...values] following columns[schema_id]. context_ref uses "
+    "contexts[id], the exact original context. Missing fields were absent in the original. "
+    "All values, capabilities, duplicates and row order are preserved."
+)
+
+
+def compact_control_records(records):
+    """Pool repeated contexts and field names without excerpting outcome evidence."""
+    if not isinstance(records, list) or len(records) < 3 or not all(isinstance(r, dict) for r in records):
+        return records
+    if any("context_ref" in r for r in records):
+        return records  # Do not reinterpret an extension's existing reference namespace.
+    counts = Counter(r.get("context") for r in records if isinstance(r.get("context"), str))
+    contexts, columns, schemas, rows = {}, {}, {}, []
+    for record in records:
+        item = copy.deepcopy(record)
+        context = item.get("context")
+        if (isinstance(context, str) and len(context) > 48 and counts[context] > 1
+                and "context_ref" not in item):
+            ref = "c" + hashlib.sha256(context.encode()).hexdigest()[:16]
+            contexts[ref] = context
+            item.pop("context")
+            item["context_ref"] = ref
+        fields = tuple(item)
+        if fields not in schemas:
+            ref = str(len(schemas))
+            schemas[fields] = ref
+            columns[ref] = list(fields)
+        rows.append([schemas[fields], *item.values()])
+    table = {"columns": columns, "rows": rows, "contexts": contexts}
+    return table if wire_bytes(table) + wire_bytes(CONTROL_TABLE_LOOKUP) < wire_bytes(records) else records
+
+
 def evidence_delta_view(records):
     """Losslessly share repeated lines in historical observation excerpts."""
     if not isinstance(records, list) or not records or not all(
@@ -560,6 +595,18 @@ def _pool(payload, level, *, memory_pressure=0):
             state["context_view"]["control_lookup"] = lookup
     if level == 4:
         memory = state["untrusted_memory"]
+        snapshots_compacted = False
+        pending_records = memory.get("pending_writes", [])
+        if isinstance(pending_records, dict):
+            pending_records = pending_records.values()
+        for pending in pending_records:
+            if isinstance(pending, dict) and "before_controls" in pending:
+                snapshot = compact_control_records(pending["before_controls"])
+                if isinstance(snapshot, dict):
+                    pending["before_controls"] = snapshot
+                    snapshots_compacted = True
+        if snapshots_compacted:
+            state["context_view"]["pending_control_lookup"] = CONTROL_TABLE_LOOKUP
         if memory_pressure:
             pressure_memory(memory, payload["state"]["untrusted_memory"], memory_pressure)
             state["context_view"]["memory_pressure"] = memory_pressure
@@ -624,6 +671,16 @@ def project_chat_request(payload, *, max_bytes, purpose):
         # Scoped readback already contains only exact current evidence and the
         # action contract. Do not reintroduce advisory state or excerpt proof.
         projected = copy.deepcopy(payload)
+        delta = original.get("visible_control_delta", {})
+        compacted = False
+        for key in ("disappeared_or_changed", "appeared_or_changed"):
+            if key in delta:
+                table = compact_control_records(delta[key])
+                if isinstance(table, dict):
+                    delta[key] = table
+                    compacted = True
+        if compacted:
+            original["control_delta_lookup"] = CONTROL_TABLE_LOOKUP
         projected["messages"][-1]["content"] = wire_json(original)
         metrics = {"purpose": purpose, "before_bytes": wire_bytes(payload),
                    "after_bytes": wire_bytes(projected), "max_bytes": max_bytes,

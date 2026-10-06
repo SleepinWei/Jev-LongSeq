@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from jev_browser.browser import PlaywrightBackend
+from jev_browser.context_budget import ContextBudgetExceeded
 from jev_browser.dynamic import (
     DynamicController,
     Feedback,
@@ -266,6 +267,39 @@ async def test_pending_readback_uses_its_own_budget_before_generic_no_progress()
     assert result.status == "needs_attention" and "readback unresolved" in result.reason
     assert phases == ["initial", "action_readback"]
     assert agent.pending and sum(e["operation"] == Operation.CLICK for e in agent.memory.events) == 1
+
+
+@pytest.mark.parametrize("outcome", ["confirmed", "unknown"])
+async def test_context_deadline_reobserves_and_reviews_once_without_replaying_save(outcome):
+    from jev_browser.dynamic import semantic_key
+
+    before = observation()
+    before.elements = [Element(id="save", role="button", name="Save")]
+    fresh = before.model_copy(update={"observation_id": "fresh", "text": "Saved vendor"})
+    backend = AsyncMock()
+    backend.observe.return_value = fresh
+    backend.execute.return_value = Receipt(action_id="save", status="ok")
+    phases = []
+
+    class Brain:
+        async def review(self, task, obs, memory, *, phase, transition, **kwargs):
+            phases.append(phase)
+            assert obs.observation_id == "fresh" and transition["readback_deadline"]["exhausted"]
+            return Feedback(next_goal="Continue", last_outcome=outcome,
+                            readback_quote="Saved vendor" if outcome == "confirmed" else "")
+
+    agent = DynamicController(task(), backend, None, feedback=Brain(), budget=Budget(readback_waits=2))
+    await agent.perform(next(a for a in generate_dynamic(before, task()) if a.element_ref == "save"), before)
+    agent.pending["context_readback_signature"] = semantic_key(fresh)
+    agent.pending["waits"] = 1
+    result = await agent.readback_after_policy_overflow(fresh, ContextBudgetExceeded("overflow"))
+    assert phases == ["action_readback"] and backend.execute.await_count == 1
+    if outcome == "confirmed":
+        assert result is None and agent.pending is None and not agent.memory.pending_writes
+    else:
+        assert result.status == "needs_attention" and agent.pending and agent.memory.pending_writes
+        await agent.readback_after_policy_overflow(fresh, ContextBudgetExceeded("overflow"))
+        assert phases == ["action_readback"] and backend.execute.await_count == 1
 
 
 async def test_light_readback_does_not_reset_stage_clock_or_evidence_cursor():

@@ -758,8 +758,11 @@ class JsonFeedback:
                 "action, new visible menu items confirm menu expansion; subsequent menu selection and form "
                 "creation are separate actions. trusted_goal supplies authorization only, not "
                 "the success criterion for this local check. Use pending if the "
-                "effect is still loading, unknown if unsupported. Do not generate a plan, notes, "
-                "working_memory, answer or completion. Repair only schema_error if supplied."},
+                "effect is still loading, unknown if unsupported. "
+                "If readback_deadline.exhausted is true and loading is false, an absent record "
+                "is unknown rather than pending; do not infer that a save failed or replay it. "
+                "Do not generate a plan, notes, working_memory, answer or completion. "
+                "Repair only schema_error if supplied."},
                 {"role": "user", "content": json.dumps({
                     "trusted_goal": task.objective, "hard_constraints": task.constraints,
                     "last_transition": {k: v for k, v in transition.items()
@@ -1902,6 +1905,17 @@ class DynamicController(Controller):
             self.pending["context_readback_signature"] = signature
         self.pending["waits"] += 1
         if self.pending["waits"] >= self.budget.readback_waits:
+            if not self.pending.get("context_readback_final_reviewed"):
+                self.pending["context_readback_final_reviewed"] = True
+                fresh = await self.observe_dynamic()
+                self.pending["readback_deadline"] = {"exhausted": True,
+                    "waits": self.pending["waits"], "loading": fresh.loading}
+                self.log("context_readback_deadline_review", observation_id=fresh.observation_id,
+                         pending_preserved=True, action_replayed=False)
+                assessment = await self.review(fresh, phase="action_readback")
+                if self.confirm_transition(assessment.last_outcome, fresh, "context_deadline_readback"):
+                    return None
+                obs = fresh
             if self.defer_uncertain_query(obs, 'context readback allowance exhausted'):
                 return None
             return self.result("needs_attention", "readback unresolved after policy context overflow; no resubmission")

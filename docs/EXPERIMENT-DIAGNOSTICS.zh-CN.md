@@ -146,3 +146,15 @@ macmini 已恢复临时直连：原域名在开发机解析到 `198.18.0.97` 后
 最终部分报告保存在 macmini 的 `/tmp/jev-baseline49-summary.json` 和 `/tmp/jev-baseline49-step69.json`，分别为有界摘要及停止 cycle 的一页证据；step 页仍有 next_cursor，不能把这一页视为该 cycle 的完整记录。可用文档前述 scp 命令取回，或重新生成；临时目录不是长期归档。本次观测 HTTP 曾超时，最终确认旧 SSH 隧道失去响应，替换本轮创建的隧道后 8768 接口恢复；没有重启运行中的 Studio，也未触碰 8767。
 
 这次有效实跑完成了历史模型输入/响应及终态取证验证，但没有提高任务分数；下一步成功率优化应调查 protected context 的最小表示和 pending readback 确认机制，不能把更完整的观测误报为 agent 能力提升。
+
+## baseline-49 失败机制与修复验证
+
+历史 readback 的真实输入显示 Save 后返回 Vendors List，但新 Vendor 不在可见行中。模型引用列表标题、URL 和 New Vendor 控件，返回 pending；页面 loading=false。官方评分后来确认 Vendor 已保存，这份隐藏评分不能用于 agent 的运行中确认。因此有两个独立问题：本地 protected policy context 被重复的 before_controls 挤满；静态列表上的一次 pending 判断被缓存，等待耗尽，缺少截止时的新观察复核。
+
+本轮给 pending.before_controls 和 readback 的 visible_control_delta 增加无损共享字段/重复 context 表示，只在实际变小时采用，原始 archive、当前证据、任务、schema、待确认键及执行 Action 不变。使用真实捕获请求做重新序列化验证：80,345 → 58,924 字节，329 个 evidence ID 全保留，解码后与原数据完全一致；这不是新的在线模型成绩。
+
+context overflow 的 readback 等待截止时再观察一次，只额外做一次 required review，仍不重放原写入。未确认就保留 pending；静态页面未显示目标记录时不允许把 pending/unknown 当成功。测试覆盖同一 pending 的模型调用有界、截止后不继续重试、Save 只执行一次，以及新鲜证据确实确认时才解除 pending。
+
+按原 provider/model、business_031、resume-03 memory、resume-02 UI 和预算自动重跑 baseline-50，保留 baseline-49 的 900 秒环境等待设置。是否提升成绩、是否越过 Vendor 保存后的停止点，须以新实验官方评分和清理后的结果判断。
+
+最终源码在 macmini 的完整回归 **751 passed, 3 skipped**，所有本轮变更源码和测试 lint 通过。

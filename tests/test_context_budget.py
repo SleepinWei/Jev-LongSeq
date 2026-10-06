@@ -8,6 +8,7 @@ from jev_browser.context_budget import (
     ContextBudgetExceeded,
     aged_text,
     archive_ref,
+    compact_control_records,
     history_view,
     project_chat_request,
     project_request,
@@ -17,6 +18,70 @@ from jev_browser.dynamic import DynamicController, EvidenceNote, Feedback, gener
 from jev_browser.memory import Memory
 from jev_browser.models import JevPolicy, ModelTransport
 from jev_browser.protocol import Element, Observation, Task
+
+
+def restore_control_records(table):
+    if isinstance(table, list):
+        return table
+    records = []
+    for row in table["rows"]:
+        record = dict(zip(table["columns"][row[0]], row[1:], strict=True))
+        if "context_ref" in record:
+            record["context"] = table["contexts"][record.pop("context_ref")]
+        records.append(record)
+    return records
+
+
+def test_control_snapshot_pooling_preserves_exact_values_duplicates_and_absent_fields():
+    records = [{"role": "textbox", "name": f"Name {i}", "value": f"Value {i}",
+                "editable": False, "context": "Long shared context 中文 " * 120,
+                "row_ref": str(i)} for i in range(40)]
+    records += [copy.deepcopy(records[0]), {"role": "button", "name": "Save", "checked": False}]
+    saved = copy.deepcopy(records)
+    table = compact_control_records(records)
+    assert isinstance(table, dict)
+    assert restore_control_records(table) == records == saved
+    assert wire_bytes(table) < wire_bytes(records) / 3
+    extended = [{**r, "context_ref": "external"} for r in records]
+    assert compact_control_records(extended) == extended
+
+
+def test_pending_snapshots_fit_without_discarding_contract_or_current_evidence():
+    from jev_browser.context_budget import _pool
+
+    task, obs, memory = sample()
+    raw = memory.context()
+    raw["pending_writes"][0]["before_controls"] = [
+        {"role": "textbox", "name": f"Field {i}", "value": f"Value {i}",
+         "context": "Original form exact context " * 80} for i in range(30)]
+    payload = {"state": {"trusted_goal": task.objective, "hard_constraints": task.constraints,
+        "untrusted_observation": obs.model_dump(), "untrusted_memory": raw}}
+    saved = copy.deepcopy(payload)
+    boundary = min(wire_bytes(_pool(payload, level)) for level in range(4)) - 1
+    projected, metrics = project_request(payload, max_bytes=boundary)
+    pending = copy.deepcopy(projected["state"]["untrusted_memory"]["pending_writes"][0])
+    pending["before_controls"] = restore_control_records(pending["before_controls"])
+    assert pending == raw["pending_writes"][0]
+    assert projected["state"]["trusted_goal"] == task.objective
+    assert payload == saved and metrics["after_bytes"] <= boundary
+
+
+def test_readback_delta_pooling_is_lossless_and_keeps_all_evidence_ids():
+    delta = [{"role": "textbox", "name": f"Row {i}", "context": "Long exact context " * 90,
+              "value": str(i)} for i in range(40)]
+    content = {"trusted_goal": "Original goal", "last_transition": {"dispatch_status": "ok"},
+        "readback_evidence": {"v1": "Saved record", "v2": "Other row"},
+        "visible_control_delta": {"appeared_or_changed": delta, "disappeared_or_changed": []},
+        "schema": {"properties": {"evidence_ids": {"items": {"enum": ["v1", "v2"]}}}}}
+    payload = {"messages": [{"role": "user", "content": json.dumps(content)}]}
+    saved = copy.deepcopy(payload)
+    projected, metrics = project_chat_request(payload, max_bytes=12000, purpose="dynamic_readback")
+    restored = json.loads(projected["messages"][-1]["content"])
+    restored["visible_control_delta"]["appeared_or_changed"] = restore_control_records(
+        restored["visible_control_delta"]["appeared_or_changed"])
+    restored.pop("control_delta_lookup")
+    assert restored == content and payload == saved
+    assert metrics["after_bytes"] <= 12000
 
 
 def sample():
