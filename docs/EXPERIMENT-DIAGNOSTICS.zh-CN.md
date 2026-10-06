@@ -270,3 +270,15 @@ baseline-58（`64e312f`）已完成有效官方评分和清理：**0/15**，18 a
 新增窄修复：只有 href 不等于当前 obs.url 的 link 才能走全局 navigation 例外；自链仍可由阶段规划明确列为 click 控件后使用。不同页面、query、fragment 导航保持。候选生成前范围过滤与 perform 前范围复核共享该规则，避免派发这个无计划的自链再等待到截止。它不自动确认、不重试或删除 pending。测试验证未授权自链不进入阶段候选且不派发，而明确规划后允许；其他实际导航仍可用。完整远端回归和 push 后自动重跑 baseline-59；任务、模型、恢复点、预算不变，新增实验变量为上述 stage/navigation 规则。若到达列表，可同时验证前一轮未触发的分页标签修复，但总体分数不能单独归因于其中一项。
 
 最终 macmini 完整回归 **832 passed, 3 skipped**，lint 与相关 44 项检查通过。新测试最初使用 about:blank fixture，未授权比较用导航的 origin，造成预期错误；改为授权的实际 HTTP URL 后通过，运行源码没有为此放宽 origin 检查。baseline-58 的 27 份历史 trusted_goal 均与原任务一致，task digest 不变。
+
+### baseline-59：越过 Vendor 查证，仍受时间预算限制
+
+baseline-59（`265ede8`，启动验证 121 个文件）已完成有效官方评分和清理：**4/15（26.7%），strict_success=false**，78 actions / 103 cycles / 1,780.82 秒，status=budget_exhausted，最后 reason=`TimeoutError: `。setup 66.96 秒，总流程 1,894.35 秒，cleanup_error=null。已提交离职记录、三项正确活动和 Vendor 通过；Journal、Payment、Twenty 未通过。Journal 已开始填写 Reference 和第一行账户搜索但没有完成保存。官方 Vendor detail 仍显示 display_name=`Ananya Reddy`，不是原后缀要求；不要把 4 分等同于全部已完成项都满足全部细节。
+
+127 次尝试全部官方 api.deepseek.com / deepseek-flash，原 task digest / 恢复点 / 全局预算保持，历史 trusted_goal 无不一致。3 policy timeout，124 份响应均 stop，**0 length、0 空内容、0 invalid_feedback**；29 次阶段首步交付、0 planning cooldown、5 context fallback、13 grounding rejection、1 越界 switch_tab 被拒绝后重新规划。30 feedback / 18 input / 65 policy / 13 readback / 1 inspection，累计 latency 约 **665.41 / 17.86 / 997.78 / 51.83 / 6.72 秒**；合计约 1,739.59 秒，占 agent elapsed 约 97.7%。这轮停止由剩余时间及最后 policy timeout 主导，未再出现 baseline-55/56 的输出推理额度耗尽。
+
+局部收益有真实捕获证据：cycle-79 的三页全部 unknown，DS 选择 Display Name 列头，原 Save 和 pending 保留；cycle-80 仍三页 unknown，下一次 fresh observation 发生变化，先重评而非继续派发 inspection。cycle-81 `ddecbdc9403e4153a84bcffaed0470f4` 的实际输入有 1 个字面匹配行，将真实 row-3 引文优先放入首页；捕获响应为 confirmed + 三个引用，随后原 transition guard 接受并建立 write checkpoint。引文显示 Display Name=`Ananya Reddy`、Company Name=`Ananya Reddy - Ex Employee`、Receivable balance=$0.00；这只确认该局部保存效果，不证明全部原字段要求。7 次 paged readback 的 input_tokens 约 5,973–6,178，output_tokens 670–2,164，全部 stop；加一个 inspector，总 latency 约 47.26 秒。原 Save 未重放，菜单/列头 receipt 未直接确认业务写入。
+
+本轮没有出现带 Page size 的 observation，走的是列头/异步 fresh-frame 路径；**分页尺寸 guard 的线上收益仍未验证**，仅有 DOM 和 guard 回归证据。当前页自链未再次触发早停，但单次不同路径实验不能证明这项修复带来的整体成功率增量。cycle-82 捕获规划明确选择返回 HRMS 做只读报表验证，随后回到 BigCapital 打开 Journal；这是实际 DS 规划，不是 harness 强制返回。减少规划/动作选择往返、无变化等待和重复验证，并在当前观察中保留可行动的依赖与未完成义务，是后续效率实验的重点；不能将未确认的写入直接视为完成，也不应把隐藏评分或任务特例注入模型。
+
+本轮三个结果为 baseline-57 **4/15**、58 **0/15**、59 **4/15**，历史最好仍为 4/15；证据包已实测恢复有效输出并越过 Vendor 查证停止点，**尚无最终成功率提高的证据**。运行源码自最终 832 passed / 3 skipped 后保持不变。部分报告在 macmini `/tmp/jev-baseline59-summary.json`、`/tmp/jev-baseline59-step81.json`（各最多 6 KB），可按 cursor 和请求 artifact 指针展开；完整产物与凭证不入 Git。
