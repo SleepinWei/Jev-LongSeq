@@ -182,3 +182,15 @@ baseline-52（`2301d1a`）在 Vendor 前停止：**0/15，data_valid=true**，10
 同时发现列表查证的 observation 绑定问题：unknown refresh 即使语义相同，也会产生新 observation_id，实际后端拒绝旧 ID 的动作。查证前重新观察；新语义先重做 readback，相同语义以新 ID 生成和执行候选。测试模拟实际后端的精确 ID 检查，而非仅用接受所有动作的 mock。选择器的 4,096 输出 token 上限与本地 readback 一致，保留全局时间/动作预算。baseline-52 运行期间，修正先在 macmini 隔离源码副本验证；它完成清理后才覆盖运行 checkout，并重新执行完整回归。
 
 运行 checkout 上的最终完整回归 **774 passed, 3 skipped**，本轮 lint 通过。推送后自动启动 baseline-53，保留官方 DS deepseek-flash、原 task、resume-03 memory / resume-02 UI、600 actions / 1,800 seconds / 1,000 feedback calls 及 48 KB policy / 96 KB brain context；用新目录验证。
+
+### baseline-53 最终结果与证据边界
+
+baseline-53（`610bbed`）已完成评分和清理：**3/15（20%），data_valid=true，strict_success=false**。61 actions / 139 cycles / 45 feedback calls，agent 耗时 1,791.78 秒；最终 status=budget_exhausted，reason=`TimeoutError: `，不是 API context 超窗或余额不足。setup 60.75 秒、verification 2.70 秒、总流程 1,894.03 秒，cleanup_error=null。Vendor 还在 New Vendor 表单，未点击 Save，Journal、Payment、Twenty 后续工作未推进。新增列表查证 **0 次触发**；policy 的有界 schema repair 也未触发。这次不能证明这两项提升了成功率，也不能把未到触发点的低分归因于查证机制。
+
+119 次 HTTP 尝试全部是官方 api.deepseek.com / deepseek-flash；114 份响应全部 stop，无 length 或空内容。5 次 timeout 均发生在 dynamic_feedback（cycle 47 两次、104、131、136），无响应证据明确为 no_response_received。累计模型请求 latency 约 **1,632.71 秒（agent 时间的 91%）**：full feedback 790.72、policy 812.21、input helper 11.43、readback 18.34 秒；其中 timeout 累计 324.51 秒。另有 59 条 planning_scope_wait，记录的请求等待总计 116.34 秒；这个数是日志计划的 sleep 时长，不是独立测量的完整冷却 wall time。cycle 数因冷却增长，不能当作有效业务步数。
+
+第 39 个 cycle 执行 report reload，41 确认，42 模型再次选择 reload；页面语义改变使新动作键可用，DOM ID 本身已从 key 排除，不能把这个重复归因于 ID 变化。第 124 个 cycle 模型先探测空表单的派生 Display Name 菜单，之后等到 129 再继续填源字段；这类低效阶段选择和 readback 等待占用时间，但没有在这个节点终止。130/131、131/132 的菜单变化来自源字段产生实际新选项；核查后没有证据把它们判为纯 DOM handle 变化的误触发，因此未据此修改语义哈希。最后完成邮箱填写后，136 请求新规划，剩余时间内超时并进入冷却，最终整个运行截止；保存后查证未被测试到。
+
+119 份捕获请求的 trusted_goal 均与该次 task.json.objective 完全一致；49、51、52、53 的任务文字相同，protocol.digest 哈希均为 `28f8182189c063e9b7202312b2086b9c31ebaa2eae84446830663070061eb503`。启动前验证 116 个文件，保留原恢复点和预算。这是同一 task 的续跑实验，仍不能作为 DS 的总体成功率上限。模型输出格式/低效探测、调用延迟、硬阶段交接和时间预算混在一起；目前证据优先支持优化 planning/policy 的调用粒度和阶段交接效率，不支持仅凭此分数归因于 DS 业务推理能力不足。input helper 仅 11 秒，不是本轮主要耗时来源。
+
+macmini 的 `/tmp/jev-baseline53-summary.json` 与 `/tmp/jev-baseline53-step136.json` 均限制为 6 KB，可按需取回；step 仍可能有 next_cursor，不能视为完整 cycle。原始运行产物留在忽略目录，不进入 Git。
