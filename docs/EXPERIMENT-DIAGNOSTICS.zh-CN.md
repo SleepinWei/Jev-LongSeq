@@ -149,7 +149,7 @@ macmini 已恢复临时直连：原域名在开发机解析到 `198.18.0.97` 后
 
 ## baseline-49 失败机制与修复验证
 
-历史 readback 的真实输入显示 Save 后返回 Vendors List，但新 Vendor 不在可见行中。模型引用列表标题、URL 和 New Vendor 控件，返回 pending；页面 loading=false。官方评分后来确认 Vendor 已保存，这份隐藏评分不能用于 agent 的运行中确认。因此有两个独立问题：本地 protected policy context 被重复的 before_controls 挤满；静态列表上的一次 pending 判断被缓存，等待耗尽，缺少截止时的新观察复核。
+历史 readback 的真实输入显示 Save 后返回 Vendors List，但新 Vendor 不在可见行中。模型引用列表标题、URL 和 New Vendor 控件，返回 pending；页面 loading=false。官方评分后来确认 Vendor 已保存，这份隐藏评分不能用于 agent 的运行中确认。因此有两个独立问题：本地 protected policy context 超过上限；静态列表上的一次 pending 判断被缓存，等待耗尽，缺少截止时的新观察复核。最初把 policy 超限归因于 before_controls，baseline-51 后核查发现此归因不成立：Memory.context() 不输出该字段，snapshot 压缩在 policy 的实际路径中没有生效；readback 的 visible_control_delta 压缩则有在线证据。
 
 本轮给 pending.before_controls 和 readback 的 visible_control_delta 增加无损共享字段/重复 context 表示，只在实际变小时采用，原始 archive、当前证据、任务、schema、待确认键及执行 Action 不变。使用真实捕获请求做重新序列化验证：80,345 → 58,924 字节，329 个 evidence ID 全保留，解码后与原数据完全一致；这不是新的在线模型成绩。
 
@@ -164,3 +164,13 @@ baseline-50 已完成评分和清理：0/15，data_valid=true，19 actions / 22 
 选中的实际候选是第三行 User 的空字符串 FILL，描述为 `Clear combobox: User | 3 2 results found | value=Pooja Malhotra | grid=ge887bdc16465416b; row=3`。生成器加入 grid/row 身份，bind_input 的清空校验却只接受不带后缀的描述，误拒绝了自身合法候选；该分支在前一个版本也相同，是既有 harness 不一致。现把当前控件描述统一给生成和校验使用，继续要求当前控件可编辑、启用、非只读、非隐藏值及精确的 Clear 身份。身份或能力改变时拒绝旧候选。
 
 远端相关回归 **259 passed**，lint 通过。用当时原候选和原 observation 做只读校验已通过，0 模型调用、0 浏览器操作。推送后自动启动全新 baseline-51，模型、任务、恢复点和所有预算保持不变。
+
+## baseline-51 与有界列表查证实验
+
+baseline-51 已完成有效评分和清理：**4/15（26.7%）**，strict_success=false，63 actions / 135 cycles / 1,535.65 秒，cleanup_error=null。117 次 HTTP 尝试均为官方 DS，其中同一 cycle-8 feedback 的两次 timeout 用满 120 秒调用额度，随后恢复；115 份响应无 length/空内容。成功执行了此前误拒绝的行级 Clear。后续 Vendor Save 仍只显示 18 行旧记录；cycle-135 readback 的捕获响应明确返回 unknown。policy 压缩后 50,467 字节仍超过 48,000，本地 fallback 请求 59,080 字节，低于 baseline-49 的 76,531 字节。context 压缩并未带来分数提升；135 个 cycle 包含 planning cooldown，不能当作业务进展。
+
+本轮只新增有界的主动列表查证，不更改 context、模型、恢复点或业务预算：成功 dispatch 的 Save/Submit 离开表单进入同源、同 tab、无编辑控件的静态 grid 后，unknown/pending 的截止路径可调用 DS 选择滚动、明确分页/刷新控件、当前 grid 的列头和其排序菜单。最多 4 个动作，每个动作后新观察并重评原写入。它不授权 Filter 编辑、字段输入、新建、删除、重新 Save 或跨 tab；当前表单、未知 dispatch、对话框、新 page_error 和另一 pending 均禁止该路径。选择器只拿原任务、原 pending 的字段快照、当前证据和有限候选，不输入整份历史记忆；所有实际操作仍由官方 DS 选择。
+
+原 pending 和 consumed 写入键保持，排序/滚动的 receipt 不确认原 Save。没有新证据仍停止；不把离开表单、列表标题或官方隐藏评分注入成功判定。该实验检验的是“目标行不在当前视野内”的可能性，不声称能解决所有查询场景或已提高成功率。更复杂的查询和 protected policy 压缩仍需分别验证。
+
+macmini 完整回归 **768 passed, 3 skipped**；本轮源码/测试 lint 通过。测试验证静态缺失记录到真实新证据才确认、4 次上限、未知 inspection receipt 不重试、原 Save 不重放、编辑表单/错误/另一 pending 不授权、实际 inspector 输入保留原任务和当前证据。使用 baseline-51 的 cycle-135 原 observation 和 pending 做只读候选探测，得到两种滚动及 4 个列头，0 模型调用/0 浏览器动作。推送后自动重跑 baseline-52；线上收益以其最终官方评分为准。
