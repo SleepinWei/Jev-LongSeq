@@ -116,6 +116,14 @@ SNAPSHOT = r"""selector => {
           implicitLabel = labelText(scopeLabels[0]);
           break;
         }
+        // Pagination widgets often render plain sibling text rather than a
+        // label. Bind only an exact visible page-size caption around one select;
+        // numeric options alone never establish this semantic identity.
+        if (tag === 'select' && fields.length === 1 && depth < 3 && !scopeLabels.length &&
+            /^(page size|rows per page)$/i.test(labelText(scope).trim())) {
+          implicitLabel = labelText(scope).trim();
+          break;
+        }
       }
     }
     if (display) {

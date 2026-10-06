@@ -96,6 +96,30 @@ def test_scoped_packet_requires_successful_write_and_static_same_origin_list(cas
     assert not static_list_readback(task, obs, pending)
 
 
+@pytest.mark.parametrize("change", [None, "unnamed", "business", "required", "editable",
+                                   "row", "form_context", "non_numeric", "unobserved_value"])
+def test_only_explicit_list_page_size_selector_preserves_scoped_readback(change):
+    task, obs, pending = setup()
+    control = Element(id="size", role="combobox", name="Page size", value="20",
+                      selectable=True, options=["20", "50", "100"])
+    if change == "unnamed":
+        control.name = ""
+    elif change == "business":
+        control.name = "Quantity"
+    elif change in ("required", "editable"):
+        setattr(control, change, True)
+    elif change == "row":
+        control.row_ref = "1"
+    elif change == "form_context":
+        control.context = "Business form Page size Save"
+    elif change == "non_numeric":
+        control.options.append("Unlimited")
+    elif change == "unobserved_value":
+        control.value = "30"
+    obs.elements.append(control)
+    assert static_list_readback(task, obs, pending) is (change is None)
+
+
 @pytest.mark.parametrize("too_many", [False, True])
 async def test_model_pages_same_frame_with_charged_budget_and_never_confirms_from_retrieval(too_many):
     task, obs, pending = setup(24 if too_many else 18)

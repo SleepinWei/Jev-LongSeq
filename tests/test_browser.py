@@ -10,6 +10,25 @@ from jev_browser.memory import Memory
 from jev_browser.protocol import Binding, Budget, Decision, InteractionRule, Operation
 
 
+@pytest.mark.parametrize("caption,expected", [
+    ("<span>Page size</span>", "Page size"),
+    ("<span>Rows per page</span>", "Rows per page"),
+    ("<span hidden>Page size</span>", ""),
+    ("<span>Quantity</span>", ""),
+])
+async def test_native_page_size_select_retains_only_exact_visible_local_caption(caption, expected):
+    from jev_browser.protocol import Task
+
+    task = Task(id="pager", objective="Inspect list", control_mode="dynamic", sandbox=True)
+    async with PlaywrightBackend(task) as browser:
+        await browser.load_html(f'<div>{caption}<div><select><option>20</option>'
+                                '<option>50</option><option>100</option></select></div></div>')
+        obs = await browser.observe()
+        select = next(e for e in obs.elements if e.selectable)
+        assert select.name == expected and select.value == "20"
+        assert select.options == ["20", "50", "100"] and not select.editable
+
+
 async def test_rendered_refresh_icons_and_navigation_search_are_distinct():
     from jev_browser.protocol import Task
 

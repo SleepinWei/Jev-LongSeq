@@ -37,6 +37,20 @@ def write_boundary(target):
             {"save", "submit", "publish", "approve", "保存", "提交", "发布", "审批"})
 
 
+def list_page_size_control(element):
+    """An observed, explicitly labelled page-size selector is list chrome only.
+
+    Its presence does not authorize selecting a value; inspection candidates
+    still exclude every editable/selectable control.
+    """
+    return bool(element.role == "combobox" and element.selectable
+        and not element.editable and not element.required and not element.read_only
+        and not element.context.strip() and not element.grid_ref and not element.row_ref
+        and not element.href and re.fullmatch(r"page size|rows per page", element.name.strip(), re.I)
+        and len(element.options) >= 2 and element.value in element.options
+        and all(re.fullmatch(r"[1-9][0-9]{0,3}", option) for option in element.options))
+
+
 def static_list_readback(task, obs, transition):
     """Narrow only a successful form write's same-origin static result list."""
     before = transition.get("before", {})
@@ -49,7 +63,8 @@ def static_list_readback(task, obs, transition):
         and (urlsplit(obs.url).scheme, urlsplit(obs.url).netloc) == (
             urlsplit(before.get("url", "")).scheme, urlsplit(before.get("url", "")).netloc)
         and allowed_url(obs.url, task)
-        and not any(e.enabled and (e.editable or e.selectable) for e in obs.elements)
+        and not any(e.enabled and (e.editable or e.selectable) and not list_page_size_control(e)
+                    for e in obs.elements)
         and not any(e.startswith("page_error:") and e not in transition.get("before_errors", [])
                     for e in obs.errors))
 
@@ -2605,20 +2620,9 @@ class DynamicController(Controller):
     def pending_write_inspections(self, obs):
         """Only list viewing after a successfully dispatched form write, never form edits."""
         pending = self.pending
-        if (not pending or pending.get("dispatch_status") != "ok"
-                or pending.get("action", {}).get("operation") != Operation.CLICK
-                or not write_boundary(pending.get("click_target", {}))
-                or not pending.get("field_snapshot")
+        if (not pending or not static_list_readback(self.task, obs, pending)
                 or set(self.memory.pending_writes) != {pending["key"]}
-                or len(pending.get("readback_inspections", [])) >= 4
-                or obs.loading or obs.dialogs or not obs.grids
-                or obs.tab_id != pending["before"]["tab_id"]
-                or obs.url == pending["before"]["url"]
-                or urlsplit(obs.url).netloc != urlsplit(pending["before"]["url"]).netloc
-                or not allowed_url(obs.url, self.task)
-                or any(e.enabled and (e.editable or e.selectable) for e in obs.elements)
-                or any(e.startswith("page_error:") and e not in pending.get("before_errors", [])
-                       for e in obs.errors)):
+                or len(pending.get("readback_inspections", [])) >= 4):
             return []
         columns = {g.id: {c.column for r in g.rows for c in r.cells} for g in obs.grids}
         inspected = pending.get("readback_inspections", [])

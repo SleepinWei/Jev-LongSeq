@@ -116,6 +116,21 @@ async def test_inspections_are_finite_exclude_writes_and_retain_unknown_receipts
     assert backend.execute.await_count == 2
 
 
+async def test_visible_page_size_selector_does_not_disable_or_expand_list_inspections():
+    agent, after, backend = await saved_controller()
+    after.elements.append(Element(id="page-size", role="combobox", name="Page size", value="20",
+                                 selectable=True, options=["20", "30", "50", "75", "100", "150"]))
+    after.elements.append(Element(id="next", role="button", name="Next"))
+    candidates = agent.pending_write_inspections(after)
+    assert {a.element_ref for a in candidates} == {None, "column", "next"}
+    assert all(a.operation in {"scroll", "click"} for a in candidates)
+    original = agent.pending
+    assert await agent.inspect_pending_write(after)
+    assert agent.pending is original and not agent.memory.confirmed_writes
+    assert backend.execute.await_args.args[0].element_ref == "column"
+    assert backend.execute.await_count == 2  # Save plus list header, no selector dispatch.
+
+
 async def test_inspector_only_receives_exact_current_evidence_and_original_goal():
     agent, after, _ = await saved_controller()
     pending = copy.deepcopy(agent.pending)

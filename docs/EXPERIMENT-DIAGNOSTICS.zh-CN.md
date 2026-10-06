@@ -248,3 +248,15 @@ baseline-56 cycle-88 的实际捕获请求约 59,590 字节 / 22,760 输入 toke
 使用 cycle-88 的原 task、transition、observation 通过实际 JsonFeedback 和请求投影做只读探测，原请求 59,590 字节，三页分别 **20,101 / 20,126 / 20,155 字节**，每页 49 个引用；任务、字段快照、current_page 与原请求完全相同，0 模型调用、0 浏览器操作。单次约缩小 66%，三页累计大小仍接近旧请求；不能据此声称延迟或成功率已提升。需要用相同官方 DS、任务、恢复点和全局预算重跑 baseline-57，检查实际分页次数、输出截断、官方成绩和清理结果。
 
 本轮 macmini 完整回归 **817 passed, 3 skipped**，最终源码/测试 lint 通过。新增验证包括三页完整覆盖、迟出现的字面匹配优先、精确原始引文、过长字段省略不跨段拼接、无效 cursor/未提供引文拒绝、格式修复不重置三页限制、pending 和 consumed 保留，以及复合行引文通过原确认 guard；未知 dispatch 仍无法确认。推送后自动重跑 baseline-57。
+
+### baseline-57：输出恢复，分页控件误判阻断后续查证
+
+baseline-57（`6e73443`，启动验证 121 个文件）已完成有效评分和清理：**4/15（26.7%），strict_success=false**，65 actions / 77 cycles / 1,008.81 秒，stop=`uncertain action after context readback; no resubmission`，setup 69.24 秒，总流程 1,128.07 秒，cleanup_error=null。官方通过项仍是提交离职记录、三项正确活动、Vendor；Vendor 的实际 display_name 仍为 `Ananya Reddy`，Journal / Payment / Twenty 未完成。94 次尝试全部官方 DS，原任务 digest、恢复点和预算保持，捕获请求 trusted_goal 无不一致；1 RemoteProtocolError、1 policy timeout，92 份响应全 stop，0 length/空答案。21 feedback / 14 input / 50 policy / 8 readback / 1 inspection，累计 latency 约 294.92 / 15.46 / 638.99 / 28.40 / 1.06 秒；21 次阶段首步交付、0 planning cooldown、2 context fallback、12 grounding rejection。
+
+cycle-76 的新列表包真实请求依次提供 cursor 0 / 6 / 12，18 个可见行全部取完，字面匹配行数为 0，49 个引用/页。实际 input_tokens 6,032 / 6,035 / 6,045，output_tokens 560 / 881 / 1,626，全部 stop，模型按需取页后返回 unknown，没有确认或重放原 Save。随后模型选择滚动一次。这建立了该例中有界输出恢复的证据，未建立成功率提高；总耗时缩短也不能全归因于包压缩，业务路径和 provider 延迟不同。
+
+cycle-77 的原观察新增一个匿名 native combobox：value=20，options=[20,30,50,75,100,150]，非 editable；列表底部可见 `Previous / 1 / 2 / Next / Page size / Showing 1 to 2 of 40 entries`。现有 guard 将任何 selectable 都判为表单，故仅滚动一次后便禁用压缩包和剩余查证，回退到 64,027 字节 / 24,421 input_tokens 的原 readback，得到有效 unknown 后停止。当前三个 errors 均为 blocked_request socket.io，没有新 page_error；不能把停止归因于页面异常。已有离职后续财务记录存在，但当前仅看见 18 个旧行；不能把局部缺失等同于全库缺失。
+
+下一项修复只让明确命名的分页尺寸控件不阻断列表观察：浏览器将一个 select 周围的精确可见 `Page size` / `Rows per page` caption 关联为 name（最多三个局部祖先，单一字段，隐藏 caption/其他文字不匹配）。guard 同时要求非 editable、非 required、无 form/row context、无 grid/row 身份、当前值属于至少两个正整数选项。匿名数字框和业务 Quantity/Currency 等仍阻止该路径。该控件本身不进入 inspection 候选，不授权 SELECT 或字段写入；原最多四次 inspection、pending/consumed 和无重提交规则保持。静态 readback 与 inspection 共享同一 guard，避免判断分叉。远端相关 **162 passed**，lint 通过；完整回归和 push 后自动重跑 baseline-58，仍保留原配置。部分报告在 macmini `/tmp/jev-baseline57-summary.json`。
+
+分页控件修复的最终 macmini 完整回归 **831 passed, 3 skipped**。浏览器测试使用实际渲染 DOM，验证局部可见 caption、隐藏 caption 和业务 Quantity 的区别；guard 测试验证匿名、required、editable、row、form context、非数字选项和未观察值均拒绝；inspection 测试验证允许后续列头/Next/滚动，但不产生 page-size SELECT，也不确认原 Save。
