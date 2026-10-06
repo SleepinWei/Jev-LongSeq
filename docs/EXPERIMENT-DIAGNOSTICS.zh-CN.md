@@ -204,3 +204,9 @@ fill/select 只交付未绑定值的候选，仍由原 DS input helper 产生和
 对 baseline-53 的同 cycle 规划首步与实际 policy 选择做只读有限对照，25 处唯一首步全部匹配后续选择的 operation / target。这个探测没有模型调用和浏览器操作，不是重跑，也不能当作实际节省耗时或得分。真实新实验还需检查交付次数、调用量、官方评分和清理。
 
 macmini 完整回归 **790 passed, 3 skipped**；随后补充“交付后错误 input value 仍被拒绝”测试，最终新模块 **17 passed**。运行源码自完整回归后没有变更。本轮 lint 通过后按已有 push-before-benchmark 流程自动重跑 baseline-54，继续官方 api.deepseek.com / deepseek-flash，business_031 原任务、resume-03 memory / resume-02 UI，600 actions / 1,800 seconds / 1,000 feedback calls 和原 context 预算。单个续跑任务的成绩不代表总体成功率。
+
+baseline-54（`1f549cb`）已完成评分和清理：**2/15（13.3%），data_valid=true，strict_success=false**，16 actions / 17 cycles / 274.54 秒，stop=`uncertain mutation; no resubmission`。24 次官方 DS 调用全部 stop，无 timeout、length、空响应；阶段首步交付实际触发 **7 次**，其余 10 次 policy 仍正常调用。full feedback / policy / input / readback 的累计 latency 分别约 119.04 / 131.11 / 4.32 / 10.43 秒。没有 planning cooldown、context fallback 或列表 inspection。这个更短的运行在离职保存后提前停止，不能把总耗时减少当成效率或成功率提升；官方成绩未提升。
+
+捕获证据定位了明确的异步查证路由缺陷：cycle-17 的 policy 与 readback 使用 trajectory 行 124 的旧 `/new-employee-separation-...` 帧，正文仍为 `Not Saved`；readback 的真实响应（attempt `a80f29bedcb34f8d8d180dd93355168a`）返回 unknown。约 22 秒后行 128 的 fresh observation 已进入 `/HR-EMP-SEP-2026-00001`，正文显示 Ananya Reddy、Draft、Submit。但 `unknown_readback_refreshed.changed=false`，因为旧实现只接受同 URL 的新语义，误把保存后的路由变化排除；没有用新帧再次查证就停止。官方 2/15 和仅保存的 Draft 是一致的，后续 Submit、Employee 状态及其他应用未继续。
+
+新增修复允许成功 dispatch 的 pending 在同 scheme/origin、同 tab、授权 URL 上因路由改变触发重评；仍最多刷新一次。跨源、跨 tab、未知 receipt 或无新语义不会释放路径。刷新不确认动作、不清 pending/consumed、不重放原 Save；下一次 loop 必须从新帧重新检查并获取 readback。用上述两个捕获帧做只读离线探测，修复返回 reassess=true，pending 保留，confirmed=0，0 浏览器 dispatch / 0 模型调用。远端回归 **798 passed, 3 skipped**，相关 130 项与 lint 通过；推送后按原配置自动重跑 baseline-55。摘要与 step-17 部分报告留在 macmini `/tmp/jev-baseline54-summary.json`、`/tmp/jev-baseline54-step17.json`，均最多 6 KB。

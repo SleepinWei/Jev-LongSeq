@@ -2658,10 +2658,13 @@ class DynamicController(Controller):
             return False
         self.pending["unknown_frame_refreshes"] = 1
         fresh = await self.observe_dynamic()
-        changed = (fresh.url == obs.url and fresh.tab_id == obs.tab_id
+        same_origin = ((urlsplit(fresh.url).scheme, urlsplit(fresh.url).netloc)
+                       == (urlsplit(obs.url).scheme, urlsplit(obs.url).netloc))
+        changed = (same_origin and allowed_url(fresh.url, self.task) and fresh.tab_id == obs.tab_id
                    and semantic_key(fresh) != semantic_key(obs))
         self.log("unknown_readback_refreshed", previous_observation_id=obs.observation_id,
                  observation_id=fresh.observation_id, changed=changed,
+                 location_changed=fresh.url != obs.url,
                  pending_preserved=True, action_confirmed=False, action_replayed=False)
         return changed
 
