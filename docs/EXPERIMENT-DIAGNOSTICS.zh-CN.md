@@ -194,3 +194,13 @@ baseline-53（`610bbed`）已完成评分和清理：**3/15（20%），data_vali
 119 份捕获请求的 trusted_goal 均与该次 task.json.objective 完全一致；49、51、52、53 的任务文字相同，protocol.digest 哈希均为 `28f8182189c063e9b7202312b2086b9c31ebaa2eae84446830663070061eb503`。启动前验证 116 个文件，保留原恢复点和预算。这是同一 task 的续跑实验，仍不能作为 DS 的总体成功率上限。模型输出格式/低效探测、调用延迟、硬阶段交接和时间预算混在一起；目前证据优先支持优化 planning/policy 的调用粒度和阶段交接效率，不支持仅凭此分数归因于 DS 业务推理能力不足。input helper 仅 11 秒，不是本轮主要耗时来源。
 
 macmini 的 `/tmp/jev-baseline53-summary.json` 与 `/tmp/jev-baseline53-step136.json` 均限制为 6 KB，可按需取回；step 仍可能有 next_cursor，不能视为完整 cycle。原始运行产物留在忽略目录，不进入 Git。
+
+## 阶段首步直接交付实验（2026-10-07）
+
+baseline-53 的阶段规划已输出经过能力、范围和 consumed 校验的 `stage_entry`，但首步仍要再次请求 policy 选择。新增全 DS JsonPolicy 的首步交付：仅在原规划 observation_id、document_version、页面语义、environment 和 scope generation 都一致，且没有 pending / pending_writes / write handoff 时，在当前有限候选中匹配唯一首步。一次规划最多交付一次，在 dispatch 前花掉资格；等待、replan 和方向/候选歧义回退原 policy。Jev policy 不启用该路径。
+
+fill/select 只交付未绑定值的候选，仍由原 DS input helper 产生和校验值；不从阶段文本直接执行 value。后续动作仍由 policy 选择，新的观察不会复用旧资格。Save 的 receipt 不证明成功，pending、fresh readback、业务写入 checkpoint 和禁止重提交机制均保留。日志 `stage_entry_selected` 标明源自 `validated_stage_planning`、跳过一次 policy、尚未确认动作；实际 DS 指令来自前一个已捕获规划请求/响应，不生成虚假的 policy 请求。
+
+对 baseline-53 的同 cycle 规划首步与实际 policy 选择做只读有限对照，25 处唯一首步全部匹配后续选择的 operation / target。这个探测没有模型调用和浏览器操作，不是重跑，也不能当作实际节省耗时或得分。真实新实验还需检查交付次数、调用量、官方评分和清理。
+
+macmini 完整回归 **790 passed, 3 skipped**；随后补充“交付后错误 input value 仍被拒绝”测试，最终新模块 **17 passed**。运行源码自完整回归后没有变更。本轮 lint 通过后按已有 push-before-benchmark 流程自动重跑 baseline-54，继续官方 api.deepseek.com / deepseek-flash，business_031 原任务、resume-03 memory / resume-02 UI，600 actions / 1,800 seconds / 1,000 feedback calls 和原 context 预算。单个续跑任务的成绩不代表总体成功率。

@@ -956,6 +956,7 @@ class DynamicController(Controller):
         self.consumed: set[str] = set()
         self.reusable_menu_actions: dict[str, dict] = {}
         self.scope_generation = 0
+        self.stage_entry_ticket = None
         self.fresh_scope_required = False
         self.pending: dict | None = None
         self.pending_started = 0.0
@@ -1027,6 +1028,8 @@ class DynamicController(Controller):
         return compacted
 
     async def review(self, obs, phase="step"):
+        if phase in PLANNING_PHASES:
+            self.stage_entry_ticket = None
         self.input_retry = None
         self.stale_click = None
         optional = (phase in PLANNING_PHASES and not self.pending and not self.memory.pending_writes
@@ -1232,6 +1235,14 @@ class DynamicController(Controller):
                 "environment_id": self.memory.environment_id,
                 "location": list(planning_location(obs)), "dialogs": list(obs.dialogs), "bindings": bindings,
                 "generation": self.scope_generation}
+            if feedback.stage_entry:
+                self.stage_entry_ticket = {
+                    "generation": self.scope_generation,
+                    "environment_id": self.memory.environment_id,
+                    "observation_id": obs.observation_id,
+                    "document_version": obs.document_version,
+                    "semantic_key": semantic_key(obs),
+                }
         route = planning_location(obs)
         if feedback.verification:
             self.arm_verification(obs)
@@ -1890,6 +1901,50 @@ class DynamicController(Controller):
             pending_text = "pending retained" if self.pending else "no pending action"
             return self.result("needs_attention", f"protected context cannot fit; {pending_text}; no request or resubmission")
 
+    def stage_entry_decision(self, obs, candidates):
+        """Deliver one validated DS planning choice without a second policy selection.
+
+        The ticket is valid only for the exact planning frame. It neither resolves
+        pending writes nor carries permissions into a later observation. Ambiguous
+        values/directions remain policy choices; input helpers retain value checks.
+        """
+        ticket, entry = self.stage_entry_ticket, self.memory.feedback.get("stage_entry")
+        scope = self.memory.feedback.get("execution_scope", {})
+        if (getattr(self.policy, "uses_stage_entries", False) is not True
+                or not ticket or not entry or self.pending or self.memory.pending_writes
+                or self.fresh_scope_required or self.memory.feedback.get("planning_handoff")
+                or obs.loading or self.memory.feedback.get("complete")
+                or ticket != {
+                    "generation": scope.get("generation"),
+                    "environment_id": self.memory.environment_id,
+                    "observation_id": obs.observation_id,
+                    "document_version": obs.document_version,
+                    "semantic_key": semantic_key(obs),
+                }):
+            return None
+        entry = StageEntry.model_validate(entry)
+        if entry.operation in {"wait", "request_replan"}:
+            return None  # Advisory waiting/recovery still requires policy selection.
+        matches = [a for a in candidates if entry_matches(entry, a)
+                   and self.stage_action_allowed(a, obs)
+                   and a.observation_id == obs.observation_id
+                   and a.document_version == obs.document_version
+                   and a.tab_id == obs.tab_id and a.frame_id == obs.frame_id]
+        if entry.operation in {"fill", "select"}:
+            matches = [a for a in matches if a.bound_value is None]
+        if len(matches) != 1:
+            return None
+        action = matches[0]
+        if action.operation in MUTATIONS and action_key(action, obs) in (
+                self.consumed - self.reusable_menu_keys(obs)):
+            return None
+        self.stage_entry_ticket = None  # Spend before dispatch, including stale receipts.
+        self.log("stage_entry_selected", generation=scope["generation"],
+                 choice=action.id, operation=action.operation, element_ref=action.element_ref,
+                 observation_id=obs.observation_id, source="validated_stage_planning",
+                 policy_call_skipped=True, action_confirmed=False)
+        return Decision(choice=action.id)
+
     async def choose_with_context_pages(self, obs, candidates, *, limit, offset):
         """Retry only pre-dispatch context overflow with a smaller navigable page."""
         while True:
@@ -1907,6 +1962,8 @@ class DynamicController(Controller):
                 self.log("handoff_candidates_guarded", removed=original - len(candidates),
                          checkpoint_key=handoff["action_key"], pending_preserved=False,
                          browser_action_dispatched=False)
+            if decision := self.stage_entry_decision(obs, candidates):
+                return decision, candidates, limit
             try:
                 decision = await self.observer.measure(
                     "policy.choose", self.policy.choose, self.task, obs, self.memory, None, candidates)

@@ -477,6 +477,8 @@ class JevPolicy:
 class JsonPolicy:
     """Candidate-constrained generative control baseline, with identical observation and memory."""
 
+    uses_stage_entries = True
+
     def __init__(self, transport: ModelTransport):
         self.transport = transport
 
