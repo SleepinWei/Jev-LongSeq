@@ -744,6 +744,10 @@ class JsonFeedback:
         return validated_feedback(raw)
 
     async def readback(self, task, obs, memory, transition, *, diagnostic=None):
+        # Reasoning providers count hidden tokens against max_tokens too. A
+        # length repair with the same allowance can reproduce an empty answer.
+        # Keep the controller's single repair, deadline and evidence checks.
+        output_tokens = 8192 if diagnostic == "readback response truncated" else 4096
         lines = {f"v{digest([obs.observation_id, line])[:16]}": line
                  for line in evidence_text(obs).splitlines()
                  if line.strip() and len(line) <= 1200}
@@ -788,7 +792,7 @@ class JsonFeedback:
                     "readback_evidence": lines, "schema": schema,
                     "schema_error": diagnostic,
                 }, ensure_ascii=False)}],
-            "response_format": {"type": "json_object"}, "max_tokens": 4096,
+            "response_format": {"type": "json_object"}, "max_tokens": output_tokens,
         }, "dynamic_readback")
         choice = data["choices"][0]
         if choice.get("finish_reason") == "length":

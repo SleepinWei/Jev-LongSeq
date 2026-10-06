@@ -210,3 +210,15 @@ baseline-54（`1f549cb`）已完成评分和清理：**2/15（13.3%），data_va
 捕获证据定位了明确的异步查证路由缺陷：cycle-17 的 policy 与 readback 使用 trajectory 行 124 的旧 `/new-employee-separation-...` 帧，正文仍为 `Not Saved`；readback 的真实响应（attempt `a80f29bedcb34f8d8d180dd93355168a`）返回 unknown。约 22 秒后行 128 的 fresh observation 已进入 `/HR-EMP-SEP-2026-00001`，正文显示 Ananya Reddy、Draft、Submit。但 `unknown_readback_refreshed.changed=false`，因为旧实现只接受同 URL 的新语义，误把保存后的路由变化排除；没有用新帧再次查证就停止。官方 2/15 和仅保存的 Draft 是一致的，后续 Submit、Employee 状态及其他应用未继续。
 
 新增修复允许成功 dispatch 的 pending 在同 scheme/origin、同 tab、授权 URL 上因路由改变触发重评；仍最多刷新一次。跨源、跨 tab、未知 receipt 或无新语义不会释放路径。刷新不确认动作、不清 pending/consumed、不重放原 Save；下一次 loop 必须从新帧重新检查并获取 readback。用上述两个捕获帧做只读离线探测，修复返回 reassess=true，pending 保留，confirmed=0，0 浏览器 dispatch / 0 模型调用。远端回归 **798 passed, 3 skipped**，相关 130 项与 lint 通过；推送后按原配置自动重跑 baseline-55。摘要与 step-17 部分报告留在 macmini `/tmp/jev-baseline54-summary.json`、`/tmp/jev-baseline54-step17.json`，均最多 6 KB。
+
+### baseline-55 与截断修复额度
+
+baseline-55（`08ef946`）已完成有效官方评分和清理：**4/15（26.7%），strict_success=false**，60 actions / 70 cycles / 1,036.86 秒，stop=`feedback failed schema/evidence checks after one repair; no action replayed`。setup 111.87 秒，总流程 1,198.29 秒，cleanup_error=null。离职提交的 cycle-32 查证为 business_commit；官方通过 Employee Separation（docstatus=1）、三项正确分配的活动、Vendor 检查。Journal / Payment / Twenty 未完成。这是与历史最好 4/15 持平的一次同任务续跑，不能证明总体成功率提高；官方 Vendor 检查通过时 detail 的 display_name 实际是 `Ananya Reddy`，而 label 是 `Ananya Reddy - Ex Employee`，不能把该分数当成每条原始要求都已满足。
+
+阶段首步交付实际 **19 次**，policy 仍有 47 次尝试；20 feedback、12 input、5 readback、1 inspection，共 85 次均为官方 api.deepseek.com / deepseek-flash。所有历史请求 trusted_goal 与 task 原文一致，digest 仍为 `28f8182189c063e9b7202312b2086b9c31ebaa2eae84446830663070061eb503`。累计 latency：feedback 301.26、policy 634.83、input 13.80、readback 53.84、inspection 3.29 秒。1 次 policy timeout；0 planning_scope_wait，3 次 policy context readback fallback；列表查证实际点击一次 Display Name 列头，原 Save 保留。Save 的这次查证走 pending / 等待后确认，新增同源路由 unknown-refresh 分支未触发，因此它的实测因果收益尚未建立。
+
+最终 cycle-70 的两次 readback（`5ec35dd7610a4643a610712f51f189d7`、`049ab00db8d54d5fa37b278bffbab7a3`）均 finish_reason=length、content 为空。两份真实 request 的 max_tokens 都是 4,096，response usage 的 completion_tokens_details.reasoning_tokens 都是 4,096；hidden reasoning 用尽输出额度，未产生答案。请求约 59.6 KB，低于 96 KB brain context 限制；不是本地输入超限、余额不足或“Vendor 不存在”的模型有效判定。第二次仅附加格式诊断而重用相同输出上限，不能解决这个截断机制。
+
+新增调整只针对 `readback response truncated`：首请求仍 4,096，唯一一次修复为 8,192 token。其他 JSON/schema 错误不增额度，第二次仍截断就停止。保留原全局时间、尝试次数、证据引用校验和原 pending；不接受 reasoning 或空/截断内容为业务证据，不增加不受控 retry。相关远端 **112 passed**、lint 通过；完整回归及 push 后按原 provider/task/恢复点/全局预算自动重跑 baseline-56。唯一新增实验变量是上述反应式 readback 修复输出额度。
+
+本轮 macmini 完整回归 **801 passed, 3 skipped**。输出额度测试验证两份请求除 schema_error 与 max_tokens 外任务/当前帧/证据/原 transition 保持一致，最多两次请求，连续 length 仍保留 pending 并停止，普通 schema repair 仍用 4,096，0 浏览器 dispatch。
