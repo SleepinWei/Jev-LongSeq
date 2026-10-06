@@ -126,7 +126,7 @@ async def test_inspector_only_receives_exact_current_evidence_and_original_goal(
         content = json.loads(payload["messages"][-1]["content"])
         assert content["trusted_goal"] == agent.task.objective
         assert "untrusted_memory" not in content
-        assert "Other vendor" in content["readback_evidence"]
+        assert "Other vendor" in "\n".join(content["readback_evidence"].values())
         assert content["last_transition"]["field_snapshot"] == pending["field_snapshot"]
         assert content["schema"]["properties"]["choice"]["enum"] == ["stop", *[a.id for a in candidates]]
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"choice":"stop"}'}}]})
