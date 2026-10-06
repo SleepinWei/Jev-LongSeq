@@ -222,3 +222,17 @@ baseline-55（`08ef946`）已完成有效官方评分和清理：**4/15（26.7%�
 新增调整只针对 `readback response truncated`：首请求仍 4,096，唯一一次修复为 8,192 token。其他 JSON/schema 错误不增额度，第二次仍截断就停止。保留原全局时间、尝试次数、证据引用校验和原 pending；不接受 reasoning 或空/截断内容为业务证据，不增加不受控 retry。相关远端 **112 passed**、lint 通过；完整回归及 push 后按原 provider/task/恢复点/全局预算自动重跑 baseline-56。唯一新增实验变量是上述反应式 readback 修复输出额度。
 
 本轮 macmini 完整回归 **801 passed, 3 skipped**。输出额度测试验证两份请求除 schema_error 与 max_tokens 外任务/当前帧/证据/原 transition 保持一致，最多两次请求，连续 length 仍保留 pending 并停止，普通 schema repair 仍用 4,096，0 浏览器 dispatch。
+
+### baseline-56：局部恢复有效，最终得分仍未提升
+
+baseline-56（`43b42ee`，启动前验证 119 个文件）已完成有效官方评分和清理：**4/15（26.7%），strict_success=false**，77 actions / 88 cycles / 1,403.99 秒；stop=`feedback failed schema/evidence checks after one repair; no action replayed`。setup 87.26 秒、verification 2.51 秒、总流程 1,547.99 秒，cleanup_error=null。通过项与 baseline-55 相同：已提交离职记录、三项正确活动、Vendor；Journal / Payment / Twenty 仍未完成。实际 display_name 仍是 `Ananya Reddy`，不能把官方 Vendor 通过等同于其后缀要求完全满足。
+
+阶段首步交付 **20 次**，0 planning cooldown，4 次 policy context readback fallback，1 次列表 header inspection，16 次 grounding rejection。107 次尝试均为官方 DS，同一原任务 digest / 恢复点 / 全局预算，历史 trusted_goal 无不一致。21 feedback / 17 input / 59 policy / 9 readback / 1 inspection，累计 latency 约 408.20 / 19.12 / 821.30 / 114.50 / 3.70 秒；1 policy timeout、3 length/空答案。原 Save 没有被重放，新 inspector receipt 没有确认原业务写入。
+
+提高修复额度在 cycle-30 有真实成功证据：attempt `818d36779e674bcf8621e43f4b4a55aa` 首次 4,096 token 全为 reasoning、length/空内容；`abdac1d3c75f4757b6bb40aea23d824f` 的捕获 max_tokens=8,192，4,624 reasoning + 有效 pending JSON，finish_reason=stop，总输出 4,682 token。它没有把 Save 确认为成功，而是让等待/查证继续，随后进入 Submit。这证明局部格式恢复路径有效，不等于得分提升。
+
+最终 cycle-88 仍在保存后的 Vendor 列表查证。`54c9e9f715314925a585f61a907b537b`（4,096）与 `83cd47bbfbd147aeb97f3b39c71702ba`（8,192）均 length、空内容，reasoning_tokens 分别恰为 4,096 / 8,192。后者约 59.6 KB / 22,760 输入 token，低于本地 96 KB brain context 上限；这次仍是输出推理额度耗尽，而非模型给出有效“保存失败”判定。不能用 reasoning 正文当作结果，也不能因官方 Vendor 已得分而解除运行时 pending。
+
+三次本轮实验（54 / 55 / 56）得分为 2 / 4 / 4，历史最好仍为 4/15。修复了确定的重复首步选择、同源异步路由忽略问题，并实测恢复了一次截断；**没有证据证明总体成功率提高**。下一项需要单独验证目标相关的结构化 readback 证据包、按需查证及缺失记录定位；保留原任务、关键 pending 和前后状态来源，明确省略范围，不能靠无限增加输出额度或 retry 来替代证据。实际列表数据是否缓存、是否需要同页重新加载仍是待验证假设，尚未作为事实或修复收益。
+
+部分报告：macmini `/tmp/jev-baseline56-summary.json`（最多 6 KB）和 cycle-88 调用/事件可按 cursor 展开；报告与真实请求产物均留在 Git 外。运行源码自 801 passed / 3 skipped 完整回归后保持不变。
