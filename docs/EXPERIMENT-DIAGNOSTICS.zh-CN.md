@@ -158,3 +158,9 @@ context overflow 的 readback 等待截止时再观察一次，只额外做一�
 按原 provider/model、business_031、resume-03 memory、resume-02 UI 和预算自动重跑 baseline-50，保留 baseline-49 的 900 秒环境等待设置。是否提升成绩、是否越过 Vendor 保存后的停止点，须以新实验官方评分和清理后的结果判断。
 
 最终源码在 macmini 的完整回归 **751 passed, 3 skipped**，所有本轮变更源码和测试 lint 通过。
+
+baseline-50 已完成评分和清理：0/15，data_valid=true，19 actions / 22 cycles / 314.02 秒，39 次 DS 调用均有证据，无 transport 错误、空响应或 length 截断，cleanup_error=null。第 13 个 cycle 的反馈 JSON 语法错误已通过修复恢复；真正停止点是第 22 个 cycle 的 `pre-bound input is not an authorized literal candidate`，未到 Vendor 保存阶段，因此不能用这次成绩判断 context 修复收益。
+
+选中的实际候选是第三行 User 的空字符串 FILL，描述为 `Clear combobox: User | 3 2 results found | value=Pooja Malhotra | grid=ge887bdc16465416b; row=3`。生成器加入 grid/row 身份，bind_input 的清空校验却只接受不带后缀的描述，误拒绝了自身合法候选；该分支在前一个版本也相同，是既有 harness 不一致。现把当前控件描述统一给生成和校验使用，继续要求当前控件可编辑、启用、非只读、非隐藏值及精确的 Clear 身份。身份或能力改变时拒绝旧候选。
+
+远端相关回归 **259 passed**，lint 通过。用当时原候选和原 observation 做只读校验已通过，0 模型调用、0 浏览器操作。推送后自动启动全新 baseline-51，模型、任务、恢复点和所有预算保持不变。

@@ -52,6 +52,33 @@ async def test_bound_input_skips_helper_and_records_source():
         await agent.bind_input(action, obs)
 
 
+@pytest.mark.parametrize("identity", [
+    {"grid_ref": "activities", "row_ref": "3"},
+    {"grid_ref": "activities"},
+    {"activation_key": "Enter"},
+])
+async def test_generated_clear_is_authorized_for_exact_current_control_without_model_call(identity):
+    task, obs = setup()
+    obs.elements[0] = obs.elements[0].model_copy(update={
+        "role": "combobox", "name": "User", "value": "Pooja Malhotra", **identity})
+    helper = AsyncMock()
+    agent = DynamicController(task, AsyncMock(), None, feedback=helper)
+    action = next(a for a in generate_dynamic(obs, task) if a.bound_value == "")
+    await agent.bind_input(action, obs)
+    assert action.bound_value == "" and agent.feedback_calls == 0
+    assert agent.events[-1]["source"]["kind"] == "observed_input_reset"
+    helper.value.assert_not_called()
+    changed = obs.model_copy(deep=True)
+    changed.elements[0].value = "Different current user"
+    changed.elements[0].name = "Different field"
+    with pytest.raises(ValueError, match="authorized literal"):
+        await agent.bind_input(action, changed)
+    disabled = obs.model_copy(deep=True)
+    disabled.elements[0].enabled = False
+    with pytest.raises(ValueError, match="authorized literal"):
+        await agent.bind_input(action, disabled)
+
+
 def test_select_literals_must_be_observed_options_and_candidates_stay_pageable():
     task, obs = setup()
     obs.elements = [Element(id="e0", role="combobox", name="Plan", selectable=True,

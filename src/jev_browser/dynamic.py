@@ -342,6 +342,22 @@ def identifiable_click(element):
                 or (element.grid_ref and element.row_ref and element.context.strip()))
 
 
+def control_description(element, obs):
+    """One current-control identity for candidate generation and input validation."""
+    description = f"{element.role}: {element.name} | {element.context} | value={element.value}"
+    if element.row_ref:
+        description += f" | grid={element.grid_ref}; row={element.row_ref}"
+    elif element.grid_ref:
+        description += f" | grid={element.grid_ref}; no row"
+        if (not element.editable and element.role == "button"
+                and any(element.name == cell.column for g in obs.grids if g.id == element.grid_ref
+                        for row in g.rows for cell in row.cells)):
+            description += "; column header, not a row field input"
+    if element.activation_key:
+        description = f"Activate observed {element.activation_key} shortcut: {element.name} | {element.context}"
+    return description
+
+
 def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppressed_inputs=None,
                      action_filter=None, preferred=None):
     """All candidates come from current DOM capabilities, never task-name matching."""
@@ -382,17 +398,7 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppresse
             continue  # Do not submit a rotating placeholder after an unsuccessful fill.
         if element.role == "menuitem" and element.name.endswith(" (icon control)") and not element.href:
             continue  # An icon asset alone is not an observed business choice.
-        description = f"{element.role}: {element.name} | {element.context} | value={element.value}"
-        if element.row_ref:
-            description += f" | grid={element.grid_ref}; row={element.row_ref}"
-        elif element.grid_ref:
-            description += f" | grid={element.grid_ref}; no row"
-            if (not element.editable and element.role == "button"
-                    and any(element.name == cell.column for g in obs.grids if g.id == element.grid_ref
-                            for row in g.rows for cell in row.cells)):
-                description += "; column header, not a row field input"
-        if element.activation_key:
-            description = f"Activate observed {element.activation_key} shortcut: {element.name} | {element.context}"
+        description = control_description(element, obs)
         if not element.editable and not element.selectable and identifiable_click(element):
             regular.append(make(Operation.CLICK, description, element_ref=element.id))
         if element.editable:
@@ -1771,7 +1777,7 @@ class DynamicController(Controller):
             if (action.operation == Operation.FILL and action.bound_value == ""
                     and element.editable and element.enabled and not element.read_only
                     and element.value and element.value != "[redacted]"
-                    and action.description == f"Clear {element.role}: {element.name} | {element.context} | value={element.value}"):
+                    and action.description == "Clear " + control_description(element, obs)):
                 self.input_retry = None
                 self.log("input_binding", action=action.model_dump(),
                          source={"kind": "observed_input_reset", "scope": "visible input only"})
