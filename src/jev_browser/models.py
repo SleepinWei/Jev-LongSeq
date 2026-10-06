@@ -490,12 +490,19 @@ class JsonPolicy:
         }
         if task.control_mode == "dynamic":
             policy_page_observation(content, obs, memory, candidates)
-        data = await self.transport.post(
-            {
+        schema = Decision.model_json_schema()
+        schema["properties"]["choice"]["enum"] = [a.id for a in candidates]
+        content["decision_schema"] = schema
+        for attempt in range(2):
+            data = await self.transport.post({
                 "model": self.transport.model,
                 "messages": [
                     {"role": "system", "content": instructions(task) +
                      ' Return JSON: {"choice":"aN","outcome":"confirmed|pending|unknown|none"}.'
+                     " Match decision_schema exactly, with no value, operation, target or extra fields. "
+                     "Choose an existing candidate ID; a separate input helper resolves unbound values. "
+                     "If schema_error is supplied, repair only the response format/selection from "
+                     "the same observed candidates. No previous invalid response was executed. "
                      " If pending_writes is nonempty, assess its result from the fresh page. "
                      "The next choice assumes confirmation and is ignored otherwise."},
                     {"role": "user", "content": json.dumps(content, ensure_ascii=False)},
@@ -503,8 +510,21 @@ class JsonPolicy:
                 "response_format": {"type": "json_object"},
             },
             "llm_policy",
-        )
-        return Decision.model_validate_json(data["choices"][0]["message"]["content"])
+            )
+            try:
+                if data["choices"][0].get("finish_reason") == "length":
+                    raise ValueError("truncated_policy_response")
+                decision = Decision.model_validate_json(data["choices"][0]["message"]["content"])
+                if decision.choice not in schema["properties"]["choice"]["enum"]:
+                    raise ValueError("unknown_candidate")
+                return decision
+            except (ValidationError, ValueError) as exc:
+                content["schema_error"] = (
+                    [{"loc": e["loc"], "type": e["type"]} for e in
+                     exc.errors(include_input=False, include_context=False, include_url=False)]
+                    if isinstance(exc, ValidationError) else [{"type": str(exc)}])
+                if attempt:
+                    raise ValueError("policy decision failed schema/candidate validation after bounded repair") from None
 
 
 class InvalidPlanOutput(ValueError):

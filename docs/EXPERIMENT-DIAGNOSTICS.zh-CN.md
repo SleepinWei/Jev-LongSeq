@@ -174,3 +174,11 @@ baseline-51 已完成有效评分和清理：**4/15（26.7%）**，strict_succes
 原 pending 和 consumed 写入键保持，排序/滚动的 receipt 不确认原 Save。没有新证据仍停止；不把离开表单、列表标题或官方隐藏评分注入成功判定。该实验检验的是“目标行不在当前视野内”的可能性，不声称能解决所有查询场景或已提高成功率。更复杂的查询和 protected policy 压缩仍需分别验证。
 
 macmini 完整回归 **768 passed, 3 skipped**；本轮源码/测试 lint 通过。测试验证静态缺失记录到真实新证据才确认、4 次上限、未知 inspection receipt 不重试、原 Save 不重放、编辑表单/错误/另一 pending 不授权、实际 inspector 输入保留原任务和当前证据。使用 baseline-51 的 cycle-135 原 observation 和 pending 做只读候选探测，得到两种滚动及 4 个列头，0 模型调用/0 浏览器动作。推送后自动重跑 baseline-52；线上收益以其最终官方评分为准。
+
+baseline-52（`2301d1a`）在 Vendor 前停止：**0/15，data_valid=true**，10 actions / 12 cycles / 122.51 秒，19 份请求和响应均为官方 DS，全部 stop，无 transport/length/空响应。cycle-12 的真实输出是 `{"choice":"a22","value":"Rajesh Kumar","outcome":"pending"}`；Decision 禁止 value 字段，JsonPolicy 没有格式恢复路径，直接抛 ValidationError。该值没有进入执行。总环境流程 223.41 秒，cleanup_error=null。未到列表查证，因此不能把此 0 分归因于该机制，也不能声称它提高了成功率。部分摘要在 macmini `/tmp/jev-baseline52-summary.json`。
+
+后续修正补充 Decision 的明确 JSON schema 和原候选 ID enum，格式/不存在的候选/length 输出只允许一次重生成；再次不合规就停止。不执行、接受或带回模型额外生成的 value，不放宽绑定和业务确认。修复请求只包含无输入正文的 schema error，任务、当前观察和候选集合不变，所有调用仍进入真实请求/响应日志。
+
+同时发现列表查证的 observation 绑定问题：unknown refresh 即使语义相同，也会产生新 observation_id，实际后端拒绝旧 ID 的动作。查证前重新观察；新语义先重做 readback，相同语义以新 ID 生成和执行候选。测试模拟实际后端的精确 ID 检查，而非仅用接受所有动作的 mock。选择器的 4,096 输出 token 上限与本地 readback 一致，保留全局时间/动作预算。baseline-52 运行期间，修正先在 macmini 隔离源码副本验证；它完成清理后才覆盖运行 checkout，并重新执行完整回归。
+
+运行 checkout 上的最终完整回归 **774 passed, 3 skipped**，本轮 lint 通过。推送后自动启动 baseline-53，保留官方 DS deepseek-flash、原 task、resume-03 memory / resume-02 UI、600 actions / 1,800 seconds / 1,000 feedback calls 及 48 KB policy / 96 KB brain context；用新目录验证。

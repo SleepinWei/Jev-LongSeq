@@ -841,7 +841,7 @@ class JsonFeedback:
                     "candidates": [a.model_dump(mode="json") for a in candidates],
                     "schema": schema,
                 }, ensure_ascii=False)}],
-            "response_format": {"type": "json_object"}, "max_tokens": 2048,
+            "response_format": {"type": "json_object"}, "max_tokens": 4096,
         }, "dynamic_readback_inspection")
         if data["choices"][0].get("finish_reason") == "length":
             raise ValueError("readback inspection response truncated")
@@ -2528,9 +2528,20 @@ class DynamicController(Controller):
         return candidates
 
     async def inspect_pending_write(self, obs):
-        candidates = self.pending_write_inspections(obs)
         inspector = getattr(self.feedback_model, "inspect_readback", None)
-        if not candidates or not inspector:
+        if not inspector or not self.pending_write_inspections(obs):
+            return False
+        # refresh_unknown_readback may have superseded obs even with identical
+        # semantics. Backend grounding checks the exact observation ID too.
+        fresh = await self.observe_dynamic()
+        if semantic_key(fresh) != semantic_key(obs):
+            self.pending.pop("context_readback_signature", None)
+            self.log("pending_inspection_frame_changed", observation_id=fresh.observation_id,
+                     pending_preserved=True, browser_action_dispatched=False)
+            return True  # Reassess new evidence before proposing any inspection.
+        obs = fresh
+        candidates = self.pending_write_inspections(obs)
+        if not candidates:
             return False
         original = self.pending
         self.charge_feedback()

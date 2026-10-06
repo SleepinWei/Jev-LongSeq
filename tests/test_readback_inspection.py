@@ -156,3 +156,38 @@ async def test_missing_record_stops_after_four_fresh_inspections_without_claimin
     assert agent.pending is original and agent.memory.pending_writes[original["key"]] is original
     assert not agent.memory.write_checkpoints and not agent.memory.confirmed_writes
     assert backend.execute.await_count == 5  # Original Save plus four inspections, never another Save.
+
+
+async def test_unchanged_refresh_rebinds_inspection_to_current_backend_observation():
+    agent, after, backend = await saved_controller()
+    current = after
+    observations = 0
+
+    async def observe():
+        nonlocal current, observations
+        observations += 1
+        current = after.model_copy(update={"observation_id": f"fresh-{observations}"})
+        return current
+
+    async def execute(action):
+        assert action.observation_id == current.observation_id  # Actual browser backend rule.
+        return Receipt(action_id=action.id, status="ok")
+
+    backend.observe.side_effect = observe
+    backend.execute.side_effect = execute
+    assert await agent.readback_after_policy_overflow(after, ContextBudgetExceeded("large")) is None
+    assert observations == 2  # Unknown refresh plus the inspection's own current binding.
+    assert backend.execute.await_args.args[0].observation_id == "fresh-2"
+    assert agent.pending and not agent.memory.confirmed_writes
+
+
+async def test_new_record_during_inspection_refresh_gets_readback_before_any_sort():
+    agent, after, backend = await saved_controller()
+    backend.observe.return_value = after.model_copy(update={"observation_id": "fresh", "text": "Vendors List Ada"})
+    assert await agent.inspect_pending_write(after)
+    assert backend.execute.await_count == 1
+    assert agent.pending and not agent.memory.confirmed_writes
+    fresh = backend.observe.return_value
+    assert await agent.readback_after_policy_overflow(fresh, ContextBudgetExceeded("large")) is None
+    assert agent.pending is None
+    assert backend.execute.await_count == 1  # The original Save only.

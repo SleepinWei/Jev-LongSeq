@@ -19,6 +19,52 @@ from jev_browser.models import (
 from jev_browser.protocol import Action, Element, GridCell, GridRow, Observation, Task, VisibleGrid
 
 
+@pytest.mark.parametrize("invalid", [{"choice": "a0", "value": "unapproved value"},
+                                   {"choice": "invented"}, {"choice": "a0", "outcome": "success"}])
+async def test_policy_repairs_format_once_without_executing_or_adopting_extra_values(invalid):
+    obs, memory = page(), Memory()
+    memory.dynamic_mode = True
+    task = Task(id="choice", control_mode="dynamic", objective='Enter "Ada".')
+    candidates = generate_dynamic(obs, task)
+    original = copy.deepcopy(candidates)
+    received = []
+
+    def respond(request):
+        content = json.loads(json.loads(request.content)["messages"][-1]["content"])
+        received.append(content)
+        assert content["trusted_goal"] == task.objective
+        assert content["decision_schema"]["properties"]["choice"]["enum"] == [a.id for a in candidates]
+        result = invalid if len(received) == 1 else {"choice": candidates[0].id, "outcome": "none"}
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(result)}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        policy = JsonPolicy(ModelTransport("https://test.example", "test", "test", client=client))
+        decision = await policy.choose(task, obs, memory, None, candidates)
+    assert decision.choice == candidates[0].id
+    assert len(received) == 2 and received[1]["schema_error"]
+    assert "unapproved value" not in json.dumps(received[1])
+    assert candidates == original and not memory.events and not memory.pending_writes
+    assert received[0]["candidates"] == received[1]["candidates"]
+
+
+async def test_policy_format_recovery_stops_after_second_invalid_response():
+    obs, memory = page(), Memory()
+    memory.dynamic_mode = True
+    task = Task(id="choice", control_mode="dynamic", objective="Original task")
+    calls = 0
+
+    def respond(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"choice":"invented"}'}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        policy = JsonPolicy(ModelTransport("https://test.example", "test", "test", client=client))
+        with pytest.raises(ValueError, match="after bounded repair"):
+            await policy.choose(task, obs, memory, None, generate_dynamic(obs, task))
+    assert calls == 2 and not memory.events and not memory.pending_writes
+
+
 def page():
     return Observation(observation_id="fresh", document_version="v2", tab_id="tab",
         url="https://example.test/vendors", title="Vendors", text="All current page text",
