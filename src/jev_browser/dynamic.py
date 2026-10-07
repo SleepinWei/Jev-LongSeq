@@ -161,6 +161,7 @@ class Feedback(Model):
     verification: VerificationStage | None = None
     stage_controls: list[StageControl] | None = Field(default=None, max_length=40)
     stage_entry: StageEntry | None = None
+    input_sequence: list[str] = Field(default_factory=list, max_length=4)
 
 
 class InputValue(Model):
@@ -233,6 +234,7 @@ class StageGuidance(Model):
     verification: VerificationStage | None = None
     stage_controls: list[StageControl] = Field(default_factory=list, max_length=40)
     stage_entry: StageEntry
+    input_sequence: list[str] = Field(default_factory=list, max_length=4)
 
 
 class CompressedMemory(Model):
@@ -633,6 +635,12 @@ class JsonFeedback:
             "stage_controls and verification with this single stage. If the desired control is absent, "
             "choose an observed opener or a locate/replan entry; do not name unavailable navigation as executable. "
             "Never attach an unrelated old verification to a new act or navigate stage. "
+            "To avoid another policy request for each independent field, optionally provide input_sequence: "
+            "two to four currently observed plain textbox IDs in execution order, starting with the fill "
+            "stage_entry. Include exact planned inputs and fill stage_controls for every ID. Use this only "
+            "for independent fields in the same current form; exclude grids, search/link fields, dropdowns, "
+            "navigation, buttons, dependent values and verification. The controller reads back each input "
+            "and cancels continuation if other values, page text or controls change. Leave it empty otherwise. "
             "A button without fill capability cannot accept text. If schema_error reports "
             "control_operation_unavailable, revise the plan using current observed controls; "
             "do not repeat the rejected operation or invent an input. "
@@ -1034,6 +1042,7 @@ class DynamicController(Controller):
         self.reusable_menu_actions: dict[str, dict] = {}
         self.scope_generation = 0
         self.stage_entry_ticket = None
+        self.input_sequence = None  # Ephemeral DS choices; never recovered across sessions.
         self.fresh_scope_required = False
         self.pending: dict | None = None
         self.pending_started = 0.0
@@ -1105,6 +1114,7 @@ class DynamicController(Controller):
         return compacted
 
     async def review(self, obs, phase="step"):
+        self.cancel_input_sequence("model review superseded the input plan")
         if phase in PLANNING_PHASES:
             self.stage_entry_ticket = None
         self.input_retry = None
@@ -1354,6 +1364,8 @@ class DynamicController(Controller):
             self.last_brain_location = planning_location(obs)
             self.planning_retry_after.pop(planning_location(obs), None)
             feedback._planning_result = "applied"
+            if feedback.stage_controls is not None and feedback.stage_entry:
+                self.arm_input_sequence(obs, feedback)
         self.log("feedback", phase=phase, feedback=feedback.model_dump(),
                  planning_result=feedback._planning_result,
                  effective_actions=self.effective_actions, attempted_actions=self.actions)
@@ -1991,6 +2003,129 @@ class DynamicController(Controller):
             pending_text = "pending retained" if self.pending else "no pending action"
             return self.result("needs_attention", f"protected context cannot fit; {pending_text}; no request or resubmission")
 
+    def cancel_input_sequence(self, reason):
+        if self.input_sequence:
+            self.log("input_sequence_cancelled", reason=reason,
+                     remaining=len(self.input_sequence["fields"]) - self.input_sequence["index"],
+                     action_confirmed=False, browser_action_dispatched=False)
+        self.input_sequence = None
+
+    @staticmethod
+    def input_sequence_shape(obs, fields):
+        identities = {tuple(f["identity"].values()) for f in fields}
+        controls = []
+        for element in obs.elements:
+            record = element.model_dump(exclude={"id"})
+            identity = tuple(getattr(element, k) for k in ("role", "name", "grid_ref", "row_ref", "context"))
+            if identity in identities:
+                record.pop("value")
+            controls.append(record)
+        return digest({"url": obs.url, "tab": obs.tab_id, "frame": obs.frame_id,
+                       "title": obs.title, "text": obs.text, "tabs": obs.tabs,
+                       "dialogs": obs.dialogs, "errors": obs.errors, "status": obs.http_status,
+                       "controls": controls, "grids": [g.model_dump() for g in obs.grids]})
+
+    def arm_input_sequence(self, obs, feedback):
+        """Only DS's explicit, currently grounded independent textbox sequence."""
+        refs = feedback.input_sequence
+        entry = feedback.stage_entry
+        if not refs:
+            return
+        fields = []
+        valid = (getattr(self.policy, "uses_stage_entries", False) is True
+                 and 2 <= len(refs) <= 4 and len(set(refs)) == len(refs)
+                 and entry and entry.intent == "act" and entry.operation == "fill"
+                 and entry.element_ref == refs[0] and not feedback.verification
+                 and not self.pending and not self.memory.pending_writes
+                 and not obs.loading and not obs.dialogs and not obs.grids and not obs.errors)
+        if valid:
+            for ref in refs:
+                element = next((e for e in obs.elements if e.id == ref), None)
+                if (not element or element.role != "textbox" or not element.editable
+                        or not element.enabled or element.read_only or element.selectable
+                        or element.grid_ref or element.row_ref or element.options or element.href
+                        or element.search_scope or element.search_query is not None
+                        or element.popup_open is not None or element.option_owner or element.menu_owner
+                        or element.value == "[redacted]"):
+                    valid = False
+                    break
+                identity = {k: getattr(element, k) for k in ("role", "name", "grid_ref", "row_ref", "context")}
+                unique = [e for e in obs.elements if all(getattr(e, k) == v for k, v in identity.items())]
+                plan = self.planned_input(obs, element)
+                binding = self.memory.feedback["execution_scope"]["bindings"].get(ref, {})
+                if len(unique) != 1 or not plan or "fill" not in binding.get("operations", []):
+                    valid = False
+                    break
+                fields.append({"identity": identity, "expected": element.value,
+                               "planned_value": plan["value"]})
+        if not valid:
+            self.log("input_sequence_discarded", reason="not an independent grounded textbox sequence",
+                     browser_action_dispatched=False)
+            return
+        self.input_sequence = {"fields": fields, "index": 0, "last": None,
+            "environment_id": self.memory.environment_id, "generation": self.scope_generation,
+            "shape": self.input_sequence_shape(obs, fields)}
+        self.log("input_sequence_armed", length=len(fields), generation=self.scope_generation,
+                 source="explicit_ds_plan", browser_action_dispatched=False)
+
+    def input_sequence_decision(self, obs, candidates):
+        sequence = self.input_sequence
+        if not sequence or not sequence["last"]:
+            return None
+        last = sequence["last"]
+        transition = self.last_transition or {}
+        scope = self.memory.feedback.get("execution_scope", {})
+        if (self.pending or self.memory.pending_writes or self.fresh_scope_required
+                or self.stage_review_due or self.ui_review_due or obs.loading or obs.challenge
+                or self.memory.feedback.get("planning_handoff") or self.memory.feedback.get("complete")
+                or self.memory.feedback.get("verification")
+                or getattr(self.policy, "uses_stage_entries", False) is not True
+                or sequence["environment_id"] != self.memory.environment_id
+                or sequence["generation"] != scope.get("generation")
+                or not transition.get("resolved") or transition.get("basis") != "fresh_visible_input_value"
+                or any(transition.get("action", {}).get(k) != v for k, v in last.items())
+                or obs.observation_id == last["observation_id"]):
+            self.cancel_input_sequence("previous input lacks fresh exact readback or stage changed")
+            return None
+        # Only the confirmed input's value may change; every other value and
+        # observable page/control property must still match the planning frame.
+        fields = sequence["fields"]
+        fields[sequence["index"]]["expected"] = transition["action"]["bound_value"]
+        current = []
+        for field in fields:
+            matches = [e for e in obs.elements if all(getattr(e, k) == v
+                       for k, v in field["identity"].items())]
+            if (len(matches) != 1 or matches[0].value != field["expected"]
+                    or not (plan := self.planned_input(obs, matches[0]))
+                    or plan["value"] != field["planned_value"]):
+                self.cancel_input_sequence("field identity, value or planned input changed")
+                return None
+            current.append(matches[0])
+        if self.input_sequence_shape(obs, fields) != sequence["shape"]:
+            self.cancel_input_sequence("page text, controls or non-sequence values changed")
+            return None
+        index = sequence["index"] + 1
+        if index == len(fields):
+            self.log("input_sequence_finished", length=len(fields), business_commit_confirmed=False)
+            self.input_sequence = None
+            return None
+        target = current[index]
+        matches = [a for a in candidates if a.operation == Operation.FILL
+                   and a.element_ref == target.id and a.bound_value is None
+                   and a.observation_id == obs.observation_id and a.document_version == obs.document_version
+                   and a.tab_id == obs.tab_id and a.frame_id == obs.frame_id
+                   and self.stage_action_allowed(a, obs) and action_key(a, obs) not in self.consumed]
+        if len(matches) != 1:
+            self.cancel_input_sequence("next fresh candidate absent, consumed or ambiguous")
+            return None
+        action = matches[0]
+        sequence["index"] = index
+        sequence["last"] = {"id": action.id, "observation_id": obs.observation_id}
+        self.log("input_sequence_selected", index=index, length=len(fields), choice=action.id,
+                 element_ref=action.element_ref, policy_call_skipped=True,
+                 source="explicit_ds_plan", action_confirmed=False)
+        return Decision(choice=action.id)
+
     def stage_entry_decision(self, obs, candidates):
         """Deliver one validated DS planning choice without a second policy selection.
 
@@ -2029,6 +2164,8 @@ class DynamicController(Controller):
                 self.consumed - self.reusable_menu_keys(obs)):
             return None
         self.stage_entry_ticket = None  # Spend before dispatch, including stale receipts.
+        if self.input_sequence:
+            self.input_sequence["last"] = {"id": action.id, "observation_id": obs.observation_id}
         self.log("stage_entry_selected", generation=scope["generation"],
                  choice=action.id, operation=action.operation, element_ref=action.element_ref,
                  observation_id=obs.observation_id, source="validated_stage_planning",
@@ -2053,6 +2190,8 @@ class DynamicController(Controller):
                          checkpoint_key=handoff["action_key"], pending_preserved=False,
                          browser_action_dispatched=False)
             if decision := self.stage_entry_decision(obs, candidates):
+                return decision, candidates, limit
+            if decision := self.input_sequence_decision(obs, candidates):
                 return decision, candidates, limit
             try:
                 decision = await self.observer.measure(
@@ -2130,7 +2269,7 @@ class DynamicController(Controller):
         key = self.pending["key"]
         self.memory.pending_writes.pop(key, None)
         self.memory.confirmed_writes.add(key)
-        self.last_transition = {**self.pending, "resolved": True}
+        self.last_transition = {**self.pending, "resolved": True, "basis": basis}
         scope = self.pending.get("confirmation_scope")
         target = self.pending.get("click_target", {})
         before_menu_names = {e["name"] for e in self.pending.get("before_menu_items", [])}
