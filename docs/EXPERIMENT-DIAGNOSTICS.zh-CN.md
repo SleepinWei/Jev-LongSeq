@@ -306,3 +306,15 @@ baseline-60 在恢复 UI 的 derived-reselect 阶段因 `ElementHandle.click: El
 当前执行器对非 combobox、非 type=search 的 native input 填值后自动 Tab。真实浏览器的表格内 type=text、placeholder=Search... 且 blur 清空查询的复现，修复前四种搜索名称均丢失查询，修复后保留 Rent、焦点与选项；普通字段和文本日期控件仍 blur 提交。新增窄修复按精确渲染搜索名称保留焦点，记录是否跳过自动 blur，不放宽回读或重放未知输入。下一轮 baseline-63 只新增此变量，仍需有效官方评分验证真实收益。
 
 搜索焦点修复 macmini 完整回归 **894 passed, 3 skipped**。最终导入格式整理后，相关真实浏览器、输入序列与浏览器回归再次通过，lint 通过；source/test/config 哈希在 push 后启动前重新验证。测试复现使用文本日期控件，原生 type=date 未暴露 fill 能力，不据此宣称扩展了原生日期支持。
+
+### baseline-63：保留焦点不足以打开查询控件
+
+`f2a47af` push 后验证 120 个运行文件哈希，以原 provider/model、任务、恢复点和预算重跑。有效官方 **4/15**、strict_success=false，87 actions / 108 cycles / **1,372.40 秒**；stop=`readback unresolved; no resubmission`。setup 77.40 秒，总流程 1,504.35 秒，cleanup_error=null。130 次尝试（28 feedback / 70 policy / 17 input / 14 readback / 1 inspector），0 transport 错误，全部响应 stop，累计请求 latency 1,333.09 秒。相比 baseline-62 的 4/15、1,004.25 秒和 103 次尝试，本轮没有评分、整项成功或耗时收益；不同执行路径也不支持把耗时差异完全归因于输入改动。
+
+cycle-103 的 row-1 Account、e198、FILL Rent，receipt 明确记录 `automatic_blur=skipped; reason=observed_search_field`，trajectory line 624。最终 cycle-108 仍观测到该 Search... 值为空；必要回读 unknown，pending 保留且未重放。历史实际输入见 `model-artifacts/ef3d86e2110b488385bd613e2c532ee7.request.json` 的 `/data/messages/1/content/last_transition/action`；回读响应见对应 `.response.json`。本轮 trace.zip 同样不是完整 ZIP，键盘回放证据缺失，不能补造。**0 input_sequence_selected、0 fresh_browser_document**；两项机制的线上收益仍未验证。
+
+只读检查基准自带 BigCapital 镜像前端实现得到进一步机制证据：AccountCellRenderer 向 AccountsSuggestField 传入 `openOnKeyDown=true`；底层 Suggest 的 focus 不打开列表，keydown 才设置 isOpen；closed 状态渲染选中项/空值，而非查询文本。Playwright `fill` 的 input 事件不能替代 keydown。因此“跳过 Tab”只处理一种失焦路径，不能保证该组件打开。下一项独立变量改为具名搜索 textbox 的一次原生键盘输入，保留精确回读与独立账户选择，不按 Enter/Tab，不重试未知输入。需再次以最终有效评分、整项成功和耗时验证。
+
+依赖管理的后续实验应把同一验证义务跨菜单、弹窗和筛选阶段的消耗累积起来，而非仅依赖当前 `verification` 对象；保留未决项和用户明确依赖，禁止以刷新成功关闭业务义务。baseline-63 的 cycle-49 捕获规划仍要求关闭全局搜索、改变筛选并再刷新报表，说明这些准备阶段也需要纳入同一义务。此项尚未作为本轮运行改动，不能宣称收益。
+
+原生键盘输入修复在 macmini 的真实浏览器复现与相关控制器回归 **115 passed**；完整回归 **903 passed, 3 skipped**，lint 通过。keydown 才打开、focus 帧回调选中文本、途中中断不 fallback、控制字符派发前拒绝均被覆盖。下一轮 baseline-64 只新增此输入机制，仍沿用原模型、任务、恢复点和预算；测试结果不是 benchmark 成绩。

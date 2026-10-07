@@ -693,13 +693,25 @@ class PlaywrightBackend:
                 await handle.click(timeout=self.timeout_ms, no_wait_after=bool(
                     element and element.role == "link" and element.href))
             elif op == Operation.FILL:
+                element = next((e for e in self.last.elements if e.id == action.element_ref), None)
+                if self.task.control_mode == "dynamic" and is_search_textbox(element):
+                    # Some visible query widgets open only on keydown; fill's
+                    # input event alone leaves their controlled display closed.
+                    # Type the exact single-line query once, without Enter/Tab,
+                    # retries or selecting a result on the caller's behalf.
+                    if any(ord(c) < 32 or ord(c) == 127 for c in action.bound_value):
+                        return receipt("rejected", "search keyboard input requires single-line text")
+                    await handle.fill("", timeout=self.timeout_ms)
+                    # Focus handlers may select text on the next frame. Let
+                    # that selection settle before inserting query characters.
+                    await handle.evaluate("el => new Promise(resolve => requestAnimationFrame(resolve))")
+                    await handle.type(action.bound_value, timeout=self.timeout_ms)
+                    return receipt("ok", "input_method=native_keyboard; automatic_blur=skipped; "
+                                   "reason=observed_search_field")
                 await handle.fill(action.bound_value, timeout=self.timeout_ms)
                 # Native text/date widgets often commit on change/blur. Leaving
                 # focus inside them can let a datepicker restore the old value.
                 # Link/autocomplete fields must retain focus for option selection.
-                element = next((e for e in self.last.elements if e.id == action.element_ref), None)
-                if self.task.control_mode == "dynamic" and is_search_textbox(element):
-                    return receipt("ok", "automatic_blur=skipped; reason=observed_search_field")
                 if (self.task.control_mode == "dynamic" and element.role != "combobox"
                         and await handle.evaluate(
                             "el => el instanceof HTMLInputElement && el.type !== 'search' "
