@@ -209,7 +209,7 @@ async def test_unique_fresh_dom_rebind_keeps_value_helper_and_scope_checks():
     agent.backend.execute.assert_awaited_once()
 
 
-@pytest.mark.parametrize("change", ["combobox", "search", "grid", "missing_value", "duplicate", "save", "verification"])
+@pytest.mark.parametrize("change", ["combobox", "search", "named_search", "grid", "missing_value", "duplicate", "save", "verification"])
 async def test_optional_sequence_does_not_authorize_complex_or_unplanned_fields(change):
     agent = await controller()
     obs = page()
@@ -218,6 +218,9 @@ async def test_optional_sequence_does_not_authorize_complex_or_unplanned_fields(
         obs.elements[1].role = "combobox"
     elif change == "search":
         obs.elements[1].search_query = ""
+    elif change == "named_search":
+        obs.elements[1].name = "Search..."
+        feedback.inputs[1].name = "Search..."
     elif change == "grid":
         obs.elements[1].grid_ref, obs.elements[1].row_ref = "g", "r"
     elif change == "missing_value":

@@ -18,7 +18,17 @@ from .input_bindings import quoted_inputs
 from .memory import all_checks
 from .models import state
 from .observability import ModelCallTimeout
-from .protocol import Action, AgentTuning, Decision, Model, Observation, Operation, Source, digest
+from .protocol import (
+    Action,
+    AgentTuning,
+    Decision,
+    Model,
+    Observation,
+    Operation,
+    Source,
+    digest,
+    is_search_textbox,
+)
 from .readback_packet import list_packet
 
 MUTATIONS = {Operation.CLICK, Operation.FILL, Operation.SELECT}
@@ -2057,6 +2067,7 @@ class DynamicController(Controller):
                         or not element.enabled or element.read_only or element.selectable
                         or element.grid_ref or element.row_ref or element.options or element.href
                         or element.search_scope or element.search_query is not None
+                        or is_search_textbox(element)
                         or element.popup_open is not None or element.option_owner or element.menu_owner
                         or element.value == "[redacted]"):
                     valid = False

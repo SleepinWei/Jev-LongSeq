@@ -10,7 +10,16 @@ from playwright.async_api import Error, TimeoutError, async_playwright
 
 from .candidates import allowed_url
 from .context_budget import error_view
-from .protocol import Action, Element, Observation, Operation, Receipt, Task, digest
+from .protocol import (
+    Action,
+    Element,
+    Observation,
+    Operation,
+    Receipt,
+    Task,
+    digest,
+    is_search_textbox,
+)
 
 NATIVE_SELECTOR = ('a[href],button,input,textarea,select,summary,[contenteditable="true"],'
             '[role="button"],[role="link"],[role="textbox"],[role="combobox"],'
@@ -689,6 +698,8 @@ class PlaywrightBackend:
                 # focus inside them can let a datepicker restore the old value.
                 # Link/autocomplete fields must retain focus for option selection.
                 element = next((e for e in self.last.elements if e.id == action.element_ref), None)
+                if self.task.control_mode == "dynamic" and is_search_textbox(element):
+                    return receipt("ok", "automatic_blur=skipped; reason=observed_search_field")
                 if (self.task.control_mode == "dynamic" and element.role != "combobox"
                         and await handle.evaluate(
                             "el => el instanceof HTMLInputElement && el.type !== 'search' "

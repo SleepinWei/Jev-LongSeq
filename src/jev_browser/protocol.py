@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
@@ -61,6 +62,12 @@ class Element(Model):
     popup_open: bool | None = None
     popup_kind: Literal["menu"] | None = None
     menu_owner: str | None = None
+
+
+def is_search_textbox(element: Element) -> bool:
+    """An explicit rendered search name preserves focus, never grants actions."""
+    return bool(element.role == "textbox" and element.editable and re.fullmatch(
+        r"(?:search|搜索|搜尋)(?:\.{3}|…)?", element.name.strip(), re.I))
 
 
 class GridCell(Model):

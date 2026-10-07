@@ -296,3 +296,13 @@ baseline-60 在恢复 UI 的 derived-reselect 阶段因 `ElementHandle.click: El
 下一项独立变量增加浏览器新文档证据，仅确认已派发、受只读阶段授权的 Refresh/Reload UI 效果，验证义务和业务写入确认保持。相关真实浏览器与保护检查通过后，完整回归、push、精确源码验证，再以原配置在新目录 baseline-62 重跑。结果必须按有效评分、整项成功、耗时和实际请求变化评估，不能以不再等待 reload 当作任务成功。
 
 新文档修复最终 macmini 回归 **886 passed, 3 skipped**，lint 通过。真实 HTTP 页面测试验证相同内容 reload 的 timeOrigin 改变、无需 Policy 查证、验证仍保留；负例覆盖 Save/Submit、业务表单、行内按钮、弹窗、未知派发、同文档、旧观察、不同 URL/tab/frame、HTTP/运行错误和缺失文档标识。上下文测试曾因断言 24 KB 却使用默认 48 KB 而超出断言 13 字节，现明确配置 24 KB 后通过；运行预算没有扩大。
+
+### baseline-62：进入 Journal，搜索输入被清空
+
+`1e8017d` push 后以 119 个哈希验证源码、原配置重跑。有效官方 **4/15**、strict_success=false，64 actions / 82 cycles / 1,004.25 秒，stop=`needs_attention: uncertain mutation; no resubmission`；总流程 1,129.61 秒，cleanup_error=null。103 尝试（25 feedback / 16 input / 48 policy / 13 readback / 1 inspector），0 transport 错误，累计请求 latency 974.17 秒。Vendor 查证完成后进入 Journal。**0 input_sequence_selected、0 fresh_browser_document**，所以这轮没有证明两项新机制的线上收益；与 baseline-59 同分更快但停点、执行范围不同，不能把少调用或较快结束归因为成功率/效率提高。
+
+最后一次变更是 cycle-80 的 FILL，row-1 Account 的 `textbox Search...`、e198、value=`Rent`，receipt=ok，duration=0.06765 秒。cycle-82 新观察与再观察均显示该字段为空，Policy 与必要 readback 均 unknown，保留 pending 并停止。实际历史输入可查 `model-artifacts/e25c27224093439db3e9bfe86c550e87.request.json` 的 `/data/messages/1/content/last_transition/action`；动作记录为 trajectory line 511。仅由该症状不能证明浏览器实际按了 Tab；trace.zip 不能作为有效 ZIP 读取，这项历史键盘证据缺失需保留。
+
+当前执行器对非 combobox、非 type=search 的 native input 填值后自动 Tab。真实浏览器的表格内 type=text、placeholder=Search... 且 blur 清空查询的复现，修复前四种搜索名称均丢失查询，修复后保留 Rent、焦点与选项；普通字段和文本日期控件仍 blur 提交。新增窄修复按精确渲染搜索名称保留焦点，记录是否跳过自动 blur，不放宽回读或重放未知输入。下一轮 baseline-63 只新增此变量，仍需有效官方评分验证真实收益。
+
+搜索焦点修复 macmini 完整回归 **894 passed, 3 skipped**。最终导入格式整理后，相关真实浏览器、输入序列与浏览器回归再次通过，lint 通过；source/test/config 哈希在 push 后启动前重新验证。测试复现使用文本日期控件，原生 type=date 未暴露 fill 能力，不据此宣称扩展了原生日期支持。
