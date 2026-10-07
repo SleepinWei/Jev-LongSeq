@@ -318,3 +318,25 @@ cycle-103 的 row-1 Account、e198、FILL Rent，receipt 明确记录 `automatic
 依赖管理的后续实验应把同一验证义务跨菜单、弹窗和筛选阶段的消耗累积起来，而非仅依赖当前 `verification` 对象；保留未决项和用户明确依赖，禁止以刷新成功关闭业务义务。baseline-63 的 cycle-49 捕获规划仍要求关闭全局搜索、改变筛选并再刷新报表，说明这些准备阶段也需要纳入同一义务。此项尚未作为本轮运行改动，不能宣称收益。
 
 原生键盘输入修复在 macmini 的真实浏览器复现与相关控制器回归 **115 passed**；完整回归 **903 passed, 3 skipped**，lint 通过。keydown 才打开、focus 帧回调选中文本、途中中断不 fallback、控制字符派发前拒绝均被覆盖。下一轮 baseline-64 只新增此输入机制，仍沿用原模型、任务、恢复点和预算；测试结果不是 benchmark 成绩。
+
+### baseline-64：账户搜索推进，但尚未提高最终评分
+
+`df0eb5d` push 后再次核对 120 个运行文件哈希，原配置重跑完成正式评分与清理。有效官方 **4/15**、strict_success=false，78 actions / 125 cycles / **1,789.15 秒**；stop=`budget_exhausted: TimeoutError`。setup 77.05 秒，总流程 1,910.61 秒，cleanup_error=null；launcher 空闲、slot 0 容器清空。153 次尝试（42 feedback / 68 policy / 20 input / 22 readback / 1 inspector），累计请求 latency **1,736.75 秒**，约占 agent 时间的 97.1%。152 个返回响应均 stop，无空内容；最后一次请求超时，没有响应证据。compare 确认原任务相同，模型/预算保持；恢复 memory 哈希、原 prompt 哈希、working_memory 哈希及 UI checkpoint 相同。恢复新建表单 URL 和恢复耗时自然不同，代码哈希按本轮输入改动变化。
+
+局部修复有线上证据：cycle-101（trajectory line 658）向 row-1 Account、e198 输入 Rent，receipt=`input_method=native_keyboard; automatic_blur=skipped; reason=observed_search_field`；cycle-102（line 669）DS 独立选择 `menuitem: Rent 40004`、e409。cycle-110（line 714）向 row-2 Account、e239 输入 Advertising Expense，同样记录原生键盘回执。真实历史规划 `model-artifacts/7add67d0b5dc4416aa62132d148e11db.response.json` 的 `/data/body/choices/0/message/content/next_goal` 确认 row-1 Account Rent、Debit 57,950 已完成，转向第二行。输入回执本身没有代替账户选择或保存确认。
+
+最后 cycle-122 的 dynamic_feedback 请求 `4768a417b1f440c6ac4ab66adf3902c8` 只有 **9.205 秒 remaining_call_seconds**，不是完整的默认 Policy 90 秒超时窗口；无响应后进入 `await_fresh_scope`，旧阶段变更被阻止。cycle-124 仍是未保存的 New Journal 表单，Amount 86,950.00，出现 `planning_scope_wait`；Journal、Payment 和 CRM 尚未完成。该超时受剩余运行预算约束，不能直接归因为官方 DS 服务故障，也不能用增加预算代替降低前段消耗。
+
+**0 input_sequence_selected、0 fresh_browser_document**；连续输入与新文档确认仍没有线上收益证据。键盘输入越过了前两轮账户搜索停止点，但最终同分、耗时更长、整项失败，因此这里只确认控件机制修复，不能宣称成功率或整体效率提升。
+
+| 同配置续跑 | 有效官方评分 | 整项成功 | agent 耗时 | 主要停止原因 |
+|---|---:|---|---:|---|
+| 60 | 0/15 | 否 | 恢复阶段失败 | detached UI，0 模型调用/agent 动作 |
+| 61 | 3/15 | 否 | 1,321.84 秒 | Policy 三次尝试超时 |
+| 62 | 4/15 | 否 | 1,004.25 秒 | Rent 输入后不可确认 |
+| 63 | 4/15 | 否 | 1,372.40 秒 | 跳过 blur 后查询仍为空 |
+| 64 | 4/15 | 否 | 1,789.15 秒 | 搜索推进，剩余规划时间耗尽 |
+
+本组是 business_031 固定恢复点的迭代，不是套件成功率估计；4/15 是加权评分，不能称作 26.7% 整项成功率。下一轮应分别验证：无变化 pending 的重复模型查证合并（保留异步等待时间窗口和截止复核）；同一验证义务跨菜单/筛选准备阶段累计额度；原任务绑定的剩余事项与依赖台账。仅用户明确依赖才能阻塞其他工作，局部 UI 确认不能关闭最终验证义务。以上调度项尚未实施，必须各自重跑后才能评价。
+
+有界部分报告保存在 macmini `/tmp/jev-baseline64-final-summary.json`、`/tmp/jev-baseline64-compare63.json`；搜索动作可按前述 cycle/行号展开。原始实验产物仍留在忽略的 runs 目录，不入 Git。
