@@ -346,7 +346,7 @@ SNAPSHOT = r"""selector => {
       if (owner.name) option.context = [option.context, 'Options for: ' + owner.name].filter(Boolean).join(' | ');
     }
   }
-  return {url:location.href,title:document.title,text:lines.join('\n'),controls,
+  return {url:location.href,document_id:String(performance.timeOrigin),title:document.title,text:lines.join('\n'),controls,
     grids,
     visible_frames:[...document.querySelectorAll('iframe,frame')].filter(visible).length,
     dialogs:modal.map(x => x.innerText),loading:document.readyState === 'loading' ||
@@ -546,6 +546,7 @@ class PlaywrightBackend:
             observation_id=uuid.uuid4().hex,
             tab_id=tab_id,
             document_version=digest(raw),
+            document_id=raw.get("document_id"),
             url=raw["url"],
             title=raw["title"],
             text=raw["text"],

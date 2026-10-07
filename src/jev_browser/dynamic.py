@@ -1799,6 +1799,17 @@ class DynamicController(Controller):
                 proof = self.query_controls.get(self.query_control_key(obs, element), {})
                 if (action.operation == Operation.CLICK and proof.get('verification_key') == self.verification_key(obs)):
                     self.pending['query_ui_kind'] = proof['kind']
+                if (action.operation == Operation.CLICK and obs.document_id and not obs.dialogs
+                        and element.role == "button" and not element.href
+                        and not element.grid_ref and not element.row_ref
+                        and not element.editable and not element.selectable and not element.popup_kind
+                        and re.fullmatch(r"(?:reload|refresh)(?: \(icon control\))?", element.name.strip(), re.I)
+                        and not any(write_boundary(e.model_dump()) for e in obs.elements if e.enabled)):
+                    self.pending["ui_reload_document"] = obs.document_id
+                    self.pending["expected_goal"] = (
+                        "Confirm only a fresh browser document after this read-only refresh. "
+                        "Identical report contents are allowed; this never confirms data persistence, "
+                        "report requirements or task completion.")
             if action.operation == Operation.CLICK:
                 self.pending["click_target"] = {"id": element.id, "role": element.role,
                     "name": element.name, "popup_kind": element.popup_kind,
@@ -2021,6 +2032,7 @@ class DynamicController(Controller):
                 record.pop("value")
             controls.append(record)
         return digest({"url": obs.url, "tab": obs.tab_id, "frame": obs.frame_id,
+                       "document_id": obs.document_id,
                        "title": obs.title, "text": obs.text, "tabs": obs.tabs,
                        "dialogs": obs.dialogs, "errors": obs.errors, "status": obs.http_status,
                        "controls": controls, "grids": [g.model_dump() for g in obs.grids]})
@@ -2406,6 +2418,8 @@ class DynamicController(Controller):
         """Side-effect-free visibility guard shared by validation and confirmation."""
         if not self.pending:
             return True
+        if self.pending.get("confirmation_scope") == "document_reloaded_ui":
+            return self.document_reload_observed(obs)
         if self.pending.get("dispatch_status") in {"unknown", "timeout", "error"} and not (
                 self.pending.get("navigation_target") == obs.url
                 and self.pending["before"]["url"] != obs.url
@@ -2430,6 +2444,30 @@ class DynamicController(Controller):
             if not same_input:
                 return False
         return True
+
+    def document_reload_observed(self, obs):
+        pending = self.pending or {}
+        before_id = pending.get("ui_reload_document")
+        before = pending.get("before", {})
+        return bool(before_id and obs.document_id and obs.document_id != before_id
+            and pending.get("dispatch_status") == "ok"
+            and obs.observation_id != pending.get("action", {}).get("observation_id")
+            and obs.url == before.get("url") and obs.tab_id == before.get("tab_id")
+            and obs.frame_id == pending.get("action", {}).get("frame_id")
+            and not obs.loading and not obs.dialogs and not obs.challenge
+            and obs.http_status is not None and 200 <= obs.http_status < 400
+            and not any(e.startswith("page_error:") and e not in pending.get("before_errors", [])
+                        for e in obs.errors))
+
+    def confirm_visible_document_reload(self, obs):
+        """Browser time origin proves a new document, never a business write."""
+        if not self.document_reload_observed(obs):
+            return False
+        self.pending["confirmation_scope"] = "document_reloaded_ui"
+        self.pending["readback_proof"] = {"before_document_id": self.pending["ui_reload_document"],
+            "document_id": obs.document_id, "observation_id": obs.observation_id,
+            "scope": "browser document refreshed only; report verification remains unresolved"}
+        return self.confirm_transition("confirmed", obs, "fresh_browser_document")
 
     def confirm_visible_input(self, obs):
         """Fresh exact input readback proves population only, never Save or link resolution."""
@@ -2919,6 +2957,7 @@ class DynamicController(Controller):
                     await asyncio.sleep(min(2, delay))
                     continue  # No fast-policy call or browser dispatch during planning cooldown.
             self.confirm_visible_input(obs)
+            self.confirm_visible_document_reload(obs)
             self.confirm_visible_option(obs)
             self.confirm_visible_menu(obs)
             self.confirm_visible_dialog_close(obs)

@@ -192,7 +192,7 @@ async def test_policy_preserves_goal_pins_pending_values_and_original_candidates
     saved = copy.deepcopy(memory.export())
     original_candidates = [a.model_dump() for a in candidates]
     transport = Capture()
-    policy = JevPolicy(transport)
+    policy = JevPolicy(transport, context_max_bytes=24_000)
     await policy.choose(task, obs, memory, None, candidates)
     payload = transport.requests[0]
     assert wire_bytes(payload) <= 24_000

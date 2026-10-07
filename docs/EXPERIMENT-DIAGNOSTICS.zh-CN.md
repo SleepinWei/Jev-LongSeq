@@ -282,3 +282,17 @@ baseline-59（`265ede8`，启动验证 121 个文件）已完成有效官方评�
 本轮没有出现带 Page size 的 observation，走的是列头/异步 fresh-frame 路径；**分页尺寸 guard 的线上收益仍未验证**，仅有 DOM 和 guard 回归证据。当前页自链未再次触发早停，但单次不同路径实验不能证明这项修复带来的整体成功率增量。cycle-82 捕获规划明确选择返回 HRMS 做只读报表验证，随后回到 BigCapital 打开 Journal；这是实际 DS 规划，不是 harness 强制返回。减少规划/动作选择往返、无变化等待和重复验证，并在当前观察中保留可行动的依赖与未完成义务，是后续效率实验的重点；不能将未确认的写入直接视为完成，也不应把隐藏评分或任务特例注入模型。
 
 本轮三个结果为 baseline-57 **4/15**、58 **0/15**、59 **4/15**，历史最好仍为 4/15；证据包已实测恢复有效输出并越过 Vendor 查证停止点，**尚无最终成功率提高的证据**。运行源码自最终 832 passed / 3 skipped 后保持不变。部分报告在 macmini `/tmp/jev-baseline59-summary.json`、`/tmp/jev-baseline59-step81.json`（各最多 6 KB），可按 cursor 和请求 artifact 指针展开；完整产物与凭证不入 Git。
+
+### 成功率优先试验：baseline-60 / 61
+
+`954797d` 增加可选 DS 独立文本框输入序列：最多四项，逐项原输入辅助、范围检查和精确新观察回读；任何其他页面/值/控件变化即撤销，不批量提交。macmini 完整回归 **862 passed, 3 skipped**，lint 通过，push 后验证 118 个 source/test/config 哈希启动。模型仍为官方 api.deepseek.com / deepseek-flash，任务、resume-03 memory / resume-02 UI、1,800 秒及其他预算均保持。
+
+baseline-60 在恢复 UI 的 derived-reselect 阶段因 `ElementHandle.click: Element is not attached to the DOM` 返回 unknown 停止；未重放该动作。0 模型调用、0 agent 动作，官方状态检查 **0/15**，setup 120.41 秒，总流程 184.78 秒，cleanup_error=null。它是恢复失败，未验证输入序列；不能隐去该端到端失败，也不能把它归因于未执行的模型机制。
+
+相同源码与配置的新环境补跑 baseline-61：有效官方 **3/15**、strict_success=false；37 actions / 45 cycles / 1,321.84 秒，stop=`needs_attention`，原因是 llm_policy 三次尝试超时，运行总预算未耗尽，pending 保留、无动作重放。setup 89.16 秒，总流程 1,468.42 秒，cleanup_error=null。58 尝试（13 feedback / 8 input / 36 policy / 1 readback），累计 6 个 Policy TimeoutError；**0 input_sequence_armed/selected**，尚未进入 Vendor，不能宣称输入序列的线上效率或成功率收益。
+
+具体阻塞在 Employee Exits 报表刷新：cycle-40 捕获阶段指导明确要求只读 reload，随后待确认动作是 `button: reload (icon control)`。页面重新加载后可能展示相同内容，普通语义变化检查无法证明刷新；pending 又阻止耗尽的验证阶段转向独立工作，连续 Policy 请求与重试耗时。当前 memory 的 pending 仅用于定位，历史指导见 trajectory line 251 `/feedback/next_goal`，实际模型输入应沿该 cycle 的 request artifact 展开，不能以最新 memory 代替。
+
+下一项独立变量增加浏览器新文档证据，仅确认已派发、受只读阶段授权的 Refresh/Reload UI 效果，验证义务和业务写入确认保持。相关真实浏览器与保护检查通过后，完整回归、push、精确源码验证，再以原配置在新目录 baseline-62 重跑。结果必须按有效评分、整项成功、耗时和实际请求变化评估，不能以不再等待 reload 当作任务成功。
+
+新文档修复最终 macmini 回归 **886 passed, 3 skipped**，lint 通过。真实 HTTP 页面测试验证相同内容 reload 的 timeOrigin 改变、无需 Policy 查证、验证仍保留；负例覆盖 Save/Submit、业务表单、行内按钮、弹窗、未知派发、同文档、旧观察、不同 URL/tab/frame、HTTP/运行错误和缺失文档标识。上下文测试曾因断言 24 KB 却使用默认 48 KB 而超出断言 13 字节，现明确配置 24 KB 后通过；运行预算没有扩大。

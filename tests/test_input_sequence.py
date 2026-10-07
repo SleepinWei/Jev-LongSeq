@@ -137,7 +137,7 @@ async def test_real_rendered_form_continues_after_native_blur_without_skipping_s
 
 
 @pytest.mark.parametrize("change", ["text", "error", "menu", "unplanned_value", "planned_value",
-    "navigation", "tab", "frame", "environment", "generation", "ambiguous", "readonly", "pending",
+    "navigation", "tab", "frame", "document", "environment", "generation", "ambiguous", "readonly", "pending",
     "unknown", "stale", "model_confirmation", "review", "consumed", "permission", "challenge"])
 async def test_continuation_requires_same_stage_and_exact_current_evidence(change):
     obs = page()
@@ -159,6 +159,8 @@ async def test_continuation_requires_same_stage_and_exact_current_evidence(chang
         fresh.tab_id = "other"
     elif change == "frame":
         fresh.frame_id = "other"
+    elif change == "document":
+        fresh.document_id = "new-document"
     elif change == "environment":
         agent.memory.environment_id = "other"
     elif change == "generation":

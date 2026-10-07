@@ -85,6 +85,7 @@ class Observation(Model):
     tab_id: str
     frame_id: str = "main"
     document_version: str
+    document_id: str | None = None
     url: str
     title: str
     text: str
