@@ -413,3 +413,47 @@ memory / resume-02 UI、600 actions / 1,800 seconds / 1,000 feedback calls 等�
 相关 macmini 检查通过、push 并核验运行源码后，自动以 fresh 输出重跑。报告必须覆盖
 有效评分、strict_success、耗时、HTTP 请求量及 tokens，检查正式 grading 与 cleanup；
 投影变小及测试通过不是成功率提升证据。单次固定恢复点试验不代表总体成功率。
+
+### baseline-66：索引可检索，但未提高最终评分
+
+实现 `d2c166c` push 后，macmini 核验 **125 个源码/测试/配置文件**启动 fresh
+`saas-longseq-business031-20261008-ds-baseline-66/saas-bench-business_031`。
+完整回归 **924 passed, 3 skipped**，lint 通过。运行结束后再次核验 125 个文件，
+没有 hash 差异。与 baseline-65 的 models、budget、tuning、system_prompt_hash、
+原任务/working_memory/恢复文件 hash、UI checkpoint 和 token/字节预算逐字段相同；
+仅增加 `policy_memory_mode=stage_index_v1` 及对应实现。
+
+| 固定恢复点对照 | 有效评分 / 整项成功 | agent 秒 | HTTP 尝试 | 动作 / 周期 |
+|---|---|---:|---:|---:|
+| baseline-65，legacy | 4/15 / 否 | 1,780.97 | 115 | 74 / 97 |
+| baseline-66，stage_index_v1 | 4/15 / 否 | 1,785.32 | 100 | 66 / 80 |
+
+评分有效，离职单 docstatus=1、三项活动及负责人、供应商显示名/邮箱通过。
+Journal 没有匹配 memo/date 的记录，payment、Twenty 三项任务及 separation note
+仍未完成。停止为 `budget_exhausted: TimeoutError`；96 份响应均为 stop，无空内容，
+4 次 timeout（cycle-65 Policy、cycle-79 Policy、cycle-80 Feedback 两次尝试）。
+cycle-73 一次 `extra_forbidden` 是多余 `type` 字段，经原有反馈修复后继续。
+本轮 Feedback/Input/Readback 实现及投影路径未改变，不将这些异常直接归因于索引。
+累计请求 latency **1,747.23 秒**，约占 agent **97.9%**；请求数减少伴随动作和周期减少、
+超时增加，没有耗时或整项成功提升证据。已知 input/output tokens 为
+1,281,926 / 314,906，另有 4 次未知 usage，不能将它们当成完整消费量。
+
+共 **52 次 Policy 投影，25 次标记应用索引**，从 cycle-44 开始。真正派发的应用投影
+只有 **24 次**（另有两次重试，共 **26 份 captured Policy 请求**）。这些真实请求
+全部只索引 **同一条旧操作**，原始 memory 每次仅少 **417 字节**，约 0.7%–0.8%；
+没有充分覆盖“较早业务确认与保存检查点合并”的预期场景。最后 cycle-80 的原始 memory
+64,696 → 60,880（少 3,816 / 5.9%）发生在预算结束时，**没有对应 Policy HTTP 派发**，
+不能用它宣称实际节省了输入。以上是年龄压缩前的 memory 差额，不是最终 wire/token
+对照；既有压缩会缩短旧证明，索引自身也有开销。
+
+逐份实际 request artifact 检查 historical_operations：1 个不同 archive_ref 均能
+对应原 confirmed_actions_archive / write_checkpoints_archive，未知引用为 0，
+环境/动作身份错配为 0，确认级别/状态错配为 0；0 context overflow。
+完整档案保持，索引机制的引用一致性通过，**最终收益未得到验证**。
+保留实验开关默认 `legacy`，不推广为默认。导航状态图、结构化业务状态和剩余任务依赖
+DAG 尚未实施或验证，本次不能用于证明它们有效，也不能证明删掉全部记忆安全。
+
+phase=finished、process_alive=false、cleanup_error=null；launcher 空闲，slot 容器清空。
+有界部分报告在 macmini 和本地 `/tmp/jev-baseline66-memory-validation.json`（包含评分、
+索引覆盖与引用核验）、`/tmp/jev-baseline66-summary.json`、
+`/tmp/jev-baseline66-compare65.json`；真实请求与运行产物不入 Git。
