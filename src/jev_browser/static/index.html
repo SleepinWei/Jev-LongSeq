@@ -48,7 +48,7 @@
         <div id="page-warning" role="alert" hidden></div>
         <div class="viewport"><div class="empty" id="empty"><p class="empty-symbol">[ ↗ ]</p><h2>等待浏览器画面</h2><p id="empty-hint">选择一条运行记录，或启动本地演示。</p></div>
           <img id="screenshot" alt="受控网页截图" hidden><div id="targets" aria-hidden="true" hidden></div></div>
-        <div class="dom-controls"><label><input id="overlays" type="checkbox" checked> 显示识别到的 DOM</label><span id="dom-status">未记录 DOM 标注</span></div>
+        <div class="dom-controls"><label><input id="overlays" type="checkbox" checked> 显示 DOM 标注</label><label for="dom-mode">范围 <select id="dom-mode"><option value="selected" selected>仅选中 DOM</option><option value="all">全部 DOM</option></select></label><span id="dom-status" role="status">未记录 DOM 标注</span></div>
         <div class="browser-footer"><span id="page-title">—</span><span id="frame-note">真实截图 · 只读预览</span></div>
         <div class="playback"><button id="replay-start">从头回放</button><button id="play" aria-label="播放或暂停回放">播放</button>
           <label class="playback-speed" for="playback-rate">速度 <select id="playback-rate"><option value="steps">逐步 · 2 秒</option><option value="1">实时 1×</option><option value="5">实时 5×</option><option value="20">实时 20×</option></select></label>

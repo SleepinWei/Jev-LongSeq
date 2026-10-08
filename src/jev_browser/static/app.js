@@ -39,6 +39,8 @@ let state = null, currentId = "", selected = 0, tab = "choices", etag = "", load
 let live = null, playing = false, playbackStart = 0, playbackTime = 0, lastImage = "", pendingId = "";
 let submitting = false, launcherBusy = false, watchedLaunch = "";
 let frameMetadata = null;
+try { if(localStorage.getItem('longseq-dom-mode')==='all') $("dom-mode").value='all'; } catch {}
+const selectedDOMOnly = () => $("dom-mode").value==='selected';
 let replayRequested = new URLSearchParams(location.search).get('replay') === '1';
 const n = value => Number.isFinite(value) ? value.toLocaleString() : "—";
 const seconds = value => Number.isFinite(value) ? `${value.toFixed(1)} s` : "—";
@@ -153,23 +155,24 @@ function title(event) {
   return event.reason || event.observation?.title || event.kind;
 }
 function eventState() {
-  let obs=null, decision=null, candidates=[], plan=null, action=null;
+  let obs=null, decision=null, candidates=[], plan=null, action=null, targetAction=null;
   const facts = {}, done = new Set(), pages = new Map();
   for (const e of state.events.slice(0,selected+1)) {
     if (e.observation) {
-      obs=e.observation; decision=null; candidates=[];
+      obs=e.observation; decision=null; candidates=[]; targetAction=null;
       const tabs={...obs.tabs, [obs.tab_id]:obs.url};
       for(const url of Object.values(tabs)) if(!pages.has(url)) pages.set(url,{url,observed:false,title:''});
       for(const p of pages.values()) p.tabs=Object.entries(tabs).filter(([,url])=>url===p.url).map(([id])=>id);
       Object.assign(pages.get(obs.url),{observed:true,title:obs.title});
     }
-    if (e.kind === "decision") { decision=e.decision; candidates=e.candidates; }
+    if (e.kind === "decision") { decision=e.decision; candidates=e.candidates; targetAction=null; }
+    if (['action_started','input_binding','action'].includes(e.kind)) targetAction=e.action;
     if (e.kind === "action") { action=e.action; if (action.id.startsWith("internal-")) {decision=null; candidates=[];} }
     if (e.kind === "plan") { plan=e.plan; done.clear(); }
     if (e.kind === "subtask_completed") done.add(e.subtask_id);
     if (e.kind === "extraction") for (const f of e.facts) (facts[f.entity] ||= {})[f.field] = f;
   }
-  return {obs,decision,candidates,plan,facts,done,action,pages:[...pages.values()]};
+  return {obs,decision,candidates,plan,facts,done,action,targetAction,pages:[...pages.values()]};
 }
 function renderSelection() {
   if (!state?.events.length) {clearInstructions(); return;}
@@ -189,12 +192,15 @@ function renderSelection() {
   $("choice-title").textContent = chosen?.description || s.action?.description || s.action?.operation || "等待局部决策";
   $("confidence").textContent = s.decision?.confidence != null ? `${(s.decision.confidence*100).toFixed(0)}%` : "—";
   const panel=$("inspector");
-  if (tab === "choices") panel.innerHTML = s.candidates.length ? s.candidates.map(a=>`<div class="candidate ${a.id===s.decision?.choice?'best':''}"><span>${escape(a.id)}</span><div>${escape(a.description)}<small>${escape(a.operation)} · ${escape(a.effect)}${a.element_ref?' · '+escape(a.element_ref):''}</small></div></div>`).join("") : `<p class="muted">${s.action?.id.startsWith('internal-') ? '控制器执行证据抽取或读回，无模型候选选择。' : '此观察尚无模型决策。选择轨迹中的“模型选择”查看候选。'}</p>`;
+  const choices = selectedDOMOnly() ? (s.targetAction ? [s.targetAction] : chosen ? [chosen] : []) : s.candidates;
+  root.querySelector('[data-tab="choices"]').textContent=selectedDOMOnly() ? '选中项' : '候选';
+  if (tab === "choices") panel.innerHTML = choices.length ? choices.map(a=>`<div class="candidate ${selectedDOMOnly() || a.id===s.decision?.choice?'best':''}"><span>${escape(a.id)}</span><div>${escape(a.description)}<small>${escape(a.operation)} · ${escape(a.effect)}${a.element_ref?' · '+escape(a.element_ref):''}</small></div></div>`).join("") : `<p class="muted">${s.action?.id.startsWith('internal-') ? '控制器执行证据抽取或读回，无模型候选选择。' : selectedDOMOnly() ? '此观察尚无选中项。选择模型选择或动作事件查看。' : '此观察尚无模型决策。选择轨迹中的“模型选择”查看候选。'}</p>`;
   if (tab === "plan") panel.innerHTML = s.plan ? s.plan.subtasks.map(c=>`<article class="plan-card ${s.done.has(c.id)?'complete':''}"><strong>${s.done.has(c.id)?'✓':'○'} ${escape(c.id)}</strong><p>${escape(c.objective)}</p><small>预算 ${c.max_actions} 动作 · 依赖 ${escape(c.depends_on.join(', ') || '无')}</small></article>`).join("") : '<p class="muted">尚未生成有效规划。</p>';
   if (tab === "facts") panel.innerHTML = Object.entries(s.facts).map(([entity,fields])=>`<article class="fact-card"><strong>${escape(entity)}</strong><dl>${Object.values(fields).map(f=>`<dt>${escape(f.field)}</dt><dd>${escape(f.value)}${f.valid?'':' · 无效'}</dd>`).join('')}</dl>${Object.values(fields).map(f=>`<small>${escape(f.source.quote)} · ${escape(f.source.pointer)}</small>`).join('')}</article>`).join('') || '<p class="muted">当前时间点尚未抽取证据。</p>';
   if (tab === "raw") { panel.innerHTML='<pre></pre>'; panel.firstChild.textContent=JSON.stringify(e,null,2); }
   if (tab === "pages") panel.innerHTML=s.pages.map(p=>`<article class="fact-card"><strong>${escape(p.title || '尚未观察内容')}</strong><p>${p.url===s.obs?.url ? '当前页面 · ' : ''}${p.observed ? '已观察' : '仅打开'} · ${escape(p.tabs.length ? p.tabs.join(', ') : '已离开 / 关闭')}</p><small>${escape(p.url)}</small></article>`).join('') || '<p class="muted">尚未记录网页</p>';
   if (!live?.active || !$("follow").checked) showFrame(e.at);
+  renderTargets();
   updateStatus();
   root.querySelectorAll('.event-row').forEach(el=>el.classList.toggle('selected',Number(el.dataset.index)===selected));
 }
@@ -230,10 +236,11 @@ function renderInstructions(event) {
 }
 function renderTargets() {
   const meta=frameMetadata, boxes=meta?.overlays || [], s=state?.events.length ? eventState() : {};
-  const chosen=s.candidates?.find(a=>a.id===s.decision?.choice) || s.action;
-  const selectedRef=chosen?.observation_id === meta?.observation_id ? chosen?.element_ref : null;
+  const chosen=s.targetAction || s.candidates?.find(a=>a.id===s.decision?.choice);
+  const selectedRef=meta?.observation_id && chosen?.observation_id === meta.observation_id ? chosen.element_ref : null;
   $("targets").replaceChildren();
   for(const b of boxes) {
+    if(selectedDOMOnly() && (!selectedRef || b.id!==selectedRef)) continue;
     if(!b.rect || ![b.rect.x,b.rect.y,b.rect.w,b.rect.h,meta.width,meta.height].every(Number.isFinite) || meta.width<=0 || meta.height<=0) continue;
     const box=document.createElement('div'), label=document.createElement('span');
     box.className=`target ${b.editable ? 'editable' : ''} ${b.id===selectedRef ? 'selected' : ''}`;
@@ -244,8 +251,12 @@ function renderTargets() {
     label.textContent=`${b.id}${b.editable ? ' 输入' : ''}`;
     box.append(label); $("targets").append(box);
   }
-  $("targets").hidden=!$("overlays").checked || !boxes.length;
-  $("dom-status").textContent=meta?.observation_id ? `${boxes.length} 个元素 · 编号对应观察记录` : '此帧未记录 DOM 标注';
+  const visible=$("targets").childElementCount;
+  $("targets").hidden=!$("overlays").checked || !visible;
+  $("dom-status").textContent=!$("overlays").checked ? 'DOM 标注已隐藏'
+    : !meta?.observation_id ? '此帧未记录 DOM 标注'
+    : selectedDOMOnly() ? (visible ? `选中 ${selectedRef} · 其他标注已隐藏` : '此帧无匹配的选中 DOM')
+    : `${visible} 个元素 · 编号对应观察记录`;
 }
 function showImage(frame, version="", metadata=null) {
   const url = endpoint("image", {frame, v:version});
@@ -397,6 +408,10 @@ $("example").addEventListener('click',()=>{
   $("prompt").focus();
 });
 $("overlays").addEventListener('change',renderTargets);
+$("dom-mode").addEventListener('change',()=>{
+  try {localStorage.setItem('longseq-dom-mode', $("dom-mode").value);} catch {}
+  renderSelection(); renderTargets();
+});
 $("screenshot").addEventListener('error',()=>{lastImage=''; frameMetadata=null; renderTargets(); $("screenshot").hidden=true; $("empty").hidden=false; $("empty-hint").textContent='截图暂不可用，等待下一帧。';});
 runs().catch(e=>error(e.message));
 launcherStatus();
