@@ -364,3 +364,24 @@ cycle-121 trajectory line 782 记录 `llm_policy` 原请求 156,245 字节，lev
 官方资料：[DS token usage / V4 tokenizer](https://api-docs.deepseek.com/quick_start/token_usage/)、[DS context window](https://api-docs.deepseek.com/quick_start/pricing/)、[Jev 总输入与单头限制](https://docs.typesafe.ai/models)。有界分析保存在 macmini `/tmp/jev-baseline64-context-analysis.json`，原始产物继续留在 Git 外。
 
 macmini 最终完整回归 **914 passed, 3 skipped**，源码及改动测试/安装器 lint、前端语法检查通过。测试覆盖：保护内容超过字节软目标仍可发送，真正 token 超限在 HTTP 前停止，输出预留计入窗口，scoped readback 保留完整证据，Jev 总预算及单头限额，静态 DS Planner 同样受限，缺 tokenizer 明确失败；原字节 API 显式调用的兼容测试保留。旧 CSP overlay 测试已明确切换 all 范围再测几何，同时验证 selected 模式不显示未选择的 DOM。
+
+进一步核查 cycle-120 的实际历史 memory：没有 `additional_source_refs` 膨胀（计数 0）；关键节点中解释摘录合计 3,428 字节，回读 actions 的 source 合计 5,133 字节。应优先压缩旧解释和旧页面引文，而非假设重复出处列表是本次根因。当前值、最近完整关键事实、pending 即时预期及原任务仍保持。上述统计仍只代表邻近历史请求，不能冒充未捕获的 cycle-121 完整投影。
+
+### baseline-65：token 计量修正有效，最终评分未提高
+
+实现 `d69e403` push 后核对 **124 个运行源码/测试/配置文件**，确认 launcher、手动实验及 slot 空闲，在 fresh `saas-longseq-business031-20261008-ds-baseline-65` 自动重跑。compare 与逐字段检查确认原任务、官方 api.deepseek.com / deepseek-flash 全 DS、预算、tuning、resume-03 memory 哈希/原 working_memory 哈希、resume-02 UI checkpoint 都相同；仅本轮 context 实现改变，恢复随机 URL/耗时自然不同。
+
+正式评分有效 **4/15**、strict_success=false；74 actions / 97 cycles，agent **1,780.97 秒**，main report stop=`budget_exhausted: TimeoutError`。setup 99.62 秒、总流程 1,929.09 秒；phase=finished、process_alive=false、cleanup_error=null，launcher 空闲且 slot 容器清空。仍没有符合 memo/date 的 Journal，最后停在未保存 New Journal。cycle-97 的最后 Policy 只有 **18.068 秒 remaining_call_seconds**；trajectory 先记录 ModelCallTimeout / needs_attention，外层最终 report 记录 budget_exhausted / TimeoutError。不能把这两个层级的原因文本混作完整默认 90 秒的 DS 服务故障证据。
+
+**115 次投影，0 context overflow；22 份 Policy 超过旧 48KB 硬限且正常发送。** cycle-32 是 49,216 字节 / 14,126 estimated input token；最大 Policy cycle-76 是 64,317 字节 / 18,781 estimated input token。它们均保留 level=4 / memory_pressure=3 压缩，byte 软目标继续生效。不是通过删除关键事实或停止压缩才绕过旧限制。所有调用均保持官方 DS，全程没有实际 Jev API 调用，Jev 新限额的供应商计量仍未由本轮验证。
+
+| 固定恢复点对照 | 有效评分 / 整项成功 | agent 秒 | HTTP 尝试 | 累计请求 latency 秒 |
+|---|---|---:|---:|---:|
+| baseline-64 | 4/15 / 否 | 1,789.15 | 153 | 1,736.75 |
+| baseline-65 | 4/15 / 否 | 1,780.97 | 115 | 1,721.31 |
+
+本轮 114 份响应全部 stop，无空内容，最后一次超时无响应；35 feedback / 61 policy / 16 input / 3 readback。请求 latency 占 agent 耗时约 **96.7%**，每次尝试平均约 14.97 秒（上轮 11.35 秒）。虽然调用数少约 24.8%，最终同分且耗时仅少约 0.46%，没有整项成功提升证据；单次试验也不能证明调用数差异全由此修改导致。
+
+明显的剩余成本是决策推理：cycle-37 Policy（attempt `2c60e603e2124587b373c376ab93071b`）input=11,586，output=16,956，其中 **reasoning_tokens=16,938**，非推理输出仅 18 token，latency 76.95 秒。来源是实际 response artifact `/data/body/usage/completion_tokens_details`，没有以猜测或链文本替代 usage。这不是 context 到达 1M 的错误；下一项宜分别验证减少 Policy/规划调用、限定简单动作决策的推理量、合并重复查证及剩余依赖管理，继续按最终评分、整项成功和耗时判断。
+
+有界部分报告：macmini `/tmp/jev-baseline65-summary.json`、`/tmp/jev-baseline65-compare64.json`、`/tmp/jev-baseline64-context-analysis.json`。6KB compare 省略了 configuration_differences；上述配置一致性另用所列 manifest 字段核验，不能将省略当作无差异。原请求及运行产物不入 Git。观测入口最终确认 HTTP 200，沿用已有 8768 SSH 隧道；没有重启运行中的 Studio，8767 未动。
