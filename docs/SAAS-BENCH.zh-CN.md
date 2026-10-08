@@ -40,6 +40,38 @@ chromium_headless_shell-1243。0 actions / 0 cycles / 0 model calls，agent 0.41
 Chromium 153.0.8010.12 可用；wrapper 不再自动选择旧的项目 .browsers 目录，
 仅保留操作者显式指定的 PLAYWRIGHT_BROWSERS_PATH。自动重跑使用 fresh baseline-68。
 
+### v1.1 fresh baseline-68 结果
+
+`saas-longseq-business031-20261008-v11-ds-baseline-68/saas-bench-business_031` 已完成
+官方评分与环境清理：**0/15、data_valid=true、strict_success=false**。
+Agent 40 actions / 48 cycles / **414.34 秒**，stop=`needs_attention: readback unresolved;
+no resubmission`。setup 60.78 秒，verification 2.85 秒，总环境流程 511.18 秒，
+cleanup_error=null；launcher 空闲，slot 0 容器清空。132 个运行文件哈希在启动前后均匹配。
+
+54 个实际请求均为官方 DS deepseek-flash：12 feedback / 4 input / 35 policy / 3 readback；
+54 个响应均 stop，0 超时、0 空内容、0 未知 usage，累计 API latency 390.61 秒；
+已知 input 475,289 / output 83,081 tokens。没有耗尽 1800 秒预算，也不是因 context 上限停止。
+
+真实历史请求证明最后一次 Save 的 field_snapshot：Employee=`HR-EMP-00007`、
+Separation Begins On=`2026-06-30`、Company 为空。cycle 42 的可见页面明确显示
+`Missing Values Required / Following fields have missing values: / Company`；
+控制器在 cycle 42 关闭该错误提示，保留原保存 pending（original_action_confirmed=false）。
+cycle 48 的 captured readback 响应为 unknown，随后停止。官方第一项确认不存在目标
+离职记录，其余 7 项全部 FAIL，没有 verifier ERROR。
+
+下一轮 harness 优先级应是“明确表单校验拒绝”与“提交结果未知”的分离：检查提交前的
+可见必填信息，在有可归属、明确未提交的验证反馈时允许纠正字段；真正未知的写入仍禁止
+重放。不能仅凭同页、错误弹窗出现或 Company 为空便推断服务器未发生写入。
+这次仅完成版本迁移和新 baseline，没有改动该业务恢复机制。
+
+compare 验证 task 完全相同，模型/预算/tuning/context 配置/镜像 ID/端口均相同；
+变化为上游 revision、评分器/fixture hash、移除旧兼容补丁、代码 hash，以及 fresh
+episode 不含旧 continuation。与旧版 baseline-66 的 4/15 不能直接作为成功率升降证据。
+Mac mini 有界报告：`/tmp/jev-v11-baseline68-partial-report.json`（5,346 字节）；
+原始请求锚点为 `model-artifacts/695c24a725994ded9632a6c26bb6200a.request.json`
+的 `/data/messages/1/content/last_transition/field_snapshot`，可见错误锚点为
+`trajectory.jsonl` 物理行 224 的 `/observation/text`。真实 run 产物不入 Git。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。
