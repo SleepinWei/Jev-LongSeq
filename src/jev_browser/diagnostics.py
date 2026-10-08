@@ -223,7 +223,9 @@ class Diagnostics:
             'grade_final': final or legacy_final,
             'cleanup': preview(report.get('environment', {})),
             'configuration': {key: preview(manifest.get(key), depth=2) for key in
-                              ('task_id', 'benchmark', 'policy', 'mode', 'models', 'context_limits', 'budget',
+                              ('task_id', 'benchmark', 'benchmark_version', 'upstream_revision',
+                               'fixture_hash', 'verifier_hash', 'upstream_verifier_hash', 'verifier_patch',
+                               'image_ids', 'port_map', 'policy', 'mode', 'models', 'context_limits', 'budget',
                                'tuning', 'code_hash', 'system_prompt_hash', 'continuation')},
             'manifest_status': manifest_status,
             'calls': {'attempts': call_count, 'by_kind': dict(kinds), 'by_model': dict(models),
@@ -343,7 +345,9 @@ class Diagnostics:
         left, right = self.summary(), other.summary()
         current_manifest = self.json('manifest.json')[0] or {}
         baseline_manifest = other.json('manifest.json')[0] or {}
-        keys = ('task_id', 'task_hash', 'benchmark', 'fixture', 'policy', 'mode', 'models',
+        keys = ('task_id', 'task_hash', 'benchmark', 'benchmark_version', 'upstream_revision',
+                'fixture', 'fixture_hash', 'verifier_hash', 'upstream_verifier_hash', 'verifier_patch',
+                'image_ids', 'port_map', 'policy', 'mode', 'models',
                 'context_limits', 'budget', 'tuning',
                 'continuation', 'system_prompt_hash', 'code_hash')
         differences = {key: {'current': preview(current_manifest.get(key)),

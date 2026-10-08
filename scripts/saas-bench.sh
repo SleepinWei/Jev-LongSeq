@@ -11,9 +11,9 @@ if [[ "$(uname -s)" == Darwin ]]; then
   export DOCKER_CONTEXT="${DOCKER_CONTEXT:-colima-saas-bench}"
   export DOCKER_DEFAULT_PLATFORM="${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
 fi
-if [[ -d "$project_dir/.browsers" ]]; then
-  export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$project_dir/.browsers}"
-fi
+# Use the execution host's Playwright cache by default. A project .browsers
+# directory can contain an older revision after a Playwright upgrade. Preserve
+# PLAYWRIGHT_BROWSERS_PATH only when the operator explicitly configured it.
 export PYTHONPATH="$project_dir/src${PYTHONPATH:+:$PYTHONPATH}"
 python_bin="${JEV_PYTHON:-$project_dir/.venv/bin/python}"
 default_env="$HOME/.config/jev-longseq/api.env"

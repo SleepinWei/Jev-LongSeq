@@ -10,6 +10,11 @@
 4. 有需要才逐页读取附近 cycle、官方失败检查、记忆节点或截图索引。
 5. 对照实验用 `compare` 检查任务、模型、预算、代码和恢复 checkpoint 差异。单次续跑成绩不能代表总体成功率，也不能独立证明改动导致提升。
 
+SaaS-Bench 迁移时，summary/compare 同时展示 benchmark_version、upstream_revision、
+fixture_hash、verifier_hash / upstream_verifier_hash、verifier_patch、image_ids、port_map。
+任务正文相同不代表评分或环境相同；跨版本比较必须看这些字段。旧产物未保存版本标签时，
+标签明确为 null，可依据其 upstream_revision 判别，不能补造旧评分证据。
+
 **不要默认读取完整 `/api/run`、`trajectory.jsonl`、`report.json` 或 `memory.json` 到 Codex context。** 原有回放 API 保留给浏览器；诊断接口供按需取证。
 
 ## 从 macmini 查询、导出部分报告

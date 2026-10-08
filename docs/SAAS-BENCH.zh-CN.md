@@ -33,6 +33,13 @@ draft / wrong_amount / wrong_email / missing_gl_posting 各 12/15，wrong_refere
 unlinked_task / extra_exit_activity 各 13/15；验证环境已清理。
 验证产物在 macmini `/tmp/jev-v11-oracle-validation-20261008-01/validation.json`，不入 Git。
 
+首次 fresh `v11-ds-baseline-67` 已评分和清理，但浏览器启动即失败：误设
+`PLAYWRIGHT_BROWSERS_PATH=$PWD/.browsers`，该目录没有当前 Playwright 需要的
+chromium_headless_shell-1243。0 actions / 0 cycles / 0 model calls，agent 0.41 秒，
+官方原始 0/15，不能视作 DS 能力或成功率样本。macmini 默认缓存启动检查确认
+Chromium 153.0.8010.12 可用；wrapper 不再自动选择旧的项目 .browsers 目录，
+仅保留操作者显式指定的 PLAYWRIGHT_BROWSERS_PATH。自动重跑使用 fresh baseline-68。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。

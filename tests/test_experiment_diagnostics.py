@@ -149,6 +149,21 @@ def test_compare_reports_changed_budgets_models_and_checkpoints(tmp_path):
     response = Diagnostics(tmp_path, 'trial').query(view='compare', baseline='baseline')['data']
     assert response['task_equal'] is True
     assert set(response['configuration_differences']) == {'budget', 'models', 'continuation'}
+
+
+def test_same_task_score_comparison_exposes_changed_benchmark_and_oracle(tmp_path):
+    current, baseline = run_fixture(tmp_path), run_fixture(tmp_path, 'baseline')
+    for path, version in ((baseline, 'legacy'), (current, 'v1.1')):
+        manifest = json.loads((path / 'manifest.json').read_text())
+        manifest.update(benchmark_version=version, upstream_revision=f'revision-{version}',
+                        verifier_hash=f'oracle-{version}', fixture_hash=f'fixture-{version}')
+        write_json(path / 'manifest.json', manifest)
+    api = Diagnostics(tmp_path, 'trial')
+    assert api.query()['data']['configuration']['benchmark_version'] == 'v1.1'
+    response = api.query(view='compare', baseline='baseline')['data']
+    assert response['task_equal'] is True
+    assert set(response['configuration_differences']) == {
+        'benchmark_version', 'upstream_revision', 'verifier_hash', 'fixture_hash'}
     assert response['current_grade']['earned'] == 4
 
 
