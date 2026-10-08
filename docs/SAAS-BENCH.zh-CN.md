@@ -97,7 +97,48 @@ baseline-68 的历史 DS 规划知道 Company 为空，却安排“先 Save，�
 远端回归检查通过并 push 后自动在新目录
 `saas-longseq-business031-20261009-v11-ds-baseline-69` 重跑并跟进 grading/cleanup。
 macmini 全量回归 **963 passed / 3 skipped**；关键 lint 通过，131 个运行源码、
-测试及配置文件哈希匹配。新增 24 个拒绝恢复/负例测试，保留未知写入保护。
+测试及配置文件哈希匹配。新增 23 个拒绝恢复/负例测试，保留未知写入保护。
+另在 macmini 用 baseline-68 的真实 event_id 212/224 两条观测（物理行从 1 数为
+213/225）做模拟派发回放，**1 passed**：识别 Company 拒绝、保留 consumed key，
+不确认写入、不重放浏览器动作、要求 fresh planning。证据在
+`/tmp/jev-baseline68-refusal-replay.json`；这只证明历史路径恢复，不是在线 agent 成绩。
+
+baseline-69 已完成官方判分及清理：**4/15（26.7%）、data_valid=true、
+strict_success=false**。三项 PASS 为 Employee Separation（1）、三项正确活动（2）、
+供应商（1）；分录、付款、Twenty tasks/due/body/note 均 FAIL，没有评分器 ERROR。
+Agent 108 actions / 138 cycles / **1797.37 秒**，stop=`budget_exhausted: TimeoutError`。
+最后 cycle138 policy 请求仅剩 **4.87 秒**，是总时间预算截短请求等待，非独立的
+提供方故障证明。setup 157.10 秒，verification 7.41 秒，环境总计 1993.04 秒；
+进程结束、cleanup_error=null、slot0 容器清空、launcher 空闲，运行前后 131 个文件匹配。
+
+162 次请求全部官方 deepseek-flash：41 feedback / 20 input / 92 policy / 9 readback；
+161 个 stop 响应、无空响应，1 个截止超时。累计 API latency 1709.42 秒，
+已知输入 1,871,950 / 输出 371,323 tokens（累计量，不是单请求 context 长度），
+1 次超时 usage 未知。相同任务、版本、fixture/scorer、镜像、模型、预算、tuning、
+context 配置及 fresh/no-continuation；diagnostics compare 的差异只有 code_hash。
+
+| 指标 | baseline-68 | baseline-69 |
+| --- | --- | --- |
+| 有效得分 | 0/15 | 4/15 |
+| 整项成功 | 否 | 否 |
+| Agent 秒数 | 414.34 | 1797.37 |
+| 模型请求数 | 54 | 162 |
+
+**本轮在线没有 form_validation_rejected 事件**：DS 在 Save 前主动查找并选择 Company，
+随后改用完整表单。因此真实观测回放证明原拒绝路径可恢复，在线本轮证明取得 4 分，
+不能把这个单次分数增量归因于拒绝恢复，更不能当作总体成功率提升。
+
+下一项效率缺口有具体证据：cycle131/132 的 input_sequence_discarded（event723/735）
+不是运行中“页面变化取消”，而是在启用时未满足条件。BigCapital vendors/new 的
+event719 观测仍携带 HRMS `fields_dict / refresh_field` 和 localhost:9000 socket 错误；
+browser.errors 为共享历史列表，连续输入却要求 `not obs.errors`，所以旧错误会阻止
+另一页面的批量填写。应单独验证按 tab/文档来源维护当前错误与历史错误的效果，
+保留当前运行错误和未知写入保护，再比较有效评分、strict_success、请求数和耗时。
+这轮没有混入该观察器改动，也没有提高预算。
+
+有界摘要与对照分别保存于 macmini `/tmp/jev-v11-baseline69-summary.json`、
+`/tmp/jev-v11-baseline69-vs68.json`；部分报告
+`/tmp/jev-v11-baseline69-partial-report.json`（6,131 字节）。真实 run 与报告不入 Git。
 
 ## 运行范围
 
