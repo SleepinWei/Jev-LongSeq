@@ -198,6 +198,40 @@ navigation_checkpoint 4、action_readback 2（另有一次修复），阶段间�
 有界最终摘要及对照保存在 macmini `/tmp/jev-hybrid71-final-summary.json`、
 `/tmp/jev-hybrid71-vs70.json`。原始运行记录与凭据不入 Git。
 
+### hybrid-72：页面错误来源与有限恢复
+
+hybrid-71 的历史 DS 请求在 cycle32 明确包含空的、可编辑的 Company，但规划回答
+要求 `leave Company blank (not requested)`。员工选项点击后 cycle33 首次出现
+fields_dict / refresh_field JS 错误；cycle36 的 Edit Full Form 成功派发，cycle38
+员工及日期已经带入完整表单，Company 则为空的只读显示（DOM required=false）。
+旧 guard 没有检查 required，也没有错误来源关联，就在新规划前终止。
+required=false 不证明 Company 在业务上可选；此前服务器明确拒绝缺 Company 的保存。
+历史错误缺少 stack/tab/时间关联，不能证明完整表单已经不可恢复。
+
+本轮先单独验证错误生命周期与早停修复，保留 DS 原规划提示、Jev 模型、任务、
+fresh/no-checkpoint 和所有预算。Company 工作流依赖提示列为后续独立实验，
+避免把多项改动的一次分数变化分别声称为有效。
+
+新浏览器错误保存 tab、URL、主框架导航 epoch、时间和 stack；仅当前 tab/URL/epoch
+的错误进入 observation.errors。历史错误不删除，来源可通过 diagnostics 的 spans
+中 browser.error 记录按需展开；同 URL 重载和新出现的相同错误独立记录。
+恢复 acknowledgement 只退役当前页面已经观察的错误，不跨 tab 清除。
+无法重建来源的旧/人工输入错误仍保守保留，不补造来源。
+
+空的只读显示不再直接推导为致命必填故障。当前页面同时出现已观测必填的空只读
+字段和相关 JS 错误时，最多等待两次新观测，然后要求新 scope 规划，允许最多
+6 个有效动作或规划完成后 60 秒的恢复窗口；受原全局预算约束。未知/待确认写入
+仍先走原读回机制，禁止重放。字段恢复只证明当前 UI 症状解除，不确认业务保存；
+仍有该症状时拒绝 Finish。规划 timeout/cooldown 不算有效恢复。
+
+回归包括真实 JS 异常的跨 tab/路由/同 URL 重载隔离、相同异常再发生、跨 tab
+acknowledgement、非必填显示不早停、恢复次数与时限、pending 不被解除，以及
+通过真实可见输入刷新派生字段。在线有效性须以 hybrid-72 的官方有效分数、
+strict_success、耗时和执行组完成数判断，不能把不再提前报错当作成功率提升。
+
+运行前 macmini 全量回归 **1003 passed / 3 skipped**、本轮源码和测试 Ruff 通过；
+133 个源码/测试/配置文件哈希匹配。推送后自动启动新目录 hybrid-72。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。

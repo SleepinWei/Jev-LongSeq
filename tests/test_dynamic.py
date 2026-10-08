@@ -1048,7 +1048,7 @@ async def test_local_readback_does_not_confirm_ambiguous_hidden_or_unknown_input
     assert agent.pending
 
 
-async def test_repeated_save_remains_blocked_and_runtime_failure_stops_before_models():
+async def test_repeated_save_remains_blocked_while_runtime_symptoms_allow_review():
     class Backend:
         calls = 0
 
@@ -1066,7 +1066,11 @@ async def test_repeated_save_remains_blocked_and_runtime_failure_stops_before_mo
     obs.elements.append(Element(id='company', role='status', name='Company', required=True,
                                read_only=True, enabled=False))
     obs.errors = ["page_error:Cannot read properties of undefined (reading 'fields_dict')"]
-    assert 'Company' in agent.blocked(obs)
+    assert agent.blocked(obs) is None
+    assert agent.runtime_fields(obs) == ['Company']
+    pending = agent.pending.copy()
+    assert agent.runtime_recovery_step(obs)[0] is None
+    assert agent.pending == pending and backend.calls == 1
 
 
 def archived_quote(agent, quote, *, key='old'):

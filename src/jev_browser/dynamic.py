@@ -1135,6 +1135,7 @@ class DynamicController(Controller):
         # Ephemeral provenance, never restored across browser sessions. A field
         # option is reversible only when reached through an observed query UI.
         self.query_controls = {}
+        self.runtime_recoveries = {}  # One bounded attempt per live document/route; never restored.
 
     def input_suppression(self, obs):
         scope = digest([semantic_key(obs), self.memory.feedback.get("next_goal"),
@@ -1790,14 +1791,50 @@ class DynamicController(Controller):
             return "current origin is not authorized"
         if obs.challenge or "unsupported_iframe" in obs.errors:
             return "access challenge or unsupported iframe"
-        broken = [e.name for e in obs.elements if e.read_only and not e.value.strip()]
-        if broken and any(e.startswith("page_error:") and any(
-                marker in e for marker in ("fields_dict", "refresh_field")) for e in obs.errors):
-            return "required derived fields are blank after UI runtime failure: " + ", ".join(broken)
         if not all_checks(self.task.invariants, self.memory, obs):
             self.violations.append("task invariant failed")
             return "hard constraint violated"
         return None
+
+    def runtime_fields(self, obs):
+        """A symptom requiring review, not proof of irreversible application failure."""
+        if not any(error.startswith("page_error:") and any(
+                marker in error for marker in ("fields_dict", "refresh_field")) for error in obs.errors):
+            return []
+        return [element.name for element in obs.elements
+                if element.required and element.read_only and not element.value.strip()]
+
+    def runtime_recovery_step(self, obs):
+        key = (obs.tab_id, obs.url, obs.document_id)
+        fields = self.runtime_fields(obs)
+        recovery = self.runtime_recoveries.get(key)
+        if not fields:
+            if recovery and not recovery.get("resolved"):
+                recovery["resolved"] = True
+                self.log("runtime_recovery_resolved", scope=list(key),
+                         business_commit_confirmed=False, action_replayed=False)
+            return None, recovery
+        # An uncertain dispatch/commit must go through its existing readback first.
+        if self.pending or self.memory.pending_writes:
+            return None, recovery
+        if recovery is None:
+            recovery = self.runtime_recoveries[key] = {"fields": fields, "waits": 0,
+                                                      "planned": False, "resolved": False}
+            self.log("runtime_recovery_started", scope=list(key), fields=fields,
+                     pending_preserved=True, business_commit_confirmed=False)
+            self.cancel_execution_groups("required blank fields need fresh runtime review")
+            self.cancel_input_sequence("required blank fields need fresh runtime review")
+        if recovery["waits"] < min(2, self.budget.loading_waits):
+            recovery["waits"] += 1
+            return "wait", recovery
+        if not recovery["planned"]:
+            self.fresh_scope_required = True
+            self.memory.feedback["complete"] = False
+            return "review", recovery
+        if (recovery.get("resolved") or self.effective_actions - recovery["action_start"] >= 6
+                or time.monotonic() - recovery["started"] >= 60):
+            return "stop", recovery
+        return None, recovery
 
     async def perform(self, action, obs):
         handoff = self.memory.feedback.get("planning_handoff")
@@ -3298,6 +3335,18 @@ class DynamicController(Controller):
                     self.ui_review_due = False
                 elif self.last_brain_location is not None and planning_location(obs) != self.last_brain_location:
                     trigger = "navigation_checkpoint"
+            runtime_step, runtime_recovery = self.runtime_recovery_step(obs)
+            if runtime_step == "stop":
+                return self.result("needs_attention", "required read-only fields remain blank after bounded "
+                                   "runtime recovery: " + ", ".join(self.runtime_fields(obs)))
+            if runtime_step == "wait":
+                waiting = self.internal_action(obs, Operation.WAIT)
+                waiting.description = "Wait for required derived field refresh (bounded runtime recovery)"
+                if reason := await self.perform(waiting, obs):
+                    return self.result("needs_attention", reason)
+                continue
+            if runtime_step == "review":
+                trigger = "ui_checkpoint"
             evidence_keys = frozenset(self.memory.evidence)
             if evidence_keys != previous_evidence:
                 visits.clear()
@@ -3321,6 +3370,11 @@ class DynamicController(Controller):
                 "actions_remaining": self.budget.max_actions - self.actions,
                 "same_value_inputs_suppressed": list(self.input_noops.values())
                     if self.input_suppression(obs) else [],
+                **({"runtime_recovery": {"required_blank_readonly_fields": self.runtime_fields(obs),
+                    "scope": "current observed UI only; not proof of failed or successful save",
+                    "guidance": "Inspect current visible dependencies and plan a bounded repair; "
+                                "never replay an uncertain write or invent a field value."}}
+                   if self.runtime_fields(obs) else {}),
             }
             if (self.effective_actions - self.last_brain_action >= self.budget.brain_interval
                     and (not self.pending or not self.pending.get("stage_readback_reviewed"))):
@@ -3330,6 +3384,11 @@ class DynamicController(Controller):
                     self.pending["stage_readback_reviewed"] = True
                 self.log("brain_requested", reason=trigger)
                 assessment = await self.review(obs, phase=trigger)
+                if runtime_step == "review" and assessment._planning_result == "applied":
+                    runtime_recovery.update(planned=True, started=time.monotonic(),
+                                            action_start=self.effective_actions)
+                    self.log("runtime_recovery_plan_applied", fields=self.runtime_fields(obs),
+                             max_actions=6, max_seconds=60, business_commit_confirmed=False)
                 if trigger == "no_progress" and assessment._planning_result == "applied":
                     recovered_states.add(signature)
                     self.log("recovery_plan_applied", signature=signature)
@@ -3474,6 +3533,11 @@ class DynamicController(Controller):
                 fresh = await self.observe_dynamic(finish=True)
                 if reason := self.blocked(fresh):
                     return self.result("needs_attention", reason)
+                if self.runtime_fields(fresh):
+                    self.memory.feedback["complete"] = False
+                    trigger = "ui_checkpoint"
+                    self.log("completion_rejected", reason="required fields need runtime recovery")
+                    continue
                 verdict = await self.review(fresh, phase="finish")
                 if (
                     verdict.complete

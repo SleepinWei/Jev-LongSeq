@@ -390,7 +390,10 @@ class PlaywrightBackend:
     ):
         self.task, self.headless, self.timeout_ms, self.output = task, headless, timeout_ms, output
         self.errors: list[str] = []
-        self.recovered_error_count = 0
+        self.error_sources: dict[int, dict] = {}
+        self.recovered_errors: set[int] = set()
+        self.last_error_indices: set[int] = set()
+        self.page_epochs: dict = {}
         self.pages = {}
         self.handles = {}
         self.last: Observation | None = None
@@ -443,16 +446,54 @@ class PlaywrightBackend:
         if allowed_url(route.request.url, self.task) and not self.task.sandbox:
             await route.continue_()
         else:
-            self.errors.append(f"blocked_request:{route.request.url}")
+            try:
+                page = route.request.frame.page
+            except Error:
+                page = None  # Requests without a frame cannot be attributed to a tab.
+            self._record_error(f"blocked_request:{route.request.url}", page)
             await route.abort("blockedbyclient")
 
     def _register(self, page):
         if page in self.pages.values():
             return
         self.pages[f"tab-{len(self.pages)}"] = page
+        self.page_epochs[page] = 0
         page.on("response", self._response)
-        page.on("pageerror", lambda error: self.errors.append(f"page_error:{str(error)[:300]}"))
+        page.on("framenavigated", lambda frame: self._error_navigation(page, frame))
+        page.on("pageerror", lambda error: self._record_error(
+            f"page_error:{str(error)[:300]}", page, stack=str(getattr(error, "stack", ""))[:2000]))
         page.on("dialog", self._dialog)
+
+    def _error_navigation(self, page, frame):
+        if frame == page.main_frame:
+            self.page_epochs[page] = self.page_epochs.get(page, 0) + 1
+
+    def _record_error(self, message, page, *, stack=""):
+        index = len(self.errors)
+        self.errors.append(message)
+        source = {"message": message, "tab_id": next(
+            (key for key, value in self.pages.items() if value == page), None),
+            "url": page.url if page else None, "navigation_epoch": self.page_epochs.get(page),
+            "sequence": index, "stack": stack}
+        self.error_sources[index] = source
+        # Historical provenance remains queryable through bounded diagnostics spans.
+        if self.observer:
+            with self.observer.span("browser.error", **source):
+                pass
+
+    def _active_error_indices(self, url):
+        tab_id = next(key for key, page in self.pages.items() if page == self.page)
+        for index, message in enumerate(self.errors):
+            if index in self.recovered_errors and message.startswith("page_error:"):
+                continue
+            source = self.error_sources.get(index)
+            # Directly supplied legacy/test errors have no reconstructable provenance.
+            if source and source["message"] == message and (
+                source["tab_id"] != tab_id or source["url"] != url
+                or source["navigation_epoch"] != self.page_epochs.get(self.page)
+            ):
+                continue
+            yield index
 
     def _response(self, response):
         request = response.request
@@ -551,6 +592,7 @@ class PlaywrightBackend:
     def _observation(self, raw, elements):
         tab_id = next(k for k, p in self.pages.items() if p == self.page)
         text = raw["text"].casefold()
+        error_indices = set(self._active_error_indices(raw["url"]))
         obs = Observation(
             observation_id=uuid.uuid4().hex,
             tab_id=tab_id,
@@ -564,21 +606,22 @@ class PlaywrightBackend:
             dialogs=raw["dialogs"],
             loading=raw["loading"],
             http_status=self.navigation_status.get(self.page, (None, None))[1],
-            errors=error_view([e for i, e in enumerate(self.errors)
-                               if i >= self.recovered_error_count or not e.startswith("page_error:")]),
+            errors=error_view([self.errors[i] for i in sorted(error_indices)]),
             challenge=any(s in text for s in ("verify you are human", "captcha", "access denied")),
             tabs={k: p.url for k, p in self.pages.items() if not p.is_closed()},
         )
         if raw["visible_frames"]:
             obs.errors.append("unsupported_iframe")
         self.last = obs
+        self.last_error_indices = error_indices
         return obs
 
     def acknowledge_runtime_recovery(self, obs):
         """Retire only the already reconciled exceptions; the raw error archive stays intact."""
         if not self.last or self.last.observation_id != obs.observation_id:
             raise ValueError("runtime recovery must refer to the current observation")
-        self.recovered_error_count = len(self.errors)
+        self.recovered_errors.update(index for index in self.last_error_indices
+                                     if self.errors[index] in obs.errors)
 
     async def execute(self, action: Action) -> Receipt:
         started = time.monotonic()
