@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 
 BUSINESS_031_UPSTREAM_SHA256 = "492de1bd54adbc654daee1c00159884db99bc41fa7a28c420ae5a70422752df2"
+BUSINESS_031_V11_UPSTREAM_SHA256 = "1c72c1319e3251f1c2b2a415715442e99ca4018770e47b400f67054646597189"
 BUSINESS_031_PATCH = "business_031-bigcapital-schema-v1"
 
 
@@ -19,7 +20,12 @@ def verifier_source(task):
     original = Path(task["verify_py_path"]).read_text()
     if task["task_id"] != "business_031":
         return original, original, None
-    if hashlib.sha256(original.encode()).hexdigest() != BUSINESS_031_UPSTREAM_SHA256:
+    source_hash = hashlib.sha256(original.encode()).hexdigest()
+    # v1.1 fixes the schema queries upstream and strengthens the official checks.
+    # Execute it verbatim; the legacy substitutions must never touch this oracle.
+    if source_hash == BUSINESS_031_V11_UPSTREAM_SHA256:
+        return original, original, None
+    if source_hash != BUSINESS_031_UPSTREAM_SHA256:
         raise ValueError("business_031 verifier version changed; re-audit schema compatibility patch")
     effective = original.replace(
         "OR CONTACT_NORMAL_NAME = 'ananya reddy - ex employee' ",

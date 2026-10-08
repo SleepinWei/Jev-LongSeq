@@ -185,6 +185,34 @@ async def test_partial_start_failure_still_cleans_owned_containers(environment):
     assert report["environment"]["setup_s"] > 0
 
 
+async def test_v11_uses_official_oracle_without_compatibility_copy(environment, monkeypatch):
+    from pathlib import Path
+
+    args, events, _, output = environment
+    task = saas.selected_tasks(args, saas.checkout(args))[0]
+    official = Path(__file__).parent / "fixtures/saas_bench/business_031_v11_verify.py"
+    task.update(task_id="business_031", verify_py_path=str(official))
+    loader, slots, _ = saas.upstream(saas.checkout(args))
+
+    def verify(effective_task, *args):
+        events.append("verify")
+        assert effective_task is task
+        assert effective_task["verify_py_path"] == str(official)
+        return verification(True)
+
+    monkeypatch.setattr(saas, "upstream", lambda root: (loader, slots, SimpleNamespace(run_verify=verify)))
+    monkeypatch.setattr(saas, "command", lambda *args: SimpleNamespace(
+        stdout="aaa042140b585f80ad531bc8c9af296581426873"))
+    report = await saas.run_saas(args, {"id": "business_031"}, output)
+    assert events == ["start", "agent", "verify", "stop"]
+    manifest = report["manifest"]
+    assert manifest["benchmark_version"] == "v1.1"
+    assert manifest["verifier_patch"] is None
+    assert manifest["verifier_hash"] == manifest["upstream_verifier_hash"]
+    assert report["grade"]["source"] == "SaaS-Bench official verify.py"
+    assert not (output / "verifier.compat.py").exists()
+
+
 def test_startup_configuration_isolated_selected_override():
     apps = {"twenty": {"startup_wait": 360}, "hrms": {"startup_wait": 600}, "other": {}}
     default, waits = saas.startup_configuration(apps, ["twenty"])

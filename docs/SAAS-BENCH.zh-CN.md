@@ -1,8 +1,37 @@
 # SaaS-Bench 接入
 
 执行机器为 `ssh macmini`，项目在 `/Users/octopusz/CodeProjects/Jev-LongSeq`。
-上游 checkout 在 `/Users/octopusz/SaaS-Bench`，部署版本为
-`48c22deb18b98c0ed78f81e7f3be82bc162de2c8`。
+默认使用独立的 v1.1 checkout `/Users/octopusz/SaaS-Bench-v1.1`，固定提交为
+`aaa042140b585f80ad531bc8c9af296581426873`。
+旧 checkout `/Users/octopusz/SaaS-Bench` 继续保留在
+`48c22deb18b98c0ed78f81e7f3be82bc162de2c8`，供历史实验复核；重跑旧版须显式传入
+`--saas-root /Users/octopusz/SaaS-Bench`。
+
+### v1.1 迁移与新 baseline
+
+business_031 的 description/meta 与旧版一致，但官方评分器已变更：精确活动数量、
+供应商名称/显示名、付款对象及 reference、总账入账、Twenty 工作区和公司关联、日期与正文。
+现有 BigCapital 字段兼容修复已在上游完成。经哈希审核的 v1.1 oracle 原样运行，
+`verifier_patch=null`，original/effective verifier hash 相同。未知评分器版本仍会拒绝执行，
+旧版只应用原有两处字段兼容替换。manifest/preflight 记录 `benchmark_version` 和精确 SHA。
+
+升级采用完整新 episode，不把旧 memory/UI checkpoint 带入 v1.1，也不放松恢复环境校验。
+这是明确的版本迁移；旧版续跑成绩与 v1.1 从头运行不能直接归因为 harness 改善。
+保持官方 DS `deepseek-flash` 全 DS、600 actions / 600 cycles / 1800 秒、
+1000 feedback / 4 planner / 250 candidates / brain_interval=12，使用 fresh 输出目录。
+首轮保持 baseline-66 的 `POLICY_MEMORY_MODE=stage_index_v1`，仅为减少配置差异，
+不表示该实验已证明有效，也不改变生产默认 `legacy`。
+
+评分器迁移先在独立 slot 98 上检查真实数据库 fixture：完整状态 15/15，未完成、
+草稿、金额/邮箱/reference 错误、缺少 GL、未关联公司及多余离职活动应失分。
+这些 fixture 只验证评分器，不是 agent 成绩，不向模型提供答案或数据库访问。
+v1.1 agent baseline 必须另外经过官方 grading 和 cleanup。
+
+2026-10-08 迁移检查：macmini 全量回归 **939 passed / 3 skipped**，关键错误 lint 通过。
+slot 98 真实官方 oracle 的 9 个 case 全部匹配预期：initial 0/15、complete 15/15、
+draft / wrong_amount / wrong_email / missing_gl_posting 各 12/15，wrong_reference /
+unlinked_task / extra_exit_activity 各 13/15；验证环境已清理。
+验证产物在 macmini `/tmp/jev-v11-oracle-validation-20261008-01/validation.json`，不入 Git。
 
 ## 运行范围
 
@@ -191,7 +220,7 @@ ssh -N -L 8768:127.0.0.1:8768 macmini
 ```bash
 .venv/bin/python scripts/install_studio_service.py --port 8768 \
   --env-file "$PWD/.env" --ultrafast-root "$PWD/external/jev-ultrafast" \
-  --saas-root "$HOME/SaaS-Bench"
+  --saas-root "$HOME/SaaS-Bench-v1.1"
 ```
 
 安装器会在有活动任务时拒绝重启。原 `~/LongSeq` 部署和 8767 端口不参与此次接入。

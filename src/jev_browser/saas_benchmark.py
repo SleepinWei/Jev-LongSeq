@@ -26,6 +26,10 @@ from .run_status import register_phase
 from .saas_verifier import verifier_source
 
 DEFAULT_TASKS = ["business_023", "business_031"]
+UPSTREAM_RELEASES = {
+    "48c22deb18b98c0ed78f81e7f3be82bc162de2c8": "legacy-20260810",
+    "aaa042140b585f80ad531bc8c9af296581426873": "v1.1",
+}
 
 
 def add_options(parser):
@@ -169,6 +173,7 @@ def _preflight(args):
         if revision.returncode:
             raise ValueError("SaaS-Bench must be a versioned Git checkout")
         report["upstream_revision"] = revision.stdout.strip()
+        report["benchmark_version"] = UPSTREAM_RELEASES.get(report["upstream_revision"], "unmapped")
         report["root"] = str(root)
         report["docker_context"] = os.environ.get("DOCKER_CONTEXT", "default")
         report["slot_prefix"] = slots._SLOT_PREFIX
@@ -238,12 +243,14 @@ def grade_result(verification):
     # Upstream verifiers catch SQL/runtime errors and sometimes emit ordinary
     # FAIL + rc=1. These are unavailable checks, not evidence of agent failure.
     verifier_errors = [c for c in verification.get("checks", [])
-                       if re.match(r"\s*(exception|error)\s*:", str(c.get("detail", "")), re.I)]
+                       if c.get("status") == "ERROR"
+                       or re.match(r"\s*(exception|error)\s*:", str(c.get("detail", "")), re.I)]
     valid = (
         verification.get("status") in {"PASS", "FAIL"}
         and verification.get("returncode") in {0, 1}
         and verification.get("total", 0) > 0
         and bool(verification.get("checks"))
+        and not verification.get("has_errors", False)
         and not verifier_errors
     )
     passed = (
@@ -302,6 +309,7 @@ async def run_saas(args, selected, output):
         "upstream_revision": revision,
         "suite": "saas-bench",
         "benchmark": "SaaS-Bench",
+        "benchmark_version": UPSTREAM_RELEASES.get(revision, "unmapped"),
         "task_id": task["task_id"],
         "task_hash": digest(prompt),
         "fixture_hash": digest(

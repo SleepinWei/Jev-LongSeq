@@ -3,7 +3,7 @@
 set -euo pipefail
 project_dir="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-export SAAS_BENCH_ROOT="${SAAS_BENCH_ROOT:-$HOME/SaaS-Bench}"
+export SAAS_BENCH_ROOT="${SAAS_BENCH_ROOT:-$HOME/SaaS-Bench-v1.1}"
 export SAAS_SLOT_PREFIX="${SAAS_SLOT_PREFIX:-jevsaas}"
 export SAAS_BASE_PORT="${SAAS_BASE_PORT:-31000}"
 export JEV_ULTRAFAST_ROOT="${JEV_ULTRAFAST_ROOT:-$project_dir/external/jev-ultrafast}"
