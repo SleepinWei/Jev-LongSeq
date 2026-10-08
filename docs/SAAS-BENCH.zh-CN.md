@@ -269,6 +269,30 @@ hybrid-73 运行前 macmini 全量 **1012 passed / 3 skipped**；测试导入格
 相关回归 **32 passed**，修改文件 Ruff 通过。134 个源码/测试/配置哈希核验一致，
 按 push-before-benchmark 流程推送后自动启动全新目录。
 
+hybrid-73（`80147d7`）已评分和清理：**0/15、data_valid=true、strict_success=false**，
+64 actions / 75 cycles、agent **382.71 秒**，setup 87.87 秒、verification 2.96 秒，
+总流程 505.20 秒，cleanup_error=null，launcher 空闲、slot 0 清空；134 文件运行前后
+哈希一致。101 请求：DS 21 planning、5 input、3 readback，Jev 72；累计 latency
+341.39 秒，无 API timeout。2 次 execution_groups_armed、1 次 completed；
+runtime_recovery_started 和 form_validation_rejected 都为 0。
+
+最终停止仍为 `readback unresolved; no resubmission`。最后保存规划的历史请求
+（cycle68 / attempt `47c92cf5c9594cfa88ae42b83fd2977a`）确实包含
+workflow_dependencies，Company 出现在空只读控件提示中，但 visible_required_fields
+和 prior_refusals 都为空：本轮 DOM 未提供必填标记，也没先出现 quick-entry 的明确拒绝。
+DS 仍规划直接 Save，草稿未获保存确认，评分为 0。不能将之前另一轮的校验拒绝当成
+本轮可用证据注入给 agent，也不能仅凭 Not Saved 推定保存请求被服务器拒绝。
+
+两项实验都**没有提高官方有效得分或整项成功**。73 相比 72 更快但缺少那 4 次
+API timeout，不能把全部耗时差异归因于规划提示，也不能把更快早停当作业务效率提升。
+当前缺口是 link/派生字段的解析验收与提交前置条件仍没有结构化执行契约：仅把
+Company 空值作为提示，无法阻止规划跳过它。后续应验证源字段→派生字段的有来源
+依赖/验收条件与针对性的 UI 修复，分别衡量最终评分、整项成功和时间，避免继续
+堆提示或预算。未把本轮结果宣称为成功率改善。
+
+部分报告：macmini `/tmp/jev-hybrid73-final-summary.json`、`/tmp/jev-hybrid73-vs72.json`；
+每份都由 bounded diagnostics 生成，原始运行产物不入 Git。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。
