@@ -58,3 +58,34 @@ async def test_only_length_escalates_one_repair_without_releasing_pending(failur
         assert agent.memory.pending_writes[pending["key"]] is pending
         assert agent.consumed == {pending["key"]} and not agent.memory.confirmed_writes
         agent.backend.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("cursor,accepted", [(None, True), (0, False), (1, False), ("null", False)])
+async def test_non_list_null_cursor_needs_no_repair_and_cannot_authorize_pagination(cursor, accepted):
+    from pydantic import ValidationError
+    from jev_browser.memory import Memory
+
+    task = Task(id="cursor", sandbox=True, control_mode="dynamic", objective="Inspect the visible menu")
+    obs = Observation(observation_id="current", document_version="v2", url="about:blank", tab_id="tab",
+                      title="Menu", text="Employee Separation")
+    calls = []
+
+    def respond(request):
+        context = json.loads(json.loads(request.content)["messages"][1]["content"])
+        calls.append(context)
+        assert set(context["schema"]["properties"]) == {"last_outcome", "evidence_ids"}
+        ref = next(iter(context["readback_evidence"]))
+        return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content":
+            json.dumps({"last_outcome": "confirmed", "evidence_ids": [ref], "next_cursor": cursor})}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        brain = JsonFeedback(ModelTransport("https://test.example", "test", "test", client=client))
+        transition = {"dispatch_status": "ok", "action": {"operation": "click"}}
+        if accepted:
+            result = await brain.readback(task, obs, Memory(), transition)
+            assert result.last_outcome == "confirmed" and result.readback_quote == obs.text
+            assert result._readback_next_cursor is None and result._local_readback
+        else:
+            with pytest.raises(ValidationError):
+                await brain.readback(task, obs, Memory(), transition)
+        assert len(calls) == 1

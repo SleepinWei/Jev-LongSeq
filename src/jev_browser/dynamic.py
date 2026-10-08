@@ -928,7 +928,13 @@ class JsonFeedback:
         choice = data["choices"][0]
         if choice.get("finish_reason") == "length":
             raise ValueError("readback response truncated")
-        result = review_schema.model_validate_json(choice["message"]["content"])
+        response = json.loads(choice["message"]["content"])
+        # Some providers include the list schema's optional null cursor even
+        # for a non-list receipt. It carries no pagination or behavioral choice;
+        # accept only that exact null, retaining all other strict schema checks.
+        if not packet and isinstance(response, dict) and response.get("next_cursor", False) is None:
+            response.pop("next_cursor")
+        result = review_schema.model_validate(response)
         if packet and result.next_cursor is not None and (
                 result.next_cursor != packet["list_evidence"]["next_cursor"]
                 or result.last_outcome == "confirmed"):

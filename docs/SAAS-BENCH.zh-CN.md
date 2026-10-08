@@ -157,6 +157,25 @@ api.typesafe.ai 的 Jev（jev-latest），大脑仍是官方 DS deepseek-flash�
 于执行组；真实分组事件、官方有效评分、strict_success、耗时与请求数需分别报告。
 输出目录 `saas-longseq-business031-20261009-v11-hybrid-70`，真实产物不入 Git。
 
+执行组实现的 macmini 全量回归 **992 passed / 3 skipped**，关键 lint 通过，
+132 个源码/测试/配置哈希匹配，提交 `f72f74f` 已推送。真实渲染表单测试以一次
+模拟 DS 规划、5 个 Jev 格式请求完成 3 组填值/原生下拉/Save，0 次输入辅助请求；
+最后 Save 仍待独立读回。此测试不使用真实模型，不能当作 benchmark 成绩。
+
+hybrid-70 已官方评分和清理：**0/15、data_valid=true、strict_success=false**，
+14 actions / 18 cycles / agent **73.55 秒**。17 次 Jev、5 次 DS 规划、1 次 DS input、
+2 次 DS readback，API latency 合计 65.51 秒。真实有 3 个 execution_groups_armed，
+但都在检查点或值变化处取消，**没有 execution_group_completed**，不能声称在线
+执行组成功或有效成功率提升。
+
+cycle18 的首次普通 readback 实际答案包含 confirmed、4 个当前 evidence_ids，
+但额外携带 `next_cursor:null`，被非列表 schema 的 extra_forbidden 拒绝。
+格式修复仍使用 4096 输出额度，第二次 finish_reason=length、content 为空，
+故 needs_attention 早停并保留 pending。没有耗尽总预算或 context。
+下一轮 hybrid-71 仅兼容非列表回答的确切空 cursor：丢弃无行为含义的 null 元数据，
+非空 cursor、其他额外字段、旧证据、缺少证明和截断响应仍拒绝。
+这避免无效的格式重试，不提升 confirmed 或释放未知写入；模型和全局预算不变。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。
