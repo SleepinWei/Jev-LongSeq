@@ -353,9 +353,11 @@ cycle-121 trajectory line 782 记录 `llm_policy` 原请求 156,245 字节，lev
 | context_view | 1,652 | 压缩表/default/ref 的解码约定；目前有实际结构压缩，不能只删约定。后续可评估合并重复约定。 |
 | candidates + decision_schema | 1,272 | 821 + 451；候选已缩页，此项很小，继续缩减收益有限且可能损失动作可达性。 |
 | hard_constraints | 106 | 权限/范围约束，保留。 |
-| HTTP 封装、JSON 键及消息转义差额 | 7,987 | 51,990 减去以上 44,003；属于字节传输计量，不等于模型额外看到了 7,987 字符的业务内容。 |
+| 系统指令、JSON 键、消息封装/转义差额 | 7,987 | 51,990 减去以上 44,003；含 Policy 系统规则及外层序列化，不等于额外 7,987 字符的业务正文。 |
 
 **证据限制：拒绝后的完整投影未捕获。** 上表来自当时的投影指标；不能从最新 memory 或邻近请求伪造 cycle-121 的精确 token 数或子字段组成。进一步按实际历史输入检查：cycle-120 captured Feedback 的 memory 中 key_nodes 14,988 字节（41 条）、current_environment_readbacks 8,928、write_checkpoints 4,122、opened_pages 2,918、history_for_context 1,785、working_memory 1,466。cycle-119 captured Policy 更接近压缩后的视图：历史关键节点表 4,104、最近完整关键节点 2,088、回读 4,575、检查点 3,206、页面 1,969、history 1,185、working_memory 536。它们说明主要压缩方向在结构化证据历史，不能据此声称这些数字就是 cycle-121 的 26,869 子项。
+
+cycle-119 captured Policy 的系统正文是 3,456 UTF-8 字节（JSON 字符串计量 3,466），7 个 user 顶层键/分隔结构为 152，其他 chat 封装为 136。以相同未改动的 JsonPolicy 封装解释 cycle-121，7,987 差额中剩余 4,233 是外层消息字符串转义；这是由相同封装与已记录 section 数值推导，不是恢复完整被拒绝内容。系统规则涉及动作约束和 outcome 查证，应保留；外层转义在服务端解析时解除，不能作为需要删业务信息的理由。
 
 恢复 captured artifact 内消息的紧凑 JSON 后，cycle-119 恢复体积与日志 **41,466 字节完全一致**，官方 usage **12,831 input token**，V4 离线估算 **12,929**；cycle-120 则为 **80,935 字节完全一致**、官方 **23,417 input token**、离线估算 **23,515**。离线计数含保守封装预留，均比真实 usage 多 98 token。这两个例子确认字节限制过于保守，也验证该 tokenizer 对当前文本调用的实用计量；并不证明所有未来请求都只差 98 token。
 
