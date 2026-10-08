@@ -24,6 +24,7 @@ from .context_budget import (
 from .memory import Memory
 from .observability import ModelCallTimeout, ResourceLimit, payload_sizes
 from .protocol import Action, Contract, Decision, Observation, Plan, Task, digest, now
+from .token_budget import chat_token_budget, jev_token_budget
 
 SYSTEM = (
     "You control a browser through a finite list of bound actions. Follow the trusted task and "
@@ -151,6 +152,8 @@ class ModelTransport:
         return record
 
     async def post(self, payload: dict, kind: str) -> dict:
+        token_metrics = {}
+        budget = chat_token_budget(self.endpoint, self.model, kind) if "messages" in payload else None
         if self.required_goal is not None:
             context = payload.get("state")
             if context is None:
@@ -169,7 +172,9 @@ class ModelTransport:
             if maximum <= 0:
                 raise ValueError(f"{variable} must be positive")
             try:
-                payload, metrics = project_chat_request(payload, max_bytes=maximum, purpose=kind)
+                payload, metrics = project_chat_request(
+                    payload, max_bytes=maximum, purpose=kind,
+                    token_budget=budget)
             except ContextBudgetExceeded as exc:
                 if self.observer:
                     self.observer.append("context-projections.jsonl", {
@@ -178,6 +183,15 @@ class ModelTransport:
             if self.observer:
                 self.observer.append("context-projections.jsonl", {
                     **self.observer.context, **metrics, "status": "projected"})
+            token_metrics = {k: metrics[k] for k in (
+                "input_tokens_estimate", "max_tokens", "output_reserve_tokens", "tokenizer",
+                "token_count_is_estimate") if k in metrics}
+        elif budget is not None:
+            # Static planning has a different state schema; enforce the same DS
+            # token window without applying dynamic memory projection to it.
+            token_metrics = budget.measure(payload)
+            if not budget.fits(token_metrics):
+                raise ContextBudgetExceeded(f"{kind} exceeds token context budget", token_metrics)
         client = self._client()
         call_id = uuid.uuid4().hex
         sizes = payload_sizes(payload)
@@ -218,6 +232,7 @@ class ModelTransport:
                 "input_tokens": None,
                 "output_tokens": None,
                 "endpoint_host": urlsplit(self.endpoint).hostname,
+                **token_metrics,
             }
             network_started = {}
 
@@ -400,6 +415,7 @@ def policy_page_observation(content, obs, memory, candidates):
 class JevPolicy:
     def __init__(self, transport: ModelTransport, *, context_max_bytes: int | None = None):
         self.transport = transport
+        self.token_budget = jev_token_budget() if context_max_bytes is None else None
         self.context_max_bytes = int(context_max_bytes if context_max_bytes is not None else
                                      os.environ.get("JEV_CONTEXT_MAX_BYTES", DEFAULT_MAX_BYTES))
         if self.context_max_bytes <= 0:
@@ -449,7 +465,8 @@ class JevPolicy:
         if task.control_mode == "dynamic":
             observer = getattr(self.transport, "observer", None)
             try:
-                payload, metrics = project_request(payload, max_bytes=self.context_max_bytes)
+                payload, metrics = project_request(payload, max_bytes=self.context_max_bytes,
+                                                   token_budget=self.token_budget)
             except ContextBudgetExceeded as exc:
                 if observer:
                     observer.append("context-projections.jsonl", {
@@ -460,6 +477,11 @@ class JevPolicy:
             if observer:
                 observer.append("context-projections.jsonl", {
                     **observer.context, **metrics, "purpose": "jev", "status": "projected"})
+        elif self.token_budget is not None:
+            metrics = self.token_budget.measure(payload)
+            self.last_context_projection = metrics
+            if not self.token_budget.fits(metrics):
+                raise ContextBudgetExceeded("Jev static request exceeds token input budget", metrics)
         data = await self.transport.post(payload, "jev")
         answer = data["answers"]["action"]
         if answer.get("type") != "choice" or answer["choice"] not in options:

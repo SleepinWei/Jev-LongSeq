@@ -632,19 +632,35 @@ def section_sizes(projected):
     return {key: wire_bytes(value) for key, value in projected["state"].items()}
 
 
-def project_request(payload, *, max_bytes=DEFAULT_MAX_BYTES):
+def context_breakdown(content, payload):
+    """Bounded metadata for diagnosing protected overflow without logging prompts."""
+    return {
+        "memory_sections_bytes": {k: wire_bytes(v) for k, v in
+                                  content.get("untrusted_memory", {}).items()},
+        "observation_sections_bytes": {k: wire_bytes(v) for k, v in
+                                       content.get("untrusted_observation", {}).items()},
+        "wire_envelope_and_keys_bytes": wire_bytes(payload) - sum(wire_bytes(v)
+                                                                 for v in content.values()),
+    }
+
+
+def project_request(payload, *, max_bytes=DEFAULT_MAX_BYTES, token_budget=None):
     before = wire_bytes(payload)
     target = int(max_bytes * .85)
     best = None
     for level, pressure in [(i, 0) for i in range(5)] + [(4, i) for i in range(1, 4)]:
-        if level == 4 and not pressure and best is not None:
+        if level == 4 and not pressure and best is not None and token_budget is None:
             break  # Use the alternate control schema only if ordinary tiers fail.
         projected = _pool(payload, level, memory_pressure=pressure)
         after = wire_bytes(projected)
         metrics = {"before_bytes": before, "after_bytes": after,
-                   "max_bytes": max_bytes, "target_bytes": target, "level": level,
+                   "max_bytes": max_bytes if token_budget is None else None,
+                   "target_bytes": target, "level": level,
                    "sections": section_sizes(projected), "memory_pressure": pressure}
-        if after <= max_bytes:
+        metrics.update(context_breakdown(projected["state"], projected))
+        if token_budget is not None:
+            metrics.update(token_budget.measure(projected))
+        if token_budget.fits(metrics) if token_budget is not None else after <= max_bytes:
             if best is None or after < best[1]["after_bytes"]:
                 best = projected, metrics
             if after <= target:
@@ -652,15 +668,15 @@ def project_request(payload, *, max_bytes=DEFAULT_MAX_BYTES):
     if best is not None:
         return best
     raise ContextBudgetExceeded(
-        f"Jev context exceeds {max_bytes} UTF-8 bytes after projection; "
+        f"Jev context exceeds {token_budget.maximum if token_budget else max_bytes} "
+        f"{'estimated tokens' if token_budget else 'UTF-8 bytes'} after projection; "
         "original task, current controls, pending operations and key nodes were preserved. "
-        "Reduce the candidate page or explicitly increase the context byte budget.",
-        {"before_bytes": before, "after_bytes": after, "max_bytes": max_bytes,
-         "level": level, "sections": section_sizes(projected)},
+        "Reduce the candidate page or revise the protected context.",
+        metrics,
     )
 
 
-def project_chat_request(payload, *, max_bytes, purpose):
+def project_chat_request(payload, *, max_bytes, purpose, token_budget=None):
     """Use the same state projection for feedback, input, compression and finish.
 
     Current exact readback evidence, task/schema, pending writes, retrieved
@@ -683,9 +699,13 @@ def project_chat_request(payload, *, max_bytes, purpose):
             original["control_delta_lookup"] = CONTROL_TABLE_LOOKUP
         projected["messages"][-1]["content"] = wire_json(original)
         metrics = {"purpose": purpose, "before_bytes": wire_bytes(payload),
-                   "after_bytes": wire_bytes(projected), "max_bytes": max_bytes,
+                   "after_bytes": wire_bytes(projected),
+                   "max_bytes": max_bytes if token_budget is None else None,
                    "level": 0, "sections": {k: wire_bytes(v) for k, v in original.items()}}
-        if metrics["after_bytes"] > max_bytes:
+        if token_budget is not None:
+            metrics.update(token_budget.measure(projected))
+        if (not token_budget.fits(metrics) if token_budget is not None
+                else metrics["after_bytes"] > max_bytes):
             raise ContextBudgetExceeded("Scoped action evidence exceeds readback budget", metrics)
         return projected, metrics
     prepared = copy.deepcopy(original)
@@ -710,7 +730,7 @@ def project_chat_request(payload, *, max_bytes, purpose):
     best = None
     state_keys = {"trusted_goal", "hard_constraints", "untrusted_observation", "untrusted_memory"}
     for level, pressure in [(i, 0) for i in range(5)] + [(4, i) for i in range(1, 4)]:
-        if level == 4 and not pressure and best is not None:
+        if level == 4 and not pressure and best is not None and token_budget is None:
             break
         state = {k: v for k, v in prepared.items() if k in state_keys}
         wrapper = _pool({"state": state, "questions": {}}, level, memory_pressure=pressure)
@@ -732,10 +752,13 @@ def project_chat_request(payload, *, max_bytes, purpose):
         projected["messages"][-1]["content"] = wire_json(content)
         after = wire_bytes(projected)
         metrics = {"purpose": purpose, "before_bytes": before, "after_bytes": after,
-                   "max_bytes": max_bytes, "level": level,
+                   "max_bytes": max_bytes if token_budget is None else None, "level": level,
                    "target_bytes": target, "memory_pressure": pressure,
                    "sections": {k: wire_bytes(v) for k, v in content.items()}}
-        if after <= max_bytes:
+        metrics.update(context_breakdown(content, projected))
+        if token_budget is not None:
+            metrics.update(token_budget.measure(projected))
+        if token_budget.fits(metrics) if token_budget is not None else after <= max_bytes:
             if best is None or after < best[1]["after_bytes"]:
                 best = projected, metrics
             if after <= target:
@@ -743,7 +766,8 @@ def project_chat_request(payload, *, max_bytes, purpose):
     if best is not None:
         return best
     raise ContextBudgetExceeded(
-        f"{purpose} context exceeds {max_bytes} UTF-8 bytes after projection; "
+        f"{purpose} context exceeds {token_budget.maximum if token_budget else max_bytes} "
+        f"{'estimated tokens' if token_budget else 'UTF-8 bytes'} after projection; "
         "task, pending operations and exact readback/completion evidence retained; no request dispatched.",
         metrics,
     )

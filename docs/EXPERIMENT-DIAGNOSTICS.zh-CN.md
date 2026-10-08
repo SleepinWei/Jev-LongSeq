@@ -340,3 +340,27 @@ cycle-103 的 row-1 Account、e198、FILL Rent，receipt 明确记录 `automatic
 本组是 business_031 固定恢复点的迭代，不是套件成功率估计；4/15 是加权评分，不能称作 26.7% 整项成功率。下一轮应分别验证：无变化 pending 的重复模型查证合并（保留异步等待时间窗口和截止复核）；同一验证义务跨菜单/筛选准备阶段累计额度；原任务绑定的剩余事项与依赖台账。仅用户明确依赖才能阻塞其他工作，局部 UI 确认不能关闭最终验证义务。以上调度项尚未实施，必须各自重跑后才能评价。
 
 有界部分报告保存在 macmini `/tmp/jev-baseline64-final-summary.json`、`/tmp/jev-baseline64-compare63.json`；搜索动作可按前述 cycle/行号展开。原始实验产物仍留在忽略的 runs 目录，不入 Git。
+
+### baseline-64：51,990 字节超限的组成及 token 预算修正
+
+cycle-121 trajectory line 782 记录 `llm_policy` 原请求 156,245 字节，level=4 / memory_pressure=3 后仍为 **51,990 UTF-8 字节**，旧硬限制 48,000，软目标 40,800。它是本地 Policy 投影拒绝，尚未调用 DS；不是 Jev 服务或 DS tokenizer 拒绝。随后 required readback 确认了 row-3 Account，fresh scope 仍需独立规划；cycle-122 的规划只有 9.205 秒剩余额度，最后以总耗时预算耗尽停止。
+
+| 已记录的压缩后部分 | 字节 | 必要性与处理 |
+|---|---:|---|
+| untrusted_memory | 26,869 | 最大项；活动 pending、执行范围、最近事实必须保留。旧关键节点、历史回读/保存检查点和访问页面可继续以档案引用/无损表减少重复。完整档案不能删除。 |
+| untrusted_observation | 8,875 | 当前控件能力、精确值、grid/row 身份和实际行内容是纠正 Credit 的依据。pending 查证不能只保留下一动作的目标控件；正文重复/控件 schema 可压缩。 |
+| trusted_goal | 5,229 | 原始跨应用任务及精确日期、金额、实体、URL；保持原文，不以摘要替代。 |
+| context_view | 1,652 | 压缩表/default/ref 的解码约定；目前有实际结构压缩，不能只删约定。后续可评估合并重复约定。 |
+| candidates + decision_schema | 1,272 | 821 + 451；候选已缩页，此项很小，继续缩减收益有限且可能损失动作可达性。 |
+| hard_constraints | 106 | 权限/范围约束，保留。 |
+| HTTP 封装、JSON 键及消息转义差额 | 7,987 | 51,990 减去以上 44,003；属于字节传输计量，不等于模型额外看到了 7,987 字符的业务内容。 |
+
+**证据限制：拒绝后的完整投影未捕获。** 上表来自当时的投影指标；不能从最新 memory 或邻近请求伪造 cycle-121 的精确 token 数或子字段组成。进一步按实际历史输入检查：cycle-120 captured Feedback 的 memory 中 key_nodes 14,988 字节（41 条）、current_environment_readbacks 8,928、write_checkpoints 4,122、opened_pages 2,918、history_for_context 1,785、working_memory 1,466。cycle-119 captured Policy 更接近压缩后的视图：历史关键节点表 4,104、最近完整关键节点 2,088、回读 4,575、检查点 3,206、页面 1,969、history 1,185、working_memory 536。它们说明主要压缩方向在结构化证据历史，不能据此声称这些数字就是 cycle-121 的 26,869 子项。
+
+恢复 captured artifact 内消息的紧凑 JSON 后，cycle-119 恢复体积与日志 **41,466 字节完全一致**，官方 usage **12,831 input token**，V4 离线估算 **12,929**；cycle-120 则为 **80,935 字节完全一致**、官方 **23,417 input token**、离线估算 **23,515**。离线计数含保守封装预留，均比真实 usage 多 98 token。这两个例子确认字节限制过于保守，也验证该 tokenizer 对当前文本调用的实用计量；并不证明所有未来请求都只差 98 token。
+
+本轮修正 DS 为 1M token、Jev 为 48k 总 token，且 Jev 同时检查供应商 32k 单头限制。保留现有字节压缩软目标，避免因为窗口变大就无限保留旧历史。Jev 尚无公开 tokenizer，用带余量的 o200k 代理估算并明确记录；DS 使用官方 V4 JSON 数据。新增逐项 token/子字段指标，不在公共日志复制完整 prompt。相关实现与检查不是 benchmark 成绩，最终收益仍须看同配置重跑的有效评分、整项成功及耗时。
+
+官方资料：[DS token usage / V4 tokenizer](https://api-docs.deepseek.com/quick_start/token_usage/)、[DS context window](https://api-docs.deepseek.com/quick_start/pricing/)、[Jev 总输入与单头限制](https://docs.typesafe.ai/models)。有界分析保存在 macmini `/tmp/jev-baseline64-context-analysis.json`，原始产物继续留在 Git 外。
+
+macmini 最终完整回归 **914 passed, 3 skipped**，源码及改动测试/安装器 lint、前端语法检查通过。测试覆盖：保护内容超过字节软目标仍可发送，真正 token 超限在 HTTP 前停止，输出预留计入窗口，scoped readback 保留完整证据，Jev 总预算及单头限额，静态 DS Planner 同样受限，缺 tokenizer 明确失败；原字节 API 显式调用的兼容测试保留。旧 CSP overlay 测试已明确切换 all 范围再测几何，同时验证 selected 模式不显示未选择的 DOM。

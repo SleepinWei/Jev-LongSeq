@@ -22,6 +22,7 @@ from .fixture import RulePlanner, RulePolicy, catalog_html, demo_task
 from .models import JevPolicy, JsonPlanner, JsonPolicy, ModelTransport, Pricing, instructions
 from .observability import Observer, save_analysis
 from .protocol import AgentTuning, Budget, RunResult, Task, digest, now
+from .token_budget import chat_token_budget, jev_token_budget
 
 
 def resolve_tuning(args):
@@ -220,6 +221,21 @@ async def run_trial(args, *, count=None, output=None):
             "BRAIN_CONTEXT_MAX_BYTES": int(os.environ.get("BRAIN_CONTEXT_MAX_BYTES", DEFAULT_BRAIN_MAX_BYTES)),
             "BRAIN_FINISH_CONTEXT_MAX_BYTES": int(os.environ.get("BRAIN_FINISH_CONTEXT_MAX_BYTES", DEFAULT_FINISH_MAX_BYTES)),
         }
+        manifest["context_limits"]["token_budgets"] = {
+            "jev": vars(jev_token_budget()),
+            **{role: {kind: vars(budget) if budget else None for kind in kinds
+                      for budget in [chat_token_budget(adapter.transport.endpoint,
+                                                       adapter.transport.model, kind)]}
+               for role, adapter, kinds in (
+                   ("policy", policy, ["llm_policy"]),
+                   ("brain", planner, ["dynamic_feedback", "dynamic_finish"]))
+               if adapter is not None and isinstance(getattr(adapter, "transport", None), ModelTransport)},
+        }
+        manifest["context_limits"]["semantics"] = (
+            "Token-mode requests use legacy byte values only as compression soft targets (85%). "
+            "DeepSeek V4 offline tokenizer estimates message tokens plus framing and output reserve; "
+            "Jev uses o200k proxy plus 10% margin and 256 framing tokens, with 32k per head. "
+            "Provider usage is authoritative. Unrelated chat providers retain legacy byte limits.")
         write_json(output / "manifest.json", manifest)
         checkpoint = getattr(args, "_resume_checkpoint", None)
         if checkpoint:

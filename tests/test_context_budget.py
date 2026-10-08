@@ -533,7 +533,8 @@ async def test_protected_overflow_stops_before_http():
     memory.key_nodes["large"] = {"source": {"quote": "关键" * 10_000}}
     transport = Capture()
     with pytest.raises(ContextBudgetExceeded):
-        await JevPolicy(transport).choose(task, obs, memory, None, generate_dynamic(obs, task))
+        await JevPolicy(transport, context_max_bytes=48000).choose(
+            task, obs, memory, None, generate_dynamic(obs, task))
     assert not transport.requests
 
 

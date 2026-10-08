@@ -39,7 +39,11 @@ flowchart LR
 - 工作记忆按旧到新排列：最近 6 段最多 900 字符，之前 12 段最多 200 字符，更早段落仅保留标题。非常久远的普通细节退出请求视图，历史版本仍保存。
 - 大脑可在阶段反馈和完整反馈中用 `notes[].critical=true` 标记需要长期保留的标识、关键节点或重要失败。只有在当前观察中能找到原文的节点才能入库；保留精确引文、页面来源与时间、`quote_grounded_only` 标记，不把解释提升为独立验证结论。后续普通摘要不能删掉已保留的关键节点。可信目标、约束、当前 blockers、待确认与中断操作也不随时间衰减。
 - 相同控件上下文只保存一次；候选动作通过控件 ID 引用当前状态，保留所有候选 ID、精确输入值和当前控件值。长页面文字标记为摘录，历史节点不能替代当前页面证据。
-- 默认 Jev 请求总预算为 **48,000 UTF-8 JSON 字节**，由 `JEV_CONTEXT_MAX_BYTES` 调整；达到 85% 软目标前尽量完成压缩。采用与 HTTPX 实际发送一致的紧凑 JSON 计量，仍不是 tokenizer 的精确 token 数。接近预算时减少近期普通历史和文字摘录，旧关键节点改为带原文取回引用的提示；目标、pending 和精确输入值不删减。控件默认值通过 `control_defaults` 明确约定，可原样还原能力和状态。硬预算内但无法达到软目标时选用最小可发送投影；保护内容仍超限则在 HTTP 前安全停止，不自动扩大预算或删除档案。
+- 默认 Jev 请求总预算改为 **48,000 token**（`JEV_CONTEXT_MAX_TOKENS`）；同时遵守供应商 **state + 最长 question ≤ 32,000 token** 的单头限制。Jev 未公开离线 tokenizer，因此本地使用 `o200k_base` 代理计数、10% 余量及 256 token 封装预留，日志明确标注估算，不能宣称供应商精确计量。官方 DeepSeek API 默认 **1,000,000 token**（`DS_CONTEXT_MAX_TOKENS`），Policy、Feedback、Input、Readback、Finish 共用此窗口；使用官方 V4 tokenizer 数据估算消息正文，计入封装和至少 16,384 token 输出预留。API 返回 usage 才是实际 token 数。
+- token 模式下，旧 `JEV/POLICY/BRAIN/BRAIN_FINISH_CONTEXT_MAX_BYTES` 仅作为压缩软目标的基数（85%），不再是硬拒绝条件；无法压到软目标但仍在 token 硬限制内时，发送最小投影。非 DS 的其他 chat provider 保留原字节限制，除非明确配置对应 `*_CONTEXT_MAX_TOKENS`。原文档中的 48KB/96KB/256KB 硬限制描述仅适用于旧版实验或这些兼容路径。
+- 压缩仍优先削减远期普通历史，旧关键节点保留档案引用，近四条关键事实、当前控件精确值、pending、原任务及执行范围保持。完整证据不从档案删除。模型硬 token 限制超出才在 HTTP 前停止，不为了达到字节软目标删除保护内容。`context-projections.jsonl` 新增 token 估算、输出预留及 memory/observation 子字段字节统计，便于按需诊断；字节数用于传输体积分析，不能当作 token 数。
+
+首次部署在 macmini 安装项目依赖，再运行 `.venv/bin/python scripts/install_context_tokenizers.py`。安装器只加载官方压缩包中的 `tokenizer.json` 数据，不执行其中的 Python；数据存放 `~/.cache/jev-longseq/tokenizers/deepseek-v4.json`，不入 Git。缺少数据时明确失败，不偷偷用字符比例替代。可用 `DEEPSEEK_TOKENIZER_PATH` 指定数据路径。按角色覆盖用 `POLICY_CONTEXT_MAX_TOKENS`、`BRAIN_CONTEXT_MAX_TOKENS`、`BRAIN_FINISH_CONTEXT_MAX_TOKENS`；输出预留用 `CONTEXT_OUTPUT_RESERVE_TOKENS`，请求显式 max_tokens 更大时取较大值。
 
 `context-projections.jsonl` 记录前后字节数和压缩级别；`memory.json` 保存 `key_nodes_archive`、`working_memory_archive`、`event_archive`。续跑恢复这些档案，旧产物通过 trajectory 和父级记录恢复历史。投影不会修改原始 task、完整来源证据或运行中的 Memory；最终完成复核继续使用来源证据档案。
 - 反馈容忍 JSON 代码围栏及字面量 `type="object"` 元数据；其余额外字段和真实证据/完成校验仍严格检查。

@@ -192,6 +192,9 @@ async def test_dom_overlay_geometry_under_strict_csp(tmp_path):
                 await page.set_content('<h1>Preview</h1>')
                 await page.screenshot(path=str(run / frame['resource']), type='jpeg')
                 await page.goto(f'http://127.0.0.1:{server.server_port}/?run=sample')
+                assert await page.locator('#dom-mode').input_value() == 'selected'
+                assert await page.locator('#targets .target').count() == 0
+                await page.locator('#dom-mode').select_option('all')
                 target = page.locator('#targets .target')
                 await target.wait_for()
                 bounds = await target.bounding_box()
@@ -201,6 +204,9 @@ async def test_dom_overlay_geometry_under_strict_csp(tmp_path):
                 assert (bounds['y'] - viewport['y']) / viewport['height'] == pytest.approx(.1, abs=.002)
                 assert await target.locator('span').inner_text() == 'e7 输入'
                 assert await target.locator('img').count() == 0
+                await page.locator('#dom-mode').select_option('selected')
+                assert await page.locator('#targets .target').count() == 0
+                await page.locator('#dom-mode').select_option('all')
                 await page.locator('#overlays').uncheck()
                 assert await page.locator('#targets').is_hidden()
                 await page.locator('[data-tab="pages"]').click()
