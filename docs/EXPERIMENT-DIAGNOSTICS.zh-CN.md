@@ -387,3 +387,29 @@ macmini 最终完整回归 **914 passed, 3 skipped**，源码及改动测试/安
 明显的剩余成本是决策推理：cycle-37 Policy（attempt `2c60e603e2124587b373c376ab93071b`）input=11,586，output=16,956，其中 **reasoning_tokens=16,938**，非推理输出仅 18 token，latency 76.95 秒。来源是实际 response artifact `/data/body/usage/completion_tokens_details`，没有以猜测或链文本替代 usage。这不是 context 到达 1M 的错误；下一项宜分别验证减少 Policy/规划调用、限定简单动作决策的推理量、合并重复查证及剩余依赖管理，继续按最终评分、整项成功和耗时判断。
 
 有界部分报告：macmini `/tmp/jev-baseline65-summary.json`、`/tmp/jev-baseline65-compare64.json`、`/tmp/jev-baseline64-context-analysis.json`。6KB compare 省略了 configuration_differences；上述配置一致性另用所列 manifest 字段核验，不能将省略当作无差异。原请求及运行产物不入 Git。观测入口最终确认 HTTP 200，沿用已有 8768 SSH 隧道；没有重启运行中的 Studio，8767 未动。
+
+### Policy 历史操作索引：独立记忆投影实验
+
+`POLICY_MEMORY_MODE=stage_index_v1` 是默认关闭的实验，默认 `legacy`。
+它只作用于 Jev 动作选择与 LLM Policy；Feedback、Input、scoped Readback、Finish
+仍走原投影。manifest 与每次 Policy 的 context-projections 记录模式及
+`memory_before_role_bytes` / `memory_after_role_bytes` / `stage_memory_applied`。
+
+最近四条当前环境回读、最近两条保存检查点、当前 URL 上的记录及 planning_handoff
+关联动作保持详细记录；共同的 `(environment_id, action_key)` 将对应的回读和检查点
+一起保留。其他较早记录合并到 `historical_operations`，保留精确身份、目标、stage_goal、
+confirmation_scope、business_commit_confirmed、checkpoint status、来源锚点以及原记录
+archive_ref。省略的是旧 proof 正文、页面引文和字段快照。界面效果确认与业务提交确认
+不互相升级，也不代表整项成功；缺旧 proof 不授权重放。没有环境/动作身份及带未知
+顶层扩展的记录保持详细。实际完整档案不修改，brain 的 evidence_requests 仍可取原文。
+
+本轮不删除 key_nodes、working_memory、导航记录、pending、剩余验证义务或恢复状态，
+也不引入根据文本相似度猜测业务实体的过滤。现有 URL registry 尚不是验证过的导航图，
+本实验不能证明导航图或结构化任务依赖管理的收益。优先单独验证较早确认记录的收敛，
+避免同时改规划和导航后难以归因。
+
+以 baseline-65 为参照：business_031 原任务、官方 DS deepseek-flash 全 DS、resume-03
+memory / resume-02 UI、600 actions / 1,800 seconds / 1,000 feedback calls 等预算不变。
+相关 macmini 检查通过、push 并核验运行源码后，自动以 fresh 输出重跑。报告必须覆盖
+有效评分、strict_success、耗时、HTTP 请求量及 tokens，检查正式 grading 与 cleanup；
+投影变小及测试通过不是成功率提升证据。单次固定恢复点试验不代表总体成功率。

@@ -216,6 +216,7 @@ async def run_trial(args, *, count=None, output=None):
             if adapter is not None and hasattr(adapter, "transport")}
         jev_limit = int(os.environ.get("JEV_CONTEXT_MAX_BYTES", DEFAULT_MAX_BYTES))
         manifest["context_limits"] = {
+            "policy_memory_mode": os.environ.get("POLICY_MEMORY_MODE", "legacy"),
             "JEV_CONTEXT_MAX_BYTES": jev_limit,
             "POLICY_CONTEXT_MAX_BYTES": int(os.environ.get("POLICY_CONTEXT_MAX_BYTES", jev_limit)),
             "BRAIN_CONTEXT_MAX_BYTES": int(os.environ.get("BRAIN_CONTEXT_MAX_BYTES", DEFAULT_BRAIN_MAX_BYTES)),

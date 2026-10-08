@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from collections import Counter
 
 DEFAULT_MAX_BYTES = 48_000
@@ -632,6 +633,106 @@ def section_sizes(projected):
     return {key: wire_bytes(value) for key, value in projected["state"].items()}
 
 
+def policy_memory_mode():
+    mode = os.environ.get("POLICY_MEMORY_MODE", "legacy")
+    if mode not in {"legacy", "stage_index_v1"}:
+        raise ValueError("POLICY_MEMORY_MODE must be legacy or stage_index_v1")
+    return mode
+
+
+def stage_memory_view(raw, observation):
+    """Keep active execution evidence; index distant operations without changing archives.
+
+    Only policy calls use this experiment. Brain calls retain the existing
+    notebook and can retrieve these original record hashes in evidence_requests.
+    Matching is deliberately limited to exact URLs and action keys, never a
+    guessed business identity, completion state or text similarity score.
+    """
+    result = copy.deepcopy(raw)
+    actions = raw.get("current_environment_readbacks", {}).get("actions", [])
+    checkpoints = raw.get("write_checkpoints", [])
+    current_url = observation.get("url")
+    # Keys require an explicit environment to avoid merging inherited work
+    # with fresh confirmations after a reset.
+    def identity(record):
+        environment = record.get("environment_id")
+        key = record.get("action_key")
+        return (environment, key) if environment and key else None
+
+    def current(record):
+        return bool(current_url and record.get("source", {}).get("url") == current_url)
+
+    protected = {identity(record) for record in actions[-4:] + checkpoints[-2:]
+                 if identity(record) is not None}
+    protected.update(identity(record) for record in actions + checkpoints
+                     if current(record) and identity(record) is not None)
+    handoff_key = raw.get("planning_handoff", {}).get("action_key")
+    protected.update(identity(record) for record in actions + checkpoints
+                     if handoff_key and record.get("action_key") == handoff_key
+                     and identity(record) is not None)
+    index = {}
+    known_fields = {
+        "readbacks": {"environment_id", "action_key", "operation", "target", "confirmation_scope",
+                      "business_commit_confirmed", "basis", "source", "proof"},
+        "checkpoints": {"environment_id", "action_key", "target", "stage_goal", "status", "basis",
+                        "source", "before", "fields", "visible_excerpt", "proof", "meaning"},
+    }
+
+    def index_record(record, kind):
+        key = identity(record)
+        entry = index.setdefault(key, {"environment_id": key[0], "action_key": key[1]})
+        # Status and provenance stay exact. Old proof bodies / snapshots have
+        # one immutable archive reference instead of repeated narrative.
+        fields = (("operation", "target", "confirmation_scope", "business_commit_confirmed", "basis")
+                  if kind == "readbacks" else ("target", "stage_goal", "status", "basis"))
+        item = {field: copy.deepcopy(record[field]) for field in fields if field in record}
+        item["source"] = {field: copy.deepcopy(record.get("source", {})[field])
+                          for field in ("url", "tab_id", "observation_id", "document_version", "title")
+                          if field in record.get("source", {})}
+        item["archive_ref"] = archive_ref(record)
+        entry.setdefault(kind, []).append(item)
+
+    for kind, records, owner, field in (
+        ("readbacks", actions, result.get("current_environment_readbacks", {}), "actions"),
+        ("checkpoints", checkpoints, result, "write_checkpoints"),
+    ):
+        if field not in owner:
+            continue
+        retained = []
+        for record in records:
+            key = identity(record)
+            if key is None or key in protected or current(record) or set(record) - known_fields[kind]:
+                retained.append(copy.deepcopy(record))
+            else:
+                index_record(record, kind)
+        owner[field] = retained
+    if index:
+        result["historical_operations"] = list(index.values())
+        result["historical_operations_scope"] = (
+            "Distant local confirmations, not whole-task success or fresh field state. "
+            "Readback confirmation_scope and checkpoint status have distinct meanings. "
+            "Archive refs address original records available to the brain via evidence_requests. "
+            "Missing proof bodies are not evidence that an action failed and do not authorize replay.")
+    return result
+
+
+def policy_memory_payload(payload):
+    mode = policy_memory_mode()
+    if mode == "legacy":
+        return payload, {"policy_memory_mode": mode}
+    result = copy.deepcopy(payload)
+    state = result["state"]
+    raw = state["untrusted_memory"]
+    projected = stage_memory_view(raw, state["untrusted_observation"])
+    # Do not spend extra context on an index when there is nothing to reduce.
+    applied = wire_bytes(projected) < wire_bytes(raw)
+    if applied:
+        state["untrusted_memory"] = projected
+    return result, {"policy_memory_mode": mode, "stage_memory_applied": applied,
+                    "memory_before_role_bytes": wire_bytes(raw),
+                    "memory_after_role_bytes": wire_bytes(state["untrusted_memory"])}
+
+
 def context_breakdown(content, payload):
     """Bounded metadata for diagnosing protected overflow without logging prompts."""
     return {
@@ -646,6 +747,7 @@ def context_breakdown(content, payload):
 
 def project_request(payload, *, max_bytes=DEFAULT_MAX_BYTES, token_budget=None):
     before = wire_bytes(payload)
+    payload, role_metrics = policy_memory_payload(payload)
     target = int(max_bytes * .85)
     best = None
     for level, pressure in [(i, 0) for i in range(5)] + [(4, i) for i in range(1, 4)]:
@@ -653,7 +755,7 @@ def project_request(payload, *, max_bytes=DEFAULT_MAX_BYTES, token_budget=None):
             break  # Use the alternate control schema only if ordinary tiers fail.
         projected = _pool(payload, level, memory_pressure=pressure)
         after = wire_bytes(projected)
-        metrics = {"before_bytes": before, "after_bytes": after,
+        metrics = {**role_metrics, "before_bytes": before, "after_bytes": after,
                    "max_bytes": max_bytes if token_budget is None else None,
                    "target_bytes": target, "level": level,
                    "sections": section_sizes(projected), "memory_pressure": pressure}
@@ -709,6 +811,10 @@ def project_chat_request(payload, *, max_bytes, purpose, token_budget=None):
             raise ContextBudgetExceeded("Scoped action evidence exceeds readback budget", metrics)
         return projected, metrics
     prepared = copy.deepcopy(original)
+    role_metrics = {}
+    if purpose == "llm_policy":
+        wrapper, role_metrics = policy_memory_payload({"state": prepared})
+        prepared = wrapper["state"]
     if purpose == "dynamic_input":
         target = prepared.get("selected_action", {}).get("element_ref")
         elements = prepared.get("untrusted_observation", {}).get("elements", [])
@@ -751,7 +857,7 @@ def project_chat_request(payload, *, max_bytes, purpose, token_budget=None):
         projected = copy.deepcopy(payload)
         projected["messages"][-1]["content"] = wire_json(content)
         after = wire_bytes(projected)
-        metrics = {"purpose": purpose, "before_bytes": before, "after_bytes": after,
+        metrics = {**role_metrics, "purpose": purpose, "before_bytes": before, "after_bytes": after,
                    "max_bytes": max_bytes if token_budget is None else None, "level": level,
                    "target_bytes": target, "memory_pressure": pressure,
                    "sections": {k: wire_bytes(v) for k, v in content.items()}}
