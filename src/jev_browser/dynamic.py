@@ -150,6 +150,16 @@ class StageControl(Model):
     operations: list[Literal["click", "fill", "select"]] = Field(min_length=1, max_length=3)
 
 
+class GroupAction(Model):
+    element_ref: str = Field(min_length=1, max_length=200)
+    operation: Literal["click", "fill", "select"]
+
+
+class ExecutionGroup(Model):
+    goal: str = Field(min_length=1, max_length=1200)
+    actions: list[GroupAction] = Field(min_length=1, max_length=8)
+
+
 class Feedback(Model):
     _note_diagnostics: list = PrivateAttr(default_factory=list)
     _local_readback: bool = PrivateAttr(default=False)
@@ -172,6 +182,7 @@ class Feedback(Model):
     stage_controls: list[StageControl] | None = Field(default=None, max_length=40)
     stage_entry: StageEntry | None = None
     input_sequence: list[str] = Field(default_factory=list, max_length=4)
+    execution_groups: list[ExecutionGroup] = Field(default_factory=list, max_length=4)
 
 
 class InputValue(Model):
@@ -245,6 +256,7 @@ class StageGuidance(Model):
     stage_controls: list[StageControl] = Field(default_factory=list, max_length=40)
     stage_entry: StageEntry
     input_sequence: list[str] = Field(default_factory=list, max_length=4)
+    execution_groups: list[ExecutionGroup] = Field(default_factory=list, max_length=4)
 
 
 class CompressedMemory(Model):
@@ -578,6 +590,32 @@ def stage_plan_diagnostics(feedback, obs, task, *, consumed=None):
             diagnostics.append({"loc": ["stage_entry"], "type": "stage_entry_not_executable",
                                 "element_ref": entry.element_ref, "operation": entry.operation,
                                 "reason": "missing control, missing stage authorization, or consumed action"})
+    seen = set()
+    controls = {c.element_ref: c.operations for c in feedback.stage_controls or []}
+    for gi, group in enumerate(feedback.execution_groups):
+        for ai, planned in enumerate(group.actions):
+            element = elements.get(planned.element_ref)
+            loc = ["execution_groups", gi, "actions", ai]
+            key = (planned.element_ref, planned.operation)
+            if (not element or planned.operation not in capabilities.get(planned.element_ref, [])
+                    or planned.operation not in controls.get(planned.element_ref, []) or key in seen):
+                diagnostics.append({"loc": loc, "type": "group_action_not_grounded_or_duplicate"})
+            seen.add(key)
+            if element and planned.operation in {"fill", "select"}:
+                inputs = [p for p in feedback.inputs if (p.name, p.grid_ref, p.row_ref) ==
+                          (element.name, element.grid_ref, element.row_ref)]
+                # Linked/search fields need a freshly planned option-resolution stage.
+                if (len(inputs) != 1 or element.value == "[redacted]" or element.grid_ref
+                        or element.row_ref or is_search_textbox(element) or element.search_scope
+                        or element.search_query is not None or element.popup_open is not None
+                        or element.option_owner or element.menu_owner
+                        or (planned.operation == "select" and inputs[0].value not in element.options)):
+                    diagnostics.append({"loc": loc, "type": "group_input_requires_fresh_resolution"})
+            if element and planned.operation == "click" and (element.href or write_boundary(element.model_dump())):
+                if gi != len(feedback.execution_groups) - 1 or len(group.actions) != 1:
+                    diagnostics.append({"loc": loc, "type": "group_boundary_must_be_last_and_single"})
+    if feedback.execution_groups and (feedback.verification or feedback.input_sequence):
+        diagnostics.append({"loc": ["execution_groups"], "type": "group_plan_conflicts_with_other_sequence"})
     return diagnostics
 
 
@@ -645,6 +683,16 @@ class JsonFeedback:
             "stage_controls and verification with this single stage. If the desired control is absent, "
             "choose an observed opener or a locate/replan entry; do not name unavailable navigation as executable. "
             "Never attach an unrelated old verification to a new act or navigate stage. "
+            "Prefer execution_groups for a currently observed form: plan two to four ordered groups "
+            "of up to eight actions each, with goal and actions=[{element_ref,operation}]. Jev executes "
+            "all actions in one group before moving to the next without asking you to plan each action. "
+            "Actions within a group must be independent; express dependencies through group order. "
+            "Use exact current IDs and stage_controls, and exact inputs for every fill/select. "
+            "A final Save or navigation must be the sole action of the last group; its outcome still "
+            "requires separate verification. Do not batch search/link fields, grids or password fields: "
+            "they need freshly observed resolution. New controls, dialogs, routes, errors or uncertainty "
+            "end this execution window. Do not invent future DOM IDs. Leave input_sequence empty when "
+            "using execution_groups; leave execution_groups empty for verification or unsupported UI. "
             "To avoid another policy request for each independent field, optionally provide input_sequence: "
             "two to four currently observed plain textbox IDs in execution order, starting with the fill "
             "stage_entry. Include exact planned inputs and fill stage_controls for every ID. Use this only "
@@ -1058,6 +1106,7 @@ class DynamicController(Controller):
         self.scope_generation = 0
         self.stage_entry_ticket = None
         self.input_sequence = None  # Ephemeral DS choices; never recovered across sessions.
+        self.execution_groups = None  # Re-authorize after recovery; never replay a saved queue.
         self.fresh_scope_required = False
         self.pending: dict | None = None
         self.pending_started = 0.0
@@ -1131,6 +1180,7 @@ class DynamicController(Controller):
     async def review(self, obs, phase="step"):
         self.cancel_input_sequence("model review superseded the input plan")
         if phase in PLANNING_PHASES:
+            self.cancel_execution_groups("fresh model planning")
             self.stage_entry_ticket = None
         self.input_retry = None
         self.stale_click = None
@@ -1327,6 +1377,9 @@ class DynamicController(Controller):
                 self.memory.feedback["execution_scope"] = previous_feedback["execution_scope"]
             if previous_feedback.get("planning_handoff"):
                 self.memory.feedback["planning_handoff"] = previous_feedback["planning_handoff"]
+            for key in ("execution_groups", "execution_window"):
+                if key in previous_feedback:
+                    self.memory.feedback[key] = previous_feedback[key]
         elif feedback.stage_controls is not None:
             self.scope_generation += 1
             self.fresh_scope_required = False
@@ -1381,6 +1434,7 @@ class DynamicController(Controller):
             feedback._planning_result = "applied"
             if feedback.stage_controls is not None and feedback.stage_entry:
                 self.arm_input_sequence(obs, feedback)
+                self.arm_execution_groups(obs, feedback)
         self.log("feedback", phase=phase, feedback=feedback.model_dump(),
                  planning_result=feedback._planning_result,
                  effective_actions=self.effective_actions, attempted_actions=self.actions)
@@ -1583,6 +1637,12 @@ class DynamicController(Controller):
     def stage_action_allowed(self, action, obs):
         if self.fresh_scope_required and not self.pending:
             return action.operation in {Operation.WAIT, Operation.REPLAN}
+        if self.execution_groups and not self.pending:
+            if action.operation in MUTATIONS:
+                if self.group_action(action, obs) is None:
+                    return False
+            elif action.operation not in {Operation.WAIT, Operation.REPLAN, Operation.MORE_CANDIDATES}:
+                return False  # Jev cannot abandon an unfinished group via global navigation.
         scope = self.memory.feedback.get("execution_scope")
         entry = self.memory.feedback.get("stage_entry")
         if entry and action.operation == Operation.SWITCH_TAB and not self.pending:
@@ -1808,6 +1868,10 @@ class DynamicController(Controller):
                     "a local UI transition such as opening or closing a dialog."
                 ),
             }
+            if self.execution_groups and self.group_action(action, obs) is not None:
+                self.pending["execution_group"] = {
+                    "index": self.execution_groups["index"], "generation": self.scope_generation,
+                    "identity": {k: getattr(element, k) for k in ("role", "name", "grid_ref", "row_ref", "context")}}
             verification = self.memory.feedback.get('verification')
             if (verification and self.verification_budget_ready(obs)
                     and verification_location(verification.get('target_url') or obs.url) == verification_location(obs.url)):
@@ -1952,6 +2016,19 @@ class DynamicController(Controller):
 
     async def bind_input(self, action, obs):
         element = next(e for e in obs.elements if e.id == action.element_ref)
+        if (self.execution_groups and not self.pending
+                and (step := self.group_action(action, obs)) is not None):
+            value = InputValue(value=step["value"]).value
+            if action.operation == Operation.SELECT and value not in element.options:
+                raise InvalidInputValue("unobserved_select_option")
+            if not self.stage_action_allowed(action, obs):
+                raise InvalidInputValue("group_input_outside_scope")
+            action.bound_value = value
+            self.input_retry = None
+            self.log("input_binding", action=action.model_dump(),
+                     source={"kind": "validated_execution_group", "group": self.execution_groups["index"]},
+                     input_model_call_skipped=True)
+            return
         if action.bound_value is not None:
             if (action.operation == Operation.FILL and action.bound_value == ""
                     and element.editable and element.enabled and not element.read_only
@@ -2029,6 +2106,122 @@ class DynamicController(Controller):
             self.log("context_budget_unresolved", **exc.metrics, pending_preserved=bool(self.pending))
             pending_text = "pending retained" if self.pending else "no pending action"
             return self.result("needs_attention", f"protected context cannot fit; {pending_text}; no request or resubmission")
+
+    def cancel_execution_groups(self, reason, *, replan=False):
+        if self.execution_groups:
+            self.log("execution_groups_cancelled", reason=reason,
+                     group=self.execution_groups["index"], pending_preserved=bool(self.pending),
+                     browser_action_dispatched=False)
+            self.execution_groups = None
+            self.memory.feedback["execution_groups"] = []
+            self.memory.feedback["execution_window"] = {"status": "cancelled", "reason": reason}
+            if replan:
+                self.fresh_scope_required = True
+
+    def arm_execution_groups(self, obs, feedback):
+        if not feedback.execution_groups:
+            return
+        errors = stage_plan_diagnostics(feedback, obs, self.task, consumed=self.consumed)
+        if errors or self.pending or self.memory.pending_writes or obs.loading or obs.dialogs or obs.challenge:
+            self.log("execution_groups_discarded", diagnostic=errors,
+                     reason="execution window not grounded or pending", browser_action_dispatched=False)
+            return
+        groups = []
+        for group in feedback.execution_groups:
+            steps = []
+            for planned in group.actions:
+                element = next(e for e in obs.elements if e.id == planned.element_ref)
+                identity = {k: getattr(element, k) for k in ("role", "name", "grid_ref", "row_ref", "context")}
+                if sum(all(getattr(e, k) == v for k, v in identity.items()) for e in obs.elements) != 1:
+                    self.log("execution_groups_discarded", reason="ambiguous control identity",
+                             browser_action_dispatched=False)
+                    return
+                value = None
+                if planned.operation in {"fill", "select"}:
+                    value = self.planned_input(obs, element)["value"]
+                steps.append({"identity": identity, "operation": planned.operation, "value": value,
+                              "done": False})
+            groups.append({"goal": group.goal, "steps": steps})
+        self.execution_groups = {"groups": groups, "index": 0, "generation": self.scope_generation,
+            "environment_id": self.memory.environment_id, "location": list(planning_location(obs)),
+            "document_id": obs.document_id, "frame_id": obs.frame_id, "errors": list(obs.errors)}
+        self.stage_entry_ticket = None  # Jev owns action selection throughout the window.
+        self.log("execution_groups_armed", groups=len(groups), actions=sum(len(g["steps"]) for g in groups),
+                 source="explicit_ds_plan", browser_action_dispatched=False)
+        self.refresh_execution_groups(obs)
+
+    def group_action(self, action, obs):
+        window = self.execution_groups
+        if not window or window["index"] >= len(window["groups"]):
+            return None
+        element = next((e for e in obs.elements if e.id == action.element_ref), None)
+        if not element:
+            return None
+        for step in window["groups"][window["index"]]["steps"]:
+            if (not step["done"] and action.operation == step["operation"]
+                    and all(getattr(element, k) == v for k, v in step["identity"].items())
+                    and (action.operation == Operation.CLICK or action.bound_value in {None, step["value"]})):
+                return step
+        return None
+
+    def refresh_execution_groups(self, obs):
+        window = self.execution_groups
+        if not window:
+            return
+        if (window["environment_id"] != self.memory.environment_id
+                or window["generation"] != self.memory.feedback.get("execution_scope", {}).get("generation")
+                or window["location"] != list(planning_location(obs))
+                or window["document_id"] != obs.document_id or window["frame_id"] != obs.frame_id
+                or obs.dialogs or obs.challenge or self.ui_review_due or self.stage_review_due
+                or self.fresh_scope_required or self.memory.feedback.get("planning_handoff")
+                or (self.memory.pending_writes and not self.pending)
+                or any(error not in window["errors"] for error in obs.errors)):
+            self.cancel_execution_groups("checkpoint or new current observation error", replan=True)
+            return
+        if self.pending or obs.loading:
+            return
+        for prior in window["groups"][:window["index"]]:
+            for step in prior["steps"]:
+                if step["operation"] in {"fill", "select"}:
+                    matches = [e for e in obs.elements if all(getattr(e, k) == v
+                               for k, v in step["identity"].items())]
+                    if len(matches) != 1 or matches[0].value != step["value"]:
+                        self.cancel_execution_groups("earlier group prerequisite changed", replan=True)
+                        return
+        while window["index"] < len(window["groups"]):
+            group = window["groups"][window["index"]]
+            for step in group["steps"]:
+                matches = [e for e in obs.elements if all(getattr(e, k) == v
+                           for k, v in step["identity"].items())]
+                if step["operation"] in {"fill", "select"}:
+                    if len(matches) != 1 or not matches[0].enabled or matches[0].read_only:
+                        self.cancel_execution_groups("missing or ambiguous group field", replan=True)
+                        return
+                    if step["done"] and matches[0].value != step["value"]:
+                        self.cancel_execution_groups("confirmed group value changed", replan=True)
+                        return
+                    if matches[0].value == step["value"]:
+                        step["done"] = True  # Exact population only, not a business write.
+            if not all(step["done"] for step in group["steps"]):
+                break
+            self.log("execution_group_completed", group=window["index"], goal=group["goal"],
+                     business_commit_confirmed=False)
+            window["index"] += 1
+        if window["index"] == len(window["groups"]):
+            self.log("execution_groups_finished", groups=len(window["groups"]),
+                     task_complete=False, browser_action_dispatched=False)
+            self.execution_groups = None
+            self.memory.feedback["execution_window"] = {"status": "finished", "task_complete": False}
+            self.ui_review_due = True
+            return
+        group = window["groups"][window["index"]]
+        self.memory.feedback["execution_window"] = {
+            "status": "active", "group": window["index"], "total_groups": len(window["groups"]),
+            "goal": group["goal"], "remaining_actions": [
+                {"operation": s["operation"], **s["identity"], "value": s["value"]}
+                for s in group["steps"] if not s["done"]],
+            "instruction": "Execute this group before the next. Request replanning for uncertainty; "
+                           "group completion proves local effects only, not task success."}
 
     def cancel_input_sequence(self, reason):
         if self.input_sequence:
@@ -2162,6 +2355,8 @@ class DynamicController(Controller):
         pending writes nor carries permissions into a later observation. Ambiguous
         values/directions remain policy choices; input helpers retain value checks.
         """
+        if self.execution_groups:
+            return None
         ticket, entry = self.stage_entry_ticket, self.memory.feedback.get("stage_entry")
         scope = self.memory.feedback.get("execution_scope", {})
         if (getattr(self.policy, "uses_stage_entries", False) is not True
@@ -2204,6 +2399,7 @@ class DynamicController(Controller):
     async def choose_with_context_pages(self, obs, candidates, *, limit, offset):
         """Retry only pre-dispatch context overflow with a smaller navigable page."""
         while True:
+            self.refresh_execution_groups(obs)
             if not self.pending:
                 original = len(candidates)
                 candidates = [a for a in candidates if self.stage_action_allowed(a, obs)]
@@ -2364,6 +2560,13 @@ class DynamicController(Controller):
         if not self.transition_is_observed(obs):
             return False
         self.record_query_controls(obs)
+        marker = self.pending.get("execution_group")
+        window = self.execution_groups
+        if (marker and window and self.pending.get("dispatch_status") == "ok"
+                and marker["generation"] == window["generation"] and marker["index"] == window["index"]):
+            for step in window["groups"][window["index"]]["steps"]:
+                if step["identity"] == marker["identity"] and step["operation"] == self.pending["action"]["operation"]:
+                    step["done"] = True
         key = self.pending["key"]
         self.memory.pending_writes.pop(key, None)
         self.memory.confirmed_writes.add(key)
@@ -3055,6 +3258,7 @@ class DynamicController(Controller):
             self.confirm_visible_dialog(obs)
             if self.confirm_visible_grid_row(obs):
                 trigger = "draft_row_added"
+            self.refresh_execution_groups(obs)
             self.arm_verification(obs)
             allowance = self.verification_runs.get(planning_location(obs))
             if allowance and (self.actions - allowance[0] >= 6 or time.monotonic() - allowance[1] >= 120):
@@ -3237,7 +3441,7 @@ class DynamicController(Controller):
                         if reason := await self.perform(waiting, obs):
                             return self.result("needs_attention", reason)
                         continue  # discard proposed next action until readback is confirmed
-                    if (guidance_changed or self.stage_review_due or self.ui_review_due
+                    if (guidance_changed or self.execution_groups or self.stage_review_due or self.ui_review_due
                             or (self.last_brain_location is not None
                                 and planning_location(obs) != self.last_brain_location)):
                         continue  # the previous next-action proposal predates the revised guidance

@@ -140,6 +140,23 @@ browser.errors 为共享历史列表，连续输入却要求 `not obs.errors`，
 `/tmp/jev-v11-baseline69-vs68.json`；部分报告
 `/tmp/jev-v11-baseline69-partial-report.json`（6,131 字节）。真实 run 与报告不入 Git。
 
+### DS 规划 / Jev 执行组实验（hybrid-70）
+
+针对 baseline-69 中 92 次 DS 动作选择和 41 次规划占用约 27 分 29 秒的问题，
+增加显式 execution_groups：DS 一次规划几组已观测动作和确切字段值，Jev 在组内
+选择执行，控制器以新观测读回推进组间依赖，省掉普通组字段的逐项 DS 输入调用。
+不扩大任务、预算或确认条件；Save/导航必须是最后一个单独组，结果另行验证。
+当前窗口不跨页或未知 DOM，不批量执行链接解析、密码、表格与只读验证。
+新错误、UI 检查点、未知写入或前置值变化会中止窗口并交回 DS。
+
+自动复跑使用 v1.1 business_031、fresh/no-checkpoint、slot 0；600 actions、
+600 cycles、1800 秒、1000 feedback calls、brain_interval=12、250 candidates
+及 stage_index_v1 均沿用 baseline-69。按用户要求将动作端从官方 DS 切回已有
+api.typesafe.ai 的 Jev（jev-latest），大脑仍是官方 DS deepseek-flash。
+因此与全 DS baseline-69 的对照包含模型分工和 harness 两项变化，不能只归因
+于执行组；真实分组事件、官方有效评分、strict_success、耗时与请求数需分别报告。
+输出目录 `saas-longseq-business031-20261009-v11-hybrid-70`，真实产物不入 Git。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。

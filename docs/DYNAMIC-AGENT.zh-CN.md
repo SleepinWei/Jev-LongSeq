@@ -25,6 +25,8 @@ flowchart LR
 
 ### 延迟控制
 
+- **DS 规划执行组、Jev 连续执行**：`execution_groups` 一次安排最多 4 个有序组、每组最多 8 个当前可见动作。组内动作必须独立，依赖通过组间顺序表达；阶段窗口仍受 `brain_interval` 和全局预算限制。当前组的目标、剩余动作和确切值通过 `execution_window` 提供给 Jev。只向 Jev 开放当前组，前组得到新观测的读回后才开放下一组，已存在的确切字段值可直接满足字段已填条件。确切值来自已验证 DS 规划，普通 fill/native select 无需再请求逐字段输入辅助；select 仍必须属于当前原生选项。Jev 负责每次动作选择，不能绕过组依赖去保存或切换其他任务。
+- 执行组首先支持同页普通文本框、原生下拉和最后一个单独的 Save/导航动作。所有目标必须存在于规划观测并获得阶段授权，不猜测未来 DOM；搜索/链接解析、密码、表格和验证阶段不进入该窗口。跨页、文档/frame/环境变化、弹窗、新错误、已确认前置字段变化或未知写入会撤销窗口并要求重新规划；未知写入仍保留 pending。Save 的成功派发和组完成均不等于持久化或整项成功。队列不跨会话恢复，trace 记录 `execution_groups_armed/cancelled/finished`、`execution_group_completed` 和省略输入请求的 `input_binding`。
 - 全 DS 模式可通过可选 `input_sequence` 一次规划 2–4 个当前可见、相互独立的普通文本框，首项必须与 `stage_entry` 一致。所有字段仍需要精确 planned input 与 fill 阶段授权，每次填值保留原输入辅助及校验。只有前一步派发成功、得到新观察的精确输入值回读，且页面文字、控件结构、其他值、标签和阶段未变化，才交付下一项而省掉一次 Policy 请求。唯一语义匹配可重绑 DOM ID；新菜单、导航、派生值变化、歧义、未知效果或任何新模型复核均撤销序列。组合框、搜索、表格、按钮与 Save/Submit 不进入序列；不跨会话恢复。事件 `input_sequence_armed/selected/cancelled/finished/discarded` 用于检查是否真正减少请求。
 - 浏览器在观测中记录 `document_id=performance.timeOrigin`，作为浏览器新文档证据。已授权只读验证阶段的独立 Refresh/Reload 按钮，派发成功后如果同页、同标签、同 frame 出现新文档且 HTTP 成功、已加载、无新运行错误，可仅确认 `document_reloaded_ui`，允许报表内容不变。此回读不增加业务 write checkpoint，不关闭验证义务，也不确认 Save/Submit；业务表单、行内按钮、弹窗、未知派发和缺少文档标识均不走此路径。输入序列遇到新文档也撤销。它解决同内容刷新被一直当作未确认业务写入的问题，不绕过最终评分。
 - 明确显示为 `Search` / `Search...` / `Search…` / `搜索` / `搜尋` 的普通 textbox 也保留查询焦点，不因 HTML type=text 自动按 Tab。这是输入方式，不新增动作权限或确认；组合框、原生 search 的原有处理保持，普通文本/文本日期控件继续失焦提交。成功派发的 receipt.detail 记录 `automatic_blur=skipped; reason=observed_search_field`，可用于后续查证实际执行方式；它不证明账户选中或业务保存。此类搜索框不进入独立输入序列。

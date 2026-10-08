@@ -230,6 +230,8 @@ class Memory:
                    if self.unresolved_verifications else {}),
                 **({"verification_ledger": self.verification_ledger} if self.verification_ledger else {}),
                 **({"stage_entry": self.feedback["stage_entry"]} if self.feedback.get("stage_entry") else {}),
+                **({"execution_window": self.feedback["execution_window"]}
+                   if self.feedback.get("execution_window") else {}),
                 **({"planned_inputs": self.feedback["inputs"]} if self.feedback.get("inputs") else {}),
                 **({"verification_stage": self.feedback["verification"]}
                    if self.feedback.get("verification") else {}),
