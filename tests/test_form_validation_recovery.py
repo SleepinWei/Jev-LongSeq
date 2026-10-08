@@ -2,9 +2,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from jev_browser.dynamic import DynamicController, Feedback, StageControl, action_key, generate_dynamic
+from jev_browser.dynamic import (
+    DynamicController,
+    Feedback,
+    StageControl,
+    action_key,
+    generate_dynamic,
+)
 from jev_browser.protocol import Budget, Decision, Element, Observation, Receipt, Task
-
 
 ERROR = "Missing Values Required\nFollowing fields have missing values:\n\nCompany"
 
@@ -44,6 +49,9 @@ async def test_refusal_archived_without_confirming_or_replaying_write():
     original_key = agent.pending["key"]
     assert agent.reject_visible_form_validation(rejection())
     assert agent.pending is None and not agent.memory.pending_writes
+    node = next(iter(agent.memory.key_nodes.values()))
+    assert node['form_scope'] == {'document_id': 'doc1', 'form_title': 'New Record'}
+    assert node['missing_fields'] == ['Company']
     assert not agent.memory.confirmed_writes and not agent.memory.write_checkpoints
     assert not agent.memory.confirmed_actions
     assert agent.last_transition["outcome"] == "rejected"

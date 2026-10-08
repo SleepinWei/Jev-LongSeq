@@ -232,6 +232,43 @@ strict_success、耗时和执行组完成数判断，不能把不再提前报错
 运行前 macmini 全量回归 **1003 passed / 3 skipped**、本轮源码和测试 Ruff 通过；
 133 个源码/测试/配置文件哈希匹配。推送后自动启动新目录 hybrid-72。
 
+hybrid-72（`e6122be`）已评分和清理：**0/15、data_valid=true、strict_success=false**，
+76 actions / 204 cycles、agent **1435.24 秒**，总流程 1607.01 秒、cleanup_error=null。
+停止原因 `readback unresolved; no resubmission`。133 文件运行前后哈希匹配；
+旧的 Company 只读空值早停已越过，未触发 runtime_recovery_started（该字段仍无
+DOM 必填标记），因此有限等待/修复窗口的线上收益尚未验证。
+5 次 execution_groups_armed、1 次 execution_group_completed；不能由此推导效率提升。
+155 请求（DS 43 planning、8 readback、11 input；Jev 93），累计 latency 1124.48 秒，
+DS 有 4 次 timeout。对应请求估计输入约 2.2 万 token，无响应，不能归因 context 超窗。
+
+最新历史读回输入确认 Save 目标为 `S a ve`，员工和日期正确，三条活动已填入草稿，
+Company 仍为 `status Company = `，页面保持 Not Saved。DS 最终返回 unknown；
+控制器保留 pending 并停止，没有重提或宣布完成。比 hybrid-71 同为 0 分、耗时更长，
+本轮仅证明提前终止问题消除和错误来源可追溯，**没有有效评分或整项成功改善**。
+部分最终摘要：macmini `/tmp/jev-hybrid72-final-summary.json`；真实产物不入 Git。
+
+### hybrid-73：把工作流先决条件单独提供给 DS
+
+保留 hybrid-72 的错误生命周期/恢复代码，本轮只调整规划输入和指导。
+`workflow_dependencies` 区分当前渲染的必填字段、已由 UI 明确拒绝的字段、以及
+仅供检查的空 link/派生控件；后者不能自动变成必填或新用户目标。
+校验拒绝保存原表单标题和 document_id；仅同环境、同 tab、同 origin、同 document、
+同表单标题可在 quick entry→完整表单后继续提供要求。缺旧来源、跨应用、不同表单、
+模糊/未观察到的字段不绑定猜测的控件。旧错误 quote 只证明之前的要求；当前值另查，
+不证明当前业务保存或数据状态。
+
+规划指导明确：用户未点名字段不能作为跳过工作流必需字段的理由，先解决已知缺失
+依赖再大量编辑子表或 Save；只读依赖通过可见源控件和新观察的选项进行有限修复，
+允许打开新的 UI 查证，不猜填默认值、不读取隐藏状态、不扩大原任务。
+输入单独设有条数上限和省略计数，不在每次规划重复整份历史。
+回归检查真实投影后发出的模型 payload、原 trusted_goal、不跨应用复用旧拒绝、
+作用域缺失/控件歧义和恢复后只证明 UI 值。自动复跑仍为原 v1.1 business_031、
+官方 DS deepseek-flash + Jev、fresh/no-checkpoint 和所有原预算。
+
+hybrid-73 运行前 macmini 全量 **1012 passed / 3 skipped**；测试导入格式修正后
+相关回归 **32 passed**，修改文件 Ruff 通过。134 个源码/测试/配置哈希核验一致，
+按 push-before-benchmark 流程推送后自动启动全新目录。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。
