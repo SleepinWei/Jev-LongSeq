@@ -658,6 +658,11 @@ class JsonFeedback:
             "value is absent from a derived dropdown, inspect its observed source fields, plan "
             "authorized inputs there, then reobserve the generated options before selecting. "
             "Only these controls may mutate the form. Navigation and replan remain available. "
+            "A sourced form_validation_rejected node means the previous Save was explicitly "
+            "refused for the listed blank fields, not confirmed. Dismiss only the observed error "
+            "message, then replan the revealed form with those fields in stage_controls and inputs. "
+            "Resolve linked inputs using fresh observed options before a corrected Save. "
+            "A missing DOM required flag does not override an explicit required-field error. "
             "Do not include controls belonging to already completed objects or another stage. "
             "Do not invent IDs for controls that are not observed. After an opener reveals new controls, "
             "request replanning to scope those controls. Empty stage_controls allows locating/navigation only. "
@@ -1786,6 +1791,7 @@ class DynamicController(Controller):
                 "before": self.memory.view(obs),
                 "before_tabs": {**obs.tabs, obs.tab_id: obs.url},
                 "before_dialogs": list(obs.dialogs),
+                "before_document_id": obs.document_id,
                 "before_menu_signature": menu_signature(obs),
                 "before_controls": visible_controls(obs),
                 "before_errors": [e for e in obs.errors if e.startswith("page_error:")],
@@ -2280,6 +2286,75 @@ class DynamicController(Controller):
         if reason := await self.perform(self.internal_action(obs, Operation.WAIT), obs):
             return self.result("needs_attention", reason)
         return None
+
+    def reject_visible_form_validation(self, obs):
+        """Recognize a new pre-save required-field refusal, never absence of a result.
+
+        Deliberately narrow to the observed quick-entry validation contract. Other
+        errors (including post-submit server errors) retain the unknown-write guard.
+        No model-generated outcome can release a pending mutation through this path.
+        """
+        pending = self.pending
+        if (not pending or pending.get("dispatch_status") != "ok"
+                or pending.get("action", {}).get("operation") != Operation.CLICK
+                or pending.get("click_target", {}).get("role") != "button"
+                or pending.get("click_target", {}).get("name", "").strip().casefold() != "save"
+                or pending.get("confirmation_scope") is not None
+                or set(self.memory.pending_writes) != {pending["key"]}
+                or obs.loading or len(obs.dialogs) != 1
+                or obs.observation_id == pending["action"]["observation_id"]
+                or not obs.document_id or obs.document_id != pending.get("before_document_id")
+                or obs.url != pending["before"]["url"]
+                or obs.tab_id != pending["before"]["tab_id"]):
+            return False
+        quote = obs.dialogs[0]
+        lines = [line.strip() for line in quote.splitlines() if line.strip()]
+        if (len(lines) < 3 or lines[:2] != ["Missing Values Required",
+                "Following fields have missing values:"]
+                or quote in pending.get("before_dialogs", [])
+                or quote in pending.get("before_excerpt", "") or len(quote) > 1200):
+            return False
+        missing = lines[2:]
+        fields = pending.get("field_snapshot", [])
+        if (len(set(missing)) != len(missing) or any(
+                len(matches := [f for f in fields if f["name"] == name]) != 1
+                or matches[0]["value"].strip() for name in missing)):
+            return False  # Unrelated or ambiguous field feedback cannot authorize a retry.
+        actionable = [e for e in obs.elements if e.enabled and not e.read_only]
+        if (len(actionable) != 1 or actionable[0].role != "button"
+                or actionable[0].name.strip().casefold() not in {"close", "close (icon control)", "关闭"}
+                or actionable[0].editable or actionable[0].selectable):
+            return False  # Not a message-only validation dialog.
+        key = pending["key"]
+        source = {**self.memory.view(obs), "pointer": "dialogs/0", "quote": quote}
+        node = {"verification": "form_validation_rejected", "source": source,
+                "interpretation": "Save explicitly refused for blank fields; repair before a new Save. "
+                                  "No business commit or task completion confirmed.",
+                "missing_fields": missing, "environment_id": self.memory.environment_id,
+                "action_key": key}
+        evidence_key = digest([obs.url, obs.tab_id, quote, key])
+        self.memory.evidence[evidence_key] = node
+        self.memory.key_nodes[evidence_key] = node.copy()
+        self.last_transition = {**pending, "resolved": True, "outcome": "rejected",
+            "basis": "fresh_required_field_validation", "rejection": node,
+            "business_commit_confirmed": False}
+        self.memory.pending_writes.pop(key)
+        self.pending = None
+        # Keep the consumed Save key: unchanged input must not simply be retried.
+        # Correcting the form produces a different semantic action key.
+        self.fresh_scope_required = True
+        self.stale_click = None
+        self.cancel_input_sequence("explicit form validation rejected the stage")
+        self.memory.feedback.update({"complete": False, "last_outcome": "none",
+            "inputs": [], "stage_controls": [], "stage_entry": None,
+            "input_sequence": [], "verification": None})
+        if self.memory.feedback.get("execution_scope"):
+            self.memory.feedback["execution_scope"]["bindings"] = {}
+        self.log("form_validation_rejected", key=key, missing_fields=missing, source=source,
+                 business_commit_confirmed=False, unchanged_action_replay_allowed=False,
+                 fresh_planning_required=True)
+        self.checkpoint()
+        return True
 
     def confirm_transition(self, outcome, obs, basis):
         if not self.pending:
@@ -2960,6 +3035,11 @@ class DynamicController(Controller):
                     return self.result("needs_attention", reason)
                 continue
             loading = 0
+            # Classify the explicit refusal while its message is still visible,
+            # before policy/readback can dismiss it or claim a successful commit.
+            if self.reject_visible_form_validation(obs):
+                trigger = "ui_checkpoint"
+                offset = 0
             if self.fresh_scope_required and not self.pending:
                 delay = self.planning_retry_after.get(planning_location(obs), 0) - time.monotonic()
                 if delay > 0:

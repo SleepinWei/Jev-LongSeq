@@ -72,6 +72,33 @@ Mac mini 有界报告：`/tmp/jev-v11-baseline68-partial-report.json`（5,346 �
 的 `/data/messages/1/content/last_transition/field_snapshot`，可见错误锚点为
 `trajectory.jsonl` 物理行 224 的 `/observation/text`。真实 run 产物不入 Git。
 
+### 必填校验拒绝的恢复实验（baseline-69）
+
+baseline-68 的历史 DS 规划知道 Company 为空，却安排“先 Save，报必填再补”。
+仅日期和 Save 进入 stage_controls；报错后 pending/readback 没有明确拒绝状态，
+补救方案没有执行。此次只验证这项恢复机制，不提高预算、不修改评分器或任务，
+保留 v1.1 fresh episode、官方 deepseek-flash 全 DS 和 baseline-68 的全部参数。
+
+控制器在选择动作或关闭弹窗之前，识别精确的
+`Missing Values Required / Following fields have missing values:` 新消息。
+必须是同一文档、页面和 tab 中刚成功派发的 Save，只有该 pending，只有关闭按钮，
+且消息列出的每个字段均能唯一对应保存前快照的空字段，才归类为 `rejected`。
+不接受模型生成的拒绝判断、普通错误、缺少记录、超时、未知回执、Submit/确认后的
+服务器错误或旧报错作为解除依据；这些仍保持未知写入保护。
+
+明确拒绝的原 Save 不计成功、不创建 write checkpoint、不完成任务。
+保留 consumed key 和带来源的关键错误节点，清空旧阶段权限并强制 fresh planning：
+关闭当前错误消息，重新观察表单，为缺失字段和选项生成新阶段权限，再提交修正后的表单。
+新 Save 仍须独立读回。DOM 的 required=false 不覆盖明确的必填校验错误。
+此轮不新增更广泛的提交前预测或其他错误恢复，避免把多个机制的效果混在一起。
+
+验证需同时报告官方有效得分、strict_success、agent/环境耗时、停止原因和请求数量，
+以及是否真实触发该恢复路径。单次成绩变化仅是个案证据，不等于总体成功率提升。
+远端回归检查通过并 push 后自动在新目录
+`saas-longseq-business031-20261009-v11-ds-baseline-69` 重跑并跟进 grading/cleanup。
+macmini 全量回归 **963 passed / 3 skipped**；关键 lint 通过，131 个运行源码、
+测试及配置文件哈希匹配。新增 24 个拒绝恢复/负例测试，保留未知写入保护。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。
