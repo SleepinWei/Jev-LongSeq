@@ -176,6 +176,28 @@ cycle18 的首次普通 readback 实际答案包含 confirmed、4 个当前 evid
 非空 cursor、其他额外字段、旧证据、缺少证明和截断响应仍拒绝。
 这避免无效的格式重试，不提升 confirmed 或释放未知写入；模型和全局预算不变。
 
+hybrid-71 已完成官方评分和清理：**0/15、data_valid=true、strict_success=false**，
+27 actions / 38 cycles / agent **212.40 秒**，setup 98.07 秒，verification 3.70 秒，
+总流程 344.19 秒；cleanup_error=null、进程结束、slot 0 容器清空。
+stop=`required derived fields are blank after UI runtime failure: Company`，
+证据为 cycle38 / event192 的 Employee Separation 页面；并未耗尽 1800 秒预算。
+普通空 cursor 不再导致早停；另一次 length 读回经过原有单次修复后继续。
+
+35 次 Jev 请求全部成功，合计 **15.70 秒、平均 0.45 秒**；DS 12 planning +
+3 readback 合计 171.00 秒，4 input 合计 2.81 秒，所有请求合计 189.51 秒。
+价格未配置，费用仍未知。DS 触发为 initial 1、ui_checkpoint 7、
+navigation_checkpoint 4、action_readback 2（另有一次修复），阶段间往返仍多。
+**仍没有 execution_group_completed**，因此只能确认 Jev 动作选择速度与协议联动，
+不能把早停后的短耗时当作任务效率提升，也不能声称执行组提高成功率。
+当前同页组尚不覆盖链接字段解析、表格和跨页新控件，这些仍会交回 DS；
+后续需解决常规 UI 转换频繁切断窗口、Company 派生字段失败后的恢复，再验证
+连续组完成与官方有效得分。与全 DS baseline-69 的 4/15 对比也不构成提升证据。
+
+空 cursor 修复在 macmini 全量回归 **996 passed / 3 skipped**、关键 lint 通过后
+推送 `9dc8e9f` 并自动复跑；运行前后 132 个源码/测试/配置哈希均匹配。
+有界最终摘要及对照保存在 macmini `/tmp/jev-hybrid71-final-summary.json`、
+`/tmp/jev-hybrid71-vs70.json`。原始运行记录与凭据不入 Git。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。
