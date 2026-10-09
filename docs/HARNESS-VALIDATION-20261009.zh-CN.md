@@ -162,6 +162,31 @@ cycle 62 另有 Company/Employee 不可用操作以及 group grounding 错误；
 
 ## 比较边界
 
+## 回放进度条验证
+
+修复仅涉及观察网页 `static/app.js`，不改变被测 agent、harness 执行或评分。
+原来每个 slider input 同步渲染，重复扫描事件前缀、重建官方评分列表、更新
+所有历史行，并立刻更换截图 URL。连续拖动造成大量过期截图请求。
+
+现在以 requestAnimationFrame 合并输入，松手立即处理最终位置；同一事件的
+状态复用，官方评分只在结果或过程采样边界变化时重绘，历史行只更新选中项。
+截图请求合并、可取消且绑定选择 generation；过期响应和错误不覆盖当前画面，
+近期六帧缓存有界并在切换 run 时释放。自动播放不使用手动拖动的延后窗口。
+
+macmini 相关回归 **24 passed, 1 skipped**，lint 通过。测试覆盖慢截图、最终
+指令/动作/DOM 对齐、过期成功和错误响应、缓存回退、run reset，以及原有
+Studio 导航/CSP/DOM 标注。首次新增测试因 Shadow DOM 定位错误失败，修正
+测试定位后通过；不把首次失败报告成产品行为。
+
+对同一真实 `hybrid-company-82`（520 事件）执行 61 次 slider input 的只读
+浏览器对照：旧版截图请求 **56 次**，修复版 **1 次**；两组最终均停在事件
+215，显示对应 Open Link 动作及原阶段指令。输入循环耗时 360.4 vs 367.2 ms，
+包含人工 3 ms 间隔；没有据此声称主线程耗时提升。该对照证明请求拥塞减少，
+不代表 benchmark 成功率或所有网络条件下的播放流畅度已验证。
+限定对照报告及截图保存在 macmini 的忽略目录
+`output/playwright/replay-scrub-comparison-20261009.json` 和
+`output/playwright/replay-scrub-fixed-20261009.png`。
+
 过程分始终为 observer-only。请求节省和字段修复单独记录，但最终结论依据官方
 grade.data_valid=true、strict_success、earned/total、停止原因、耗时和 cleanup。
 一次新环境试验不能估计全 benchmark 成功率；旧异步截图也不是原子动作快照。

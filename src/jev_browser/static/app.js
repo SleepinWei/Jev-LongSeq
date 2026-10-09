@@ -21,6 +21,52 @@ export function nextReplayStep(events, selected) {
   return Math.max(0,events.length-1);
 }
 
+// Keep the slider responsive without rendering every intermediate input event.
+export function replayScrubber(render, request = requestAnimationFrame, cancel = cancelAnimationFrame) {
+  let ticket=null, latest=null;
+  const clear=()=>{if(ticket!==null) cancel(ticket); ticket=null; latest=null;};
+  const flush=()=>{const value=latest; clear(); if(value!==null) render(value);};
+  return {queue(value) {latest=value; if(ticket===null) ticket=request(flush);}, flush, cancel:clear};
+}
+
+// Requests and decoded frames belong to a selection generation. An old response
+// must never publish its image, metadata or error over a newer selection.
+export function replayImages({load, display, failed, delay=100, capacity=6}) {
+  let generation=0, wanted=null, timer=null, controller=null;
+  const cache=new Map();
+  function cancel() {
+    generation++; wanted=null; clearTimeout(timer); timer=null;
+    controller?.abort(); controller=null;
+  }
+  function reset() {cancel(); for(const frame of cache.values()) frame.dispose(); cache.clear();}
+  function request(url, metadata, wait=delay) {
+    if(wanted===url) return;
+    cancel(); wanted=url;
+    const version=generation;
+    if(cache.has(url)) {
+      const frame=cache.get(url); cache.delete(url); cache.set(url,frame);
+      display(frame,metadata,url); return;
+    }
+    timer=setTimeout(async()=>{
+      timer=null;
+      const active=new AbortController(); controller=active;
+      try {
+        const frame=await load(url,active.signal);
+        if(version!==generation) {frame.dispose(); return;}
+        cache.set(url,frame);
+        display(frame,metadata,url);
+        while(cache.size>capacity) {
+          const key=cache.keys().next().value;
+          cache.get(key).dispose(); cache.delete(key);
+        }
+      } catch(error) {
+        if(version===generation && error.name!=='AbortError') {wanted=null; failed(error,url);}
+      } finally {if(controller===active) controller=null;}
+    },wait);
+  }
+  return {request,cancel,reset};
+}
+
 export function mount(root, {location, history, isActive}) {
 /* Browser Use / Jev Ultrafast (MIT) inspector helpers and rendering pattern,
  * adapted for LongSeq artifacts, timeline replay and continuous live screenshots.
@@ -39,12 +85,42 @@ let state = null, currentId = "", selected = 0, tab = "choices", etag = "", load
 let live = null, playing = false, playbackStart = 0, playbackTime = 0, lastImage = "", pendingId = "";
 let submitting = false, launcherBusy = false, watchedLaunch = "";
 let frameMetadata = null;
+let eventStateCache=null;
+let benchmarkCache=null;
 try { if(localStorage.getItem('longseq-dom-mode')==='all') $("dom-mode").value='all'; } catch {}
 const selectedDOMOnly = () => $("dom-mode").value==='selected';
 let replayRequested = new URLSearchParams(location.search).get('replay') === '1';
 const n = value => Number.isFinite(value) ? value.toLocaleString() : "—";
 const seconds = value => Number.isFinite(value) ? `${value.toFixed(1)} s` : "—";
 const endpoint = (path, extra={}) => `/api/${path}?${new URLSearchParams({id:currentId, ...extra})}`;
+const scrub=replayScrubber(seek);
+const images=replayImages({
+  async load(url,signal) {
+    const response=await fetch(url,{signal});
+    if(!response.ok) throw Error('截图暂不可用');
+    const src=URL.createObjectURL(await response.blob()), image=new Image();
+    try {
+      image.src=src; await image.decode();
+      return {src,width:image.naturalWidth,height:image.naturalHeight,
+        dispose:()=>URL.revokeObjectURL(src)};
+    } catch(e) {URL.revokeObjectURL(src); throw e;}
+  },
+  display(frame,meta,url) {
+    if(lastImage!==url) return;
+    $("screenshot").src=frame.src;
+    frameMetadata=meta;
+    $("screenshot").parentElement.style.aspectRatio=`${meta.width || frame.width}/${meta.height || frame.height}`;
+    $("screenshot").hidden=false; $("empty").hidden=true;
+    $("frame-note").textContent=meta.note;
+    renderTargets();
+  },
+  failed(_error,url) {
+    if(lastImage!==url) return;
+    lastImage=''; frameMetadata=null; renderTargets();
+    $("screenshot").hidden=true; $("empty").hidden=false;
+    $("empty-hint").textContent='截图暂不可用，可切换事件重试。';
+  },
+});
 function error(message) { $("error").textContent = message || ""; $("error").hidden = !message; }
 async function get(url, options={}) {
   const response = await fetch(url, options);
@@ -63,7 +139,9 @@ async function runs(preferred) {
   } else $("status").textContent = "暂无记录 · 可运行本地演示";
 }
 async function selectRun(id) {
+  scrub.cancel(); images.reset();
   stop(); currentId = id; pendingId = ""; state = null; etag = ""; live = null; lastImage = "";
+  eventStateCache=null; benchmarkCache=null;
   clearInstructions();
   $("page-warning").hidden=true;
   $("screenshot").hidden=true; $("empty").hidden=false;
@@ -104,7 +182,7 @@ function renderSummary() {
   const r = state.report?.result || state.result || {}, grade = state.report?.grade || {};
   const benchmark=longseqBenchmark(state.report,state.manifest,state.process_scores,
     $("follow").checked ? Infinity : state.events[selected]?.at ?? -Infinity);
-  renderBenchmark(root,benchmark);
+  renderScores(benchmark);
   const count = state.events.filter(e => e.kind === "action").length;
   const extracted = new Set(state.events.filter(e => e.kind === "extraction").flatMap(e => e.facts.map(f => f.entity)));
   $("outcome").textContent = statuses[r.status] || "记录中";
@@ -156,6 +234,7 @@ function title(event) {
   return event.reason || event.observation?.title || event.kind;
 }
 function eventState() {
+  if(eventStateCache?.events===state.events && eventStateCache.selected===selected) return eventStateCache.value;
   let obs=null, decision=null, candidates=[], plan=null, action=null, targetAction=null;
   const facts = {}, done = new Set(), pages = new Map();
   for (const e of state.events.slice(0,selected+1)) {
@@ -173,10 +252,21 @@ function eventState() {
     if (e.kind === "subtask_completed") done.add(e.subtask_id);
     if (e.kind === "extraction") for (const f of e.facts) (facts[f.entity] ||= {})[f.field] = f;
   }
-  return {obs,decision,candidates,plan,facts,done,action,targetAction,pages:[...pages.values()]};
+  const value={obs,decision,candidates,plan,facts,done,action,targetAction,pages:[...pages.values()]};
+  eventStateCache={events:state.events,selected,value};
+  return value;
+}
+function renderScores(benchmark) {
+  const visible=(benchmark?.process_scores || []).filter(s=>s && s.finished_epoch<=benchmark.process_at).length;
+  if(benchmarkCache?.report===state.report && benchmarkCache.manifest===state.manifest &&
+      benchmarkCache.scores===state.process_scores && benchmarkCache.snapshot===benchmark?.process_snapshot &&
+      benchmarkCache.visible===visible) return;
+  benchmarkCache={report:state.report,manifest:state.manifest,scores:state.process_scores,
+    snapshot:benchmark?.process_snapshot,visible};
+  renderBenchmark(root,benchmark);
 }
 function renderSelection() {
-  if(state) renderBenchmark(root,longseqBenchmark(state.report,state.manifest,state.process_scores,
+  if(state) renderScores(longseqBenchmark(state.report,state.manifest,state.process_scores,
     $("follow").checked ? Infinity : state.events[selected]?.at ?? -Infinity));
   if (!state?.events.length) {clearInstructions(); return;}
   selected = Math.min(selected,state.events.length-1);
@@ -205,7 +295,8 @@ function renderSelection() {
   if (!live?.active || !$("follow").checked) showFrame(e.at);
   renderTargets();
   updateStatus();
-  root.querySelectorAll('.event-row').forEach(el=>el.classList.toggle('selected',Number(el.dataset.index)===selected));
+  root.querySelector('.event-row.selected')?.classList.remove('selected');
+  root.querySelector(`.event-row[data-index="${selected}"]`)?.classList.add('selected');
 }
 function clearInstructions() {
   $("instruction-source").textContent='等待事件';
@@ -264,17 +355,13 @@ function renderTargets() {
 function showImage(frame, version="", metadata=null) {
   const url = endpoint("image", {frame, v:version});
   if (url === lastImage) { renderTargets(); return; }
-  const meta=metadata || state.frames[frame] || {};
+  const meta={...(metadata || state.frames[frame] || {})};
   lastImage=url; frameMetadata=null; renderTargets();
-  $("screenshot").onload=()=>{
-    if(lastImage!==url) return;
-    frameMetadata=meta;
-    const w=meta.width || $("screenshot").naturalWidth, h=meta.height || $("screenshot").naturalHeight;
-    $("screenshot").parentElement.style.aspectRatio=`${w}/${h}`;
-    renderTargets();
-  };
-  $("screenshot").src=url; $("screenshot").hidden=false; $("empty").hidden=true;
-  $("frame-note").textContent = metadata ? `实时截图 · ${new Date(version*1000).toLocaleTimeString()}` : frame === "final" ? "最终截图 · 无可用过程画面" : `录制截图 · ${new Date(meta.time*1000).toLocaleTimeString()}`;
+  meta.note=metadata ? `实时截图 · ${new Date(version*1000).toLocaleTimeString()}` : frame === "final" ? "最终截图 · 无可用过程画面" : `录制截图 · ${new Date(meta.time*1000).toLocaleTimeString()}`;
+  $("frame-note").textContent='正在加载所选时间点的截图…';
+  // Automatic playback ticks every 100 ms; do not debounce each tick into the
+  // next one indefinitely. Manual scrubbing still waits for the latest seek.
+  images.request(url,meta,playing ? 0 : undefined);
 }
 function showFrame(at) {
   if (!state) return;
@@ -283,6 +370,7 @@ function showFrame(at) {
   if (index>=0) showImage(String(index));
   else if (state.has_final && !state.frames.length) showImage("final");
   else {
+    images.cancel();
     $("screenshot").hidden=true; $("empty").hidden=false;
     $("empty-hint").textContent=state.frames.length ? "此时间点尚未记录首帧，可前进查看。" : "等待实时截图或 trace.zip 完成写入。";
     lastImage="";
@@ -308,9 +396,10 @@ function renderTrail() {
   container.scrollTop=$("follow").checked ? container.scrollHeight : old;
   $("step-count").textContent=`${filtered.length} / ${state.events.length} 事件`;
 }
-function seek(index) { stop(); $("follow").checked=false; selected=index; renderSelection(); }
+function seek(index) { scrub.cancel(); stop(); $("follow").checked=false; selected=index; renderSelection(); }
 function stop() { playing=false; $("play").textContent='播放'; }
 function play(fromStart=false) {
+  scrub.cancel();
   if (!state?.events.length) return;
   $("follow").checked=false;
   if(fromStart || selected>=state.events.length-1) selected=0;
@@ -319,7 +408,10 @@ function play(fromStart=false) {
 }
 $("run").addEventListener('change',()=>selectRun($("run").value));
 $("refresh").addEventListener('click',()=>runs().catch(e=>error(e.message)));
-$("scrubber").addEventListener('input',()=>seek(Number($("scrubber").value)));
+$("scrubber").addEventListener('input',()=>{
+  stop(); $("follow").checked=false; scrub.queue(Number($("scrubber").value));
+});
+$("scrubber").addEventListener('change',()=>scrub.flush());
 $("previous").addEventListener('click',()=>seek(Math.max(0,selected-1)));
 $("next").addEventListener('click',()=>seek(Math.min((state?.events.length || 1)-1,selected+1)));
 $("history").addEventListener('click',e=>{const row=e.target.closest('[data-index]'); if(row) seek(Number(row.dataset.index));});
@@ -415,7 +507,6 @@ $("dom-mode").addEventListener('change',()=>{
   try {localStorage.setItem('longseq-dom-mode', $("dom-mode").value);} catch {}
   renderSelection(); renderTargets();
 });
-$("screenshot").addEventListener('error',()=>{lastImage=''; frameMetadata=null; renderTargets(); $("screenshot").hidden=true; $("empty").hidden=false; $("empty-hint").textContent='截图暂不可用，等待下一帧。';});
 runs().catch(e=>error(e.message));
 launcherStatus();
 setInterval(()=>{if(isActive()) launcherStatus();},2000);
@@ -428,5 +519,5 @@ return {navigate: async url => {
   $("replay-view").checked=replayRequested;
   root.querySelector('main').classList.toggle('replay-mode',replayRequested);
   if(id && id!==currentId) await runs(id);
-}, activate: () => {launcherStatus();update();}, deactivate:stop};
+}, activate: () => {launcherStatus();update();}, deactivate:() => {scrub.cancel();images.cancel();stop();}};
 }

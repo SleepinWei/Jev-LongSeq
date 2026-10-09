@@ -65,3 +65,49 @@ assert.equal(nextReplayStep([{kind:'observation'},{kind:'observation'}],0),1);
          module.as_uri()], input=script, text=True, capture_output=True, timeout=20,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_scrubbing_coalesces_and_stale_image_responses_cannot_publish():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for replay JavaScript checks")
+    module = Path(__file__).resolve().parents[1] / "src/jev_browser/static/app.js"
+    script = r"""
+import assert from 'node:assert/strict';
+const {replayScrubber,replayImages}=await import(process.argv[2]);
+let callback=null, renders=[];
+const scrub=replayScrubber(value=>renders.push(value), fn=>{callback=fn;return 1;}, ()=>{callback=null;});
+for(let i=0;i<100;i++) scrub.queue(i);
+callback(); assert.deepEqual(renders,[99]);
+scrub.queue(50); scrub.flush(); assert.deepEqual(renders,[99,50]);
+scrub.queue(90); scrub.cancel(); assert.equal(callback,null,'A pending seek must not survive another navigation');
+const tick=()=>new Promise(resolve=>setTimeout(resolve,5));
+const loads=[], shown=[], failures=[], disposed=[];
+const loader=replayImages({delay:0,capacity:2,
+  load:(url,signal)=>new Promise((resolve,reject)=>loads.push({url,signal,resolve,reject})),
+  display:(frame,metadata,url)=>shown.push({url,metadata}),
+  failed:(error,url)=>failures.push(url)});
+const frame=url=>({src:url,dispose:()=>disposed.push(url)});
+loader.request('old',{event:1}); await tick();
+loader.request('new',{event:99}); await tick();
+assert.equal(loads[0].signal.aborted,true);
+loads[1].resolve(frame('new')); await tick();
+loads[0].resolve(frame('old')); await tick();
+assert.deepEqual(shown,[{url:'new',metadata:{event:99}}],'Late images cannot relabel the current instruction');
+assert.deepEqual(disposed,['old']);
+loader.request('obsolete',{}); await tick();
+loader.request('new',{event:100});
+loads[2].reject(new Error('late failed image')); await tick();
+assert.deepEqual(failures,[],'An old error cannot blank a newer cached frame');
+assert.equal(loads.length,3,'Revisiting a cached frame must not request it again');
+assert.equal(shown.at(-1).metadata.event,100);
+loader.request('other-run',{}); await tick();
+loader.reset(); loads[3].resolve(frame('other-run')); await tick();
+assert.equal(shown.at(-1).url,'new','Run reset must discard in-flight screenshots');
+assert.ok(disposed.includes('new') && disposed.includes('other-run'));
+"""
+    completed = subprocess.run(
+        [node, "--input-type=module", "-", module.as_uri()], input=script,
+        text=True, capture_output=True, timeout=20,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
