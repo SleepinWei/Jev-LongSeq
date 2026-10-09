@@ -7,9 +7,7 @@
 `48c22deb18b98c0ed78f81e7f3be82bc162de2c8`，供历史实验复核；重跑旧版须显式传入
 `--saas-root /Users/octopusz/SaaS-Bench`。
 
-### v1.1 迁移与新 baseline
-
-#### 中间过程评分（observer only）
+### 中间过程评分（observer only）
 
 `--saas-process-scores auto` 为默认值，仅为经 SHA256 审计的 business_031 v1.1
 只读 SQL 评分器启用；其他任务/评分器不自动采样，`off` 可关闭。此变更只增加
@@ -36,6 +34,26 @@ LongSeq Studio 官方判分面板增加“过程快照”，可展开查看检�
 旧 run 的数据库已清理，无法补算历史中间分；UI 与 diagnostics 标注未采集。
 Codex 使用 `--view scores --limit 5` 分页读取，或按返回的 artifact/line/pointer
 展开指定检查项；默认 summary 不输出所有检查项，不扩大 context。
+
+2026-10-09 验证：提交 `8f82be2`，macmini 全量 **1050 passed / 3 skipped**；
+129 个源码/测试文件哈希一致。隔离 slot 98 的真实官方评分采样序列为
+`0 → 15 → 12 → 12 → 12 → 13 → 12 → 13 → 13`（满分 15），9 次全部有效；
+完整 fixture 新通过 8 项，改回草稿正确记录退步。总评分工作 21.914 秒，
+fixture 环境已清理。这只是评分观测验证，没有 agent/model 成功率证据。
+限定报告位于 macmini `/tmp/jev-process-score-fixtures-20261009-01/bounded-summary.json`。
+官方 DS 只读余额接口仍返回 `is_available=false`，模型重跑被余额阻塞，未切换
+provider/model 或反复发送付费请求；production 环境 smoke 的结果另记。
+
+production `saas-business031-20261009-process-score-smoke-77` 使用同一 v1.1
+business_031、slot 0 和原启动配置，仅加 `--environment-only`：初始与最终两次
+评分均有效 `0/15`，严格成功为 null（无 agent 性能），模型调用为 0。
+setup 60.719 秒、初始评分 2.131 秒、最终评分 2.293 秒、环境总计 88.179 秒；
+生命周期 finished、cleanup_error=null、slot 0 容器清空，运行前后 129 文件哈希
+一致。实际 Studio 页面展示两条过程快照、8 个检查项，并保持严格成功“未判分”。
+限定 summary 在 macmini `/tmp/jev-process-smoke77-summary.json`。定时采样与
+停止等待通过回归验证；真实 DS/Jev episode 的中间曲线及性能影响仍待余额恢复。
+
+### v1.1 迁移与新 baseline
 
 business_031 的 description/meta 与旧版一致，但官方评分器已变更：精确活动数量、
 供应商名称/显示名、付款对象及 reference、总账入账、Twenty 工作区和公司关联、日期与正文。
