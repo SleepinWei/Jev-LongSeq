@@ -119,6 +119,36 @@ async def test_agent_then_official_verifier_then_cleanup_and_durable_report(envi
     assert json.loads((output / "report.json").read_text())["grade"]["score"] == 1
 
 
+async def test_process_scoring_preserves_empty_output_and_final_grade(environment, monkeypatch):
+    args, events, _, output = environment
+    monkeypatch.setattr(saas, "scoring_config", lambda *a: {
+        "enabled": True, "min_interval_s": 30, "interval_s": 120, "action_interval": 20})
+    report = await saas.run_saas(args, {"id": "business_023"}, output)
+    assert events == ["start", "verify", "agent", "verify", "stop"]
+    rows = [json.loads(line) for line in (output / "process-scores.jsonl").read_text().splitlines()]
+    assert [r["phase"] for r in rows] == ["baseline", "final"]
+    assert report["grade"]["strict_success"] is True
+    assert report["process_scoring"]["snapshots"] == 2
+    assert report["manifest"]["process_scoring"]["enabled"]
+    assert not list(output.glob("*verify*"))
+
+
+async def test_process_scoring_stops_before_cleanup_on_agent_error(environment, monkeypatch):
+    args, events, _, output = environment
+    monkeypatch.setattr(saas, "scoring_config", lambda *a: {
+        "enabled": True, "min_interval_s": 30, "interval_s": 120, "action_interval": 20})
+
+    async def fail(args, *, output):
+        assert not list(output.iterdir())
+        raise RuntimeError("agent failure")
+
+    monkeypatch.setattr("jev_browser.cli.run_trial", fail)
+    report = await saas.run_saas(args, {"id": "business_023"}, output)
+    assert events == ["start", "verify", "stop"]
+    assert not report["grade"]["data_valid"]
+    assert report["process_scoring"]["snapshots"] == 1
+
+
 async def test_original_agent_uses_same_official_grading_and_cleanup(environment, monkeypatch):
     args, events, _, output = environment
     args.saas_agent = "jev-ultrafast"
@@ -196,15 +226,20 @@ async def test_v11_uses_official_oracle_without_compatibility_copy(environment, 
 
     def verify(effective_task, *args):
         events.append("verify")
-        assert effective_task is task
-        assert effective_task["verify_py_path"] == str(official)
+        if effective_task is task:
+            assert effective_task["verify_py_path"] == str(official)
+        else:
+            # Runtime sampling executes the exact audited source privately.
+            assert Path(effective_task["verify_py_path"]).read_text() == official.read_text()
+            assert not Path(effective_task["verify_py_path"]).is_relative_to(output)
+            assert not list(output.iterdir())
         return verification(True)
 
     monkeypatch.setattr(saas, "upstream", lambda root: (loader, slots, SimpleNamespace(run_verify=verify)))
     monkeypatch.setattr(saas, "command", lambda *args: SimpleNamespace(
         stdout="aaa042140b585f80ad531bc8c9af296581426873"))
     report = await saas.run_saas(args, {"id": "business_031"}, output)
-    assert events == ["start", "agent", "verify", "stop"]
+    assert events == ["start", "verify", "agent", "verify", "stop"]
     manifest = report["manifest"]
     assert manifest["benchmark_version"] == "v1.1"
     assert manifest["verifier_patch"] is None

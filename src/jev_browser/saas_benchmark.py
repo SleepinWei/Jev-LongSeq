@@ -24,6 +24,7 @@ from .observability import save_analysis, write_json
 from .protocol import RunResult, Task, digest, now
 from .run_status import register_phase
 from .saas_verifier import verifier_source
+from .process_scores import ProcessScores, scoring_config
 
 DEFAULT_TASKS = ["business_023", "business_031"]
 UPSTREAM_RELEASES = {
@@ -43,6 +44,8 @@ def add_options(parser):
     parser.add_argument("--saas-startup-timeout", type=int,
                         help="Override selected applications' readiness timeout in seconds; separate from agent budget")
     parser.add_argument("--saas-agent", choices=["longseq", "jev-ultrafast"], default="longseq")
+    parser.add_argument("--saas-process-scores", choices=["auto", "off"], default="auto",
+                        help="Observer-only intermediate official scores for audited read-only verifiers")
     parser.add_argument("--saas-history-context", action="store_true",
                         help="Experimental observed history context for the original Ultrafast agent")
     parser.add_argument("--saas-resume-from", help="Continue an unsaved LongSeq draft from a prior run directory")
@@ -305,6 +308,8 @@ async def run_saas(args, selected, output):
     revision = command("git", "-C", str(root), "rev-parse", "HEAD").stdout.strip()
     original_verifier, effective_verifier, verifier_patch = verifier_source(task)
     verifier_hash = digest(effective_verifier)
+    score_config = scoring_config(task["task_id"], effective_verifier,
+                                  getattr(args, "saas_process_scores", "auto"))
     manifest = {
         "upstream_revision": revision,
         "suite": "saas-bench",
@@ -324,6 +329,7 @@ async def run_saas(args, selected, output):
         "verifier_hash": verifier_hash,
         "upstream_verifier_hash": digest(original_verifier),
         "verifier_patch": verifier_patch,
+        "process_scoring": score_config,
         "image_ids": image_ids,
         "startup": startup,
         "port_map": ports,
@@ -361,6 +367,7 @@ async def run_saas(args, selected, output):
     # One process owns each slot across setup, agent execution, verification and cleanup.
     lock = (root / f".jev-{slots._SLOT_PREFIX}-{args.saas_slot}.lock").open("a")
     owned = False
+    process_scores = None
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         owned = True
@@ -371,6 +378,12 @@ async def run_saas(args, selected, output):
             await completed_thread(slot.start_apps, sites, hostname="localhost")
         finally:
             setup_s = time.monotonic() - setup_started
+        if score_config["enabled"]:
+            process_scores = ProcessScores(output, effective_verifier, task, verifier.run_verify,
+                                           grade_result, args.saas_slot, ports, score_config)
+            await process_scores.sample("baseline")
+            if not getattr(args, "environment_only", False):
+                process_scores.start()
         register_phase(output, "running")
         if not getattr(args, "environment_only", False) and getattr(args, "saas_agent", "longseq") == "jev-ultrafast":
             from .saas_ultrafast import run_original
@@ -389,17 +402,27 @@ async def run_saas(args, selected, output):
                 trial_args._resume_checkpoint = checkpoint
                 trial_args._tuning = AgentTuning.model_validate(checkpoint["manifest"]["tuning"])
             report = await run_trial(trial_args, output=output)
+        if process_scores:
+            await process_scores.stop()
         # LongSeq requires an empty output directory when it starts. Keep the
         # hidden oracle out of that directory until the agent has stopped.
         if verifier_patch:
             verifier_path.write_text(effective_verifier)
         verify_started = time.monotonic()
+        verify_epoch, verify_stamp = time.time(), now()
+        if process_scores:
+            process_scores.progress()
+            verify_cycle, verify_actions = process_scores.cycle, process_scores.actions
         register_phase(output, "grading")
         verification = await completed_thread(
             verifier.run_verify, verification_task, args.saas_slot, ports, "localhost", str(output)
         )
         verify_s = time.monotonic() - verify_started
         grade = grade_result(verification)
+        if process_scores:
+            process_scores.record(verification, "final", verify_stamp, verify_epoch, verify_s,
+                                  verify_cycle, verify_actions)
+            process_scores.publish(force=True)
         if verifier_patch:
             grade.update(source="SaaS-Bench verify.py with BigCapital schema compatibility",
                          verifier_patch=verifier_patch)
@@ -442,13 +465,23 @@ async def run_saas(args, selected, output):
             "error": f"{type(exc).__name__}: {exc}",
         }
     finally:
-        if owned:
-            register_phase(output, "cleanup")
+        try:
+            if process_scores:
+                try:
+                    await process_scores.stop()
+                    process_scores.publish(force=True)
+                finally:
+                    process_scores.close()
+        finally:
             try:
-                await completed_thread(slot.stop_apps, sites)
-            except Exception as exc:
-                cleanup_error = f"{type(exc).__name__}: {exc}"
-        lock.close()
+                if owned:
+                    register_phase(output, "cleanup")
+                    try:
+                        await completed_thread(slot.stop_apps, sites)
+                    except Exception as exc:
+                        cleanup_error = f"{type(exc).__name__}: {exc}"
+            finally:
+                lock.close()
     report["environment"] = {
         "startup": startup,
         "setup_s": setup_s,
@@ -456,6 +489,7 @@ async def run_saas(args, selected, output):
         "total_s": time.monotonic() - started,
         "cleanup_error": cleanup_error,
     }
+    report["process_scoring"] = process_scores.summary() if process_scores else {"config": score_config}
     if cleanup_error:
         report["result"].update(status="failed", strict_success=None)
         report["grade"]["data_valid"] = False

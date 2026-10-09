@@ -1,6 +1,8 @@
 """Benchmark verdicts on native and LongSeq traces are distinct from agent status."""
+import json
 import re
 import threading
+from datetime import datetime
 
 from playwright.async_api import async_playwright, expect
 
@@ -64,6 +66,19 @@ async def test_benchmark_ui_shows_valid_partial_score_and_invalid_verifier(tmp_p
         "actions":0,"reason":"Official verifier rejected completion"},
         "grade":{"data_valid":True,"score":.1,"earned":2,"total":20,"checks":[]},
         "model_calls":[]})
+    (longseq / 'trajectory.jsonl').write_text(''.join(json.dumps({
+        'kind':'observation', 'time':f'2026-09-29T08:00:{s:02d}Z', 'cycle':i,
+        'observation':{'title':'Example','url':'https://example.test/','text':'Page'}})+'\n'
+        for i,s in enumerate((10,20,30))))
+    def epoch(s):
+        return datetime.fromisoformat(f'2026-09-29T08:00:{s:02d}+00:00').timestamp()
+    (longseq / 'process-scores.jsonl').write_text(''.join(json.dumps({
+        'phase':'baseline' if i==0 else 'intermediate', 'finished_epoch':epoch(s),
+        'finished_at':f'2026-09-29T08:00:{s:02d}Z', 'duration_s':.1, 'cycle':i,
+        'data_valid':i!=2, 'earned':v if i!=2 else None, 'total':20,
+        'baseline_earned':1, 'delta_earned':v-1 if i!=2 else None,
+        'checks':[{'label':'<img src=x onerror=alert(1)>','weight':1,'passed':True}]})+'\n'
+        for i,(s,v) in enumerate(((5,1),(15,5),(25,9)))))
     server=make_server(tmp_path,0)
     thread=threading.Thread(target=server.serve_forever,daemon=True)
     thread.start()
@@ -91,8 +106,23 @@ async def test_benchmark_ui_shows_valid_partial_score_and_invalid_verifier(tmp_p
                 long=page.locator('.studio-view[data-view=longseq]')
                 await expect(long.locator('#benchmark-success')).to_have_text('未通过')
                 await expect(long.locator('#benchmark-score')).to_have_text('2 / 20')
+                await expect(long.locator('#benchmark-process-title')).to_contain_text('评分无效')
+                await long.locator('#follow').uncheck()
+                await long.locator('#scrubber').evaluate("e=>{e.value='1';e.dispatchEvent(new Event('input'));}")
+                await expect(long.locator('#benchmark-process-title')).to_contain_text('5 / 20')
+                await expect(long.locator('#benchmark-process-title')).to_contain_text('+4 分')
+                await long.locator('#benchmark-process summary').click()
+                assert await long.locator('#benchmark-process-history li').count()==2
+                assert await long.locator('#benchmark-process-checks img').count()==0
+                await long.locator('#scrubber').evaluate("e=>{e.value='0';e.dispatchEvent(new Event('input'));}")
+                await expect(long.locator('#benchmark-process-title')).to_contain_text('1 / 20')
+                assert await long.locator('#benchmark-process-history li').count()==1
+                await expect(long.locator('#benchmark-score')).to_have_text('2 / 20')
+                await expect(long.locator('#benchmark-success')).to_have_text('未通过')
                 assert not errors
             finally:
                 await browser.close()
     finally:
-        server.shutdown();server.server_close();thread.join()
+        server.shutdown()
+        server.server_close()
+        thread.join()

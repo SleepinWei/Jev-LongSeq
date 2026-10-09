@@ -4,6 +4,13 @@
 
 ## 最小读取流程
 
+中间官方评分独立存入 `process-scores.jsonl`。summary 只返回初始/最新快照的
+有效性、分数、净增分、cycle 与展开引用；旧运行缺失明确记录为 missing，不从
+最终分倒推。运行 `--view scores --limit 5` 获取分页过程报告，再按返回的
+`--view artifact --file process-scores.jsonl --line N --pointer /checks/0` 读取
+选定检查项。所有命令在 macmini 执行，并可加 `--output /tmp/partial-scores.json`
+分享限定片段。非原子中间快照没有反馈给被测 agent，也不替代最终判分及 cleanup。
+
 1. 查 `summary`：官方分数是否有效、agent 停止原因、生命周期、异常调用、最后异常 cycle、证据是否存在。
 2. 查失败 cycle 的 `step`，或筛选 `calls`。这一步只返回缩略记录和原始字段的展开引用。
 3. 根据调用的 `request_artifact` / `response_artifact` 引用，读取具体 JSON 字段。验证模型当时究竟收到什么、返回什么，再判断 harness 或模型的问题。

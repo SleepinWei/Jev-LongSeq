@@ -93,6 +93,31 @@ def test_summary_retains_grade_and_does_not_confuse_agent_stop_with_cleanup(tmp_
     assert Diagnostics(tmp_path, 'trial').query()['data']['grade_final'] is True
 
 
+def test_process_scores_are_bounded_and_final_grade_stays_separate(tmp_path):
+    path = run_fixture(tmp_path)
+    rows = [{'phase': 'baseline', 'data_valid': True, 'earned': 1, 'total': 15},
+            {'phase': 'intermediate', 'data_valid': True, 'earned': 5, 'total': 15,
+             'delta_earned': 4, 'cycle': 40, 'checks': [{'label': '业务' * 9000}]}]
+    log(path, 'process-scores.jsonl', rows)
+    with (path / 'process-scores.jsonl').open('a') as stream:
+        stream.write('{"unfinished":')
+    api = Diagnostics(tmp_path, 'trial')
+    summary = api.query(max_bytes=4000)
+    assert len(encode(summary)) <= 4000
+    data = api.query()['data']
+    assert data['grade']['earned'] == 4
+    assert data['process_scoring']['baseline']['earned'] == 1
+    assert data['process_scoring']['latest']['delta_earned'] == 4
+    assert data['log_health']['process-scores.jsonl']['invalid_lines'] == 1
+    page = api.query(view='scores', max_bytes=4000, limit=1)['data']
+    assert page['items'][0]['record']['phase'] == 'baseline'
+    assert page['next_cursor'] == 1
+    expansion = data['process_scoring']['latest']['expand']
+    selected = api.query(**{**expansion, 'pointer': '/checks/0/label'}, max_bytes=4000)
+    assert len(encode(selected)) <= 4000 and selected['data']['next_cursor'] is not None
+    assert Store(tmp_path).data('trial')['process_scores'][1]['earned'] == 5
+
+
 def test_failed_attempts_and_starts_are_joined_by_attempt_id(tmp_path):
     path = run_fixture(tmp_path)
     log(path, 'model-request-starts.jsonl', [

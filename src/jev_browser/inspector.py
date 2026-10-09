@@ -301,6 +301,7 @@ class Store:
             "report": read_json(self.file(path, "report.json")),
             "result": read_json(self.file(path, "result.json")),
             "events": rows,
+            "process_scores": events(self.file(path, "process-scores.jsonl")),
             "frames": [{k: v for k, v in f.items() if k != "resource"} for f in self.frames(path)],
             "has_final": self.file(path, "final.png").exists(),
             "navigations": self.navigations(path),
@@ -456,7 +457,7 @@ def make_server(root, port=8768):
                     path = store.path(run_id)
                     versions = []
                     for name in ("trajectory.jsonl", "report.json", "result.json", "trace.zip", "frames.jsonl",
-                                 "manifest.json", "task.json"):
+                                 "manifest.json", "task.json", "process-scores.jsonl"):
                         file = store.file(path, name)
                         versions.append(str(file.stat().st_mtime_ns) if file.exists() else "0")
                     etag = '"' + "-".join(versions) + '"'

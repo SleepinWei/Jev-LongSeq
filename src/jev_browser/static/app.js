@@ -102,7 +102,8 @@ async function update() {
 }
 function renderSummary() {
   const r = state.report?.result || state.result || {}, grade = state.report?.grade || {};
-  const benchmark=longseqBenchmark(state.report,state.manifest);
+  const benchmark=longseqBenchmark(state.report,state.manifest,state.process_scores,
+    $("follow").checked ? Infinity : state.events[selected]?.at ?? -Infinity);
   renderBenchmark(root,benchmark);
   const count = state.events.filter(e => e.kind === "action").length;
   const extracted = new Set(state.events.filter(e => e.kind === "extraction").flatMap(e => e.facts.map(f => f.entity)));
@@ -175,6 +176,8 @@ function eventState() {
   return {obs,decision,candidates,plan,facts,done,action,targetAction,pages:[...pages.values()]};
 }
 function renderSelection() {
+  if(state) renderBenchmark(root,longseqBenchmark(state.report,state.manifest,state.process_scores,
+    $("follow").checked ? Infinity : state.events[selected]?.at ?? -Infinity));
   if (!state?.events.length) {clearInstructions(); return;}
   selected = Math.min(selected,state.events.length-1);
   const e = state.events[selected], s = eventState();

@@ -17,7 +17,8 @@ JSON_FILES = {'manifest.json', 'task.json', 'report.json', 'result.json', 'memor
               'resume-memory-initial.json', 'observability.json', 'live.json', 'gym-actions.json'}
 LOGS = {'events': ('trajectory.jsonl',), 'calls': ('model-calls.jsonl',),
         'starts': ('model-request-starts.jsonl',), 'spans': ('spans.jsonl',),
-        'contexts': ('context-projections.jsonl',), 'frames': ('frames.jsonl',)}
+        'contexts': ('context-projections.jsonl',), 'frames': ('frames.jsonl',),
+        'scores': ('process-scores.jsonl',)}
 LOG_FILES = {name for files in LOGS.values() for name in files} | {'network-preconnects.jsonl'}
 ARTIFACT = re.compile(r'model-artifacts/[a-f0-9]{32}\.(request|response)\.json')
 
@@ -212,6 +213,17 @@ class Diagnostics:
             if target.exists():
                 available.append({'file': name, 'bytes': target.stat().st_size})
         inflight = {key: value for key, value in started.items() if key not in completed}
+        score_count, score_baseline, score_latest = 0, None, None
+        for _, name, line, row in self.rows(LOGS['scores'], warnings):
+            if row is None:
+                continue
+            score_count += 1
+            compact = {k: row.get(k) for k in ('phase', 'data_valid', 'earned', 'total',
+                       'delta_earned', 'cycle', 'finished_at', 'duration_s')}
+            compact['expand'] = {'view': 'artifact', 'file': name, 'line': line, 'pointer': ''}
+            if row.get('phase') == 'baseline':
+                score_baseline = compact
+            score_latest = compact
         return {
             'lifecycle': lifecycle, 'report_status': report_status,
             'completion_confirmed': final,
@@ -221,12 +233,14 @@ class Diagnostics:
             'grade': {key: grade.get(key) for key in
                       ('strict_success', 'data_valid', 'score', 'earned', 'total', 'source')},
             'grade_final': final or legacy_final,
+            'process_scoring': {'snapshots': score_count, 'baseline': score_baseline,
+                                'latest': score_latest, 'agent_feedback': False},
             'cleanup': preview(report.get('environment', {})),
             'configuration': {key: preview(manifest.get(key), depth=2) for key in
                               ('task_id', 'benchmark', 'benchmark_version', 'upstream_revision',
                                'fixture_hash', 'verifier_hash', 'upstream_verifier_hash', 'verifier_patch',
                                'image_ids', 'port_map', 'policy', 'mode', 'models', 'context_limits', 'budget',
-                               'tuning', 'code_hash', 'system_prompt_hash', 'continuation')},
+                               'tuning', 'code_hash', 'system_prompt_hash', 'continuation', 'process_scoring')},
             'manifest_status': manifest_status,
             'calls': {'attempts': call_count, 'by_kind': dict(kinds), 'by_model': dict(models),
                       'errors': dict(errors), 'latency_s': round(latency, 3),
@@ -242,7 +256,8 @@ class Diagnostics:
                 'Unregistered historical runs cannot prove process completion or reconstruct missing requests.',
                 'In-flight starts may be interrupted attempts; see lifecycle before assuming they are running.',
                 'Cycle/observation links are recorded associations, not proof of causality.',
-                'Frames are sampled; nearest frame is not an atomic before/after action capture.'],
+                'Frames are sampled; nearest frame is not an atomic before/after action capture.',
+                'Process scores are non-atomic observer snapshots, never model feedback; missing historical scores cannot be reconstructed after cleanup.'],
             'next_queries': [
                 {'view': 'step', 'cycle': (last_failure or last_event or {}).get('cycle')},
                 {'view': 'calls'}, {'view': 'artifact', 'file': 'report.json', 'pointer': '/grade/checks'},
@@ -349,7 +364,7 @@ class Diagnostics:
                 'fixture', 'fixture_hash', 'verifier_hash', 'upstream_verifier_hash', 'verifier_patch',
                 'image_ids', 'port_map', 'policy', 'mode', 'models',
                 'context_limits', 'budget', 'tuning',
-                'continuation', 'system_prompt_hash', 'code_hash')
+                'continuation', 'system_prompt_hash', 'code_hash', 'process_scoring')
         differences = {key: {'current': preview(current_manifest.get(key)),
                              'baseline': preview(baseline_manifest.get(key))} for key in keys
                        if current_manifest.get(key) != baseline_manifest.get(key)}
