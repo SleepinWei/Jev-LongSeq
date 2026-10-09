@@ -160,8 +160,6 @@ cycle 62 另有 Company/Employee 不可用操作以及 group grounding 错误；
 首次模型 JSON 有非法控制字符，修复后成功解析。模型输出问题与 harness 的
 降级顺序问题需分别统计，不能统称为模型能力不足。
 
-## 比较边界
-
 ## 回放进度条验证
 
 修复仅涉及观察网页 `static/app.js`，不改变被测 agent、harness 执行或评分。
@@ -186,6 +184,8 @@ Studio 导航/CSP/DOM 标注。首次新增测试因 Shadow DOM 定位错误失�
 限定对照报告及截图保存在 macmini 的忽略目录
 `output/playwright/replay-scrub-comparison-20261009.json` 和
 `output/playwright/replay-scrub-fixed-20261009.png`。
+
+## 比较边界
 
 过程分始终为 observer-only。请求节省和字段修复单独记录，但最终结论依据官方
 grade.data_valid=true、strict_success、earned/total、停止原因、耗时和 cleanup。
