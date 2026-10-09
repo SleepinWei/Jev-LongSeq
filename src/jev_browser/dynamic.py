@@ -2221,6 +2221,34 @@ class DynamicController(Controller):
             return "unknown action outcome; no resubmission"
         return None
 
+    def scoped_planned_input(self, action, obs, element):
+        """Use a validated stage's exact value, never infer a value from nearby fields."""
+        scope = self.memory.feedback.get("execution_scope") or {}
+        binding = scope.get("bindings", {}).get(element.id)
+        identity = ("role", "name", "grid_ref", "row_ref")
+        if (action.bound_value is not None or action.operation not in {Operation.FILL, Operation.SELECT}
+                or action.operation not in self.task.allowed_operations
+                or self.pending or self.memory.pending_writes or self.fresh_scope_required
+                or obs.loading or obs.challenge or self.memory.feedback.get("planning_handoff")
+                or scope.get("environment_id") != self.memory.environment_id
+                or scope.get("generation") != self.scope_generation
+                or scope.get("location") != list(planning_location(obs))
+                or scope.get("dialogs", []) != obs.dialogs
+                or not binding or action.operation not in binding["operations"]
+                or any(getattr(element, k) != binding[k] for k in identity)
+                or not element.enabled or element.read_only
+                or (action.operation == Operation.FILL and not element.editable)
+                or (action.operation == Operation.SELECT and not element.selectable)
+                or action.observation_id != obs.observation_id
+                or action.document_version != obs.document_version
+                or action.tab_id != obs.tab_id or action.frame_id != obs.frame_id
+                or not self.stage_action_allowed(action, obs)):
+            return None
+        matches = [e for e in obs.elements if all(getattr(e, k) == binding[k] for k in identity)]
+        if len(matches) != 1:
+            return None
+        return self.planned_input(obs, element)
+
     async def bind_input(self, action, obs):
         element = next(e for e in obs.elements if e.id == action.element_ref)
         if (self.execution_groups and not self.pending
@@ -2234,6 +2262,21 @@ class DynamicController(Controller):
             self.input_retry = None
             self.log("input_binding", action=action.model_dump(),
                      source={"kind": "validated_execution_group", "group": self.execution_groups["index"]},
+                     input_model_call_skipped=True)
+            return
+        intended = self.scoped_planned_input(action, obs, element)
+        if intended is not None:
+            try:
+                value = InputValue(value=intended["value"]).value
+            except ValidationError as exc:
+                raise InvalidInputValue(sorted({e["type"] for e in exc.errors()})) from None
+            if action.operation == Operation.SELECT and value not in element.options:
+                raise InvalidInputValue("unobserved_select_option")
+            action.bound_value = value
+            self.input_retry = None
+            self.log("input_binding", action=action.model_dump(),
+                     source={"kind": "validated_stage_input", "generation": self.scope_generation,
+                             "name": element.name, "grid_ref": element.grid_ref, "row_ref": element.row_ref},
                      input_model_call_skipped=True)
             return
         if action.bound_value is not None:
@@ -2560,7 +2603,7 @@ class DynamicController(Controller):
 
         The ticket is valid only for the exact planning frame. It neither resolves
         pending writes nor carries permissions into a later observation. Ambiguous
-        values/directions remain policy choices; input helpers retain value checks.
+        values/directions remain policy choices; input binding retains value/scope checks.
         """
         if self.execution_groups:
             return None

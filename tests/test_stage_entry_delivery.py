@@ -6,7 +6,6 @@ import pytest
 from jev_browser.dynamic import (
     DynamicController,
     Feedback,
-    InvalidInputValue,
     StageControl,
     StageEntry,
 )
@@ -39,7 +38,7 @@ async def controller(operation="fill", ref="name", **kwargs):
     return agent
 
 
-async def test_fill_entry_uses_unbound_candidate_and_existing_binder_once():
+async def test_fill_entry_binds_validated_plan_without_another_value_request():
     agent = await controller()
     obs = page()
     candidates = agent.generate_stage_candidates(obs, limit=250, offset=0)
@@ -49,7 +48,8 @@ async def test_fill_entry_uses_unbound_candidate_and_existing_binder_once():
     agent.policy.transport.post.assert_not_awaited()
     await agent.bind_input(selected, obs)
     assert selected.bound_value == "requested name"
-    agent.feedback_model.value.assert_awaited_once()
+    agent.feedback_model.value.assert_not_awaited()
+    assert agent.events[-1]["source"]["kind"] == "validated_stage_input"
     assert agent.stage_entry_decision(obs, candidates) is None
     assert not agent.memory.confirmed_writes and not agent.memory.write_checkpoints
 
@@ -125,7 +125,7 @@ async def test_local_readback_does_not_issue_another_entry_ticket():
     assert agent.stage_entry_decision(obs, candidates) is None
 
 
-async def test_delivered_entry_cannot_bypass_planned_value_validation():
+async def test_delivered_entry_uses_exact_plan_even_if_helper_would_return_a_different_value():
     agent = await controller()
     obs = page()
     candidates = agent.generate_stage_candidates(obs, limit=250, offset=0)
@@ -133,6 +133,8 @@ async def test_delivered_entry_cannot_bypass_planned_value_validation():
     selected = next(a for a in candidates if a.id == decision.choice)
     agent.feedback_model.value.return_value = "wrong record"
     agent.feedback_model.repair_value.return_value = "wrong record"
-    with pytest.raises(InvalidInputValue):
-        await agent.bind_input(selected, obs)
+    await agent.bind_input(selected, obs)
+    assert selected.bound_value == "requested name"
+    agent.feedback_model.value.assert_not_awaited()
+    agent.feedback_model.repair_value.assert_not_awaited()
     agent.backend.execute.assert_not_awaited()

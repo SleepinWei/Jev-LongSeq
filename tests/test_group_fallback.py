@@ -50,7 +50,8 @@ async def test_valid_primary_grid_fill_survives_ineligible_groups_without_model_
     action = next(a for a in generate_dynamic(obs, task) if a.element_ref == "activity")
     await controller.bind_input(action, obs)
     assert action.bound_value == "Return company laptop"
-    brain.value.assert_awaited_once()  # Normal input validation is retained, not a cached group value.
+    brain.value.assert_not_awaited()  # Exact stage value, not an ineligible cached execution group.
+    assert controller.events[-1]["source"]["kind"] == "validated_stage_input"
     assert await controller.perform(action, obs) is None
     backend.execute.assert_awaited_once()
     assert controller.pending and controller.memory.pending_writes  # Normal fresh readback still required.

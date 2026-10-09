@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from jev_browser.dynamic import DynamicController, Feedback, InvalidInputValue
+from jev_browser.dynamic import DynamicController, Feedback
 from jev_browser.models import JsonPolicy
 from jev_browser.protocol import Budget, Decision, Element, Observation, Operation, Receipt, Task
 
@@ -85,7 +85,8 @@ async def test_three_inputs_save_two_policy_calls_and_keep_save_pending():
     assert result.status == "budget_exhausted"
     assert [e.value for e in obs.elements[:3]] == ["Ada", "Lovelace", "ada@example.test"]
     assert agent.policy.choose.await_count == 1  # Save still needs a separate decision.
-    assert agent.feedback_model.value.await_count == 3
+    assert agent.feedback_model.value.await_count == 0
+    assert sum(e.get("input_model_call_skipped") is True for e in agent.events) == 3
     assert sum(e["kind"] == "input_sequence_selected" for e in agent.events) == 2
     assert agent.pending["click_target"]["name"] == "Save"
     assert not agent.memory.write_checkpoints and agent.memory.pending_writes
@@ -193,7 +194,7 @@ async def test_continuation_requires_same_stage_and_exact_current_evidence(chang
     agent.backend.execute.assert_awaited_once()
 
 
-async def test_unique_fresh_dom_rebind_keeps_value_helper_and_scope_checks():
+async def test_unique_fresh_dom_rebind_uses_exact_plan_and_keeps_scope_checks():
     agent = await controller()
     fresh = await first_input(agent, page())
     fresh.elements[1].id = "fresh-last"
@@ -204,8 +205,10 @@ async def test_unique_fresh_dom_rebind_keeps_value_helper_and_scope_checks():
     agent.feedback_model.value.side_effect = None
     agent.feedback_model.value.return_value = "Wrong"
     agent.feedback_model.repair_value.return_value = "Wrong"
-    with pytest.raises(InvalidInputValue):
-        await agent.bind_input(action, fresh)
+    await agent.bind_input(action, fresh)
+    assert action.bound_value == "Lovelace"
+    agent.feedback_model.value.assert_not_awaited()
+    agent.feedback_model.repair_value.assert_not_awaited()
     agent.backend.execute.assert_awaited_once()
 
 
