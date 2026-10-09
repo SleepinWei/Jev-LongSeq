@@ -156,7 +156,7 @@ SNAPSHOT = r"""selector => {
     const required = !!el.required || el.getAttribute('aria-required') === 'true' ||
       /\*\s*$/.test(labels || implicitLabel) ||
       [...(el.closest('.frappe-control') || el.parentElement).querySelectorAll('label')]
-        .some(label => visible(label) && getComputedStyle(label, '::after').content.replace(/["']/g, '') === '*');
+        .some(label => visible(label) && getComputedStyle(label, '::after').content.replace(/["']/g, '').trim() === '*');
     const navigation = el.closest('nav,header,[role="navigation"],[role="banner"]');
     const context = row ? labelText(row) : navigation ? 'Navigation: ' + labelText(navigation).slice(0, 240) : '';
     return {index, role, name:name.trim().replace(/\s*\*$/, ''), value:el.type === 'password' ? (el.value ? '[redacted]' : '') : (display ? labelText(el) : el.value || ''),
@@ -754,12 +754,18 @@ class PlaywrightBackend:
                 await handle.fill(action.bound_value, timeout=self.timeout_ms)
                 # Native text/date widgets often commit on change/blur. Leaving
                 # focus inside them can let a datepicker restore the old value.
-                # Link/autocomplete fields must retain focus for option selection.
-                if (self.task.control_mode == "dynamic" and element.role != "combobox"
+                # Nonempty link queries retain focus for fresh option selection.
+                # Explicit empty inputs must commit the clear before reselecting
+                # the same record; visible emptiness alone is not model state.
+                if (self.task.control_mode == "dynamic"
+                        and (element.role != "combobox" or action.bound_value == "")
                         and await handle.evaluate(
                             "el => el instanceof HTMLInputElement && el.type !== 'search' "
                             "&& document.activeElement === el")):
                     await handle.press("Tab", timeout=self.timeout_ms)
+                    if element.role == "combobox":
+                        return receipt("ok", "input_method=fill; automatic_blur=native_tab; "
+                                       "reason=explicit_empty_combobox_input; linked_resolution=unverified")
             elif op == Operation.SELECT:
                 await handle.select_option(action.bound_value, timeout=self.timeout_ms)
             elif op == Operation.SCROLL:

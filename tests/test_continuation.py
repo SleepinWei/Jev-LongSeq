@@ -419,7 +419,8 @@ async def test_recovery_rejects_swapped_named_fields_and_unresolved_runtime_erro
 
 
 @pytest.mark.parametrize('result', ['populated', 'still_blank', 'unknown'])
-async def test_one_bounded_full_form_reselect_requires_company_readback(result, monkeypatch):
+@pytest.mark.parametrize('native_commit', [False, True])
+async def test_one_bounded_full_form_reselect_requires_company_readback(result, native_commit, monkeypatch):
     from jev_browser.continuation import repair_derived_draft
 
     async def immediate(_):
@@ -454,7 +455,9 @@ async def test_one_bounded_full_form_reselect_requires_company_readback(result, 
                 obs.elements[0].value = action.bound_value
             elif result == 'populated':
                 obs.elements[1].value = 'TechVista'
-            return Receipt(action_id=action.id, status='ok')
+            detail = ('automatic_blur=native_tab; reason=explicit_empty_combobox_input'
+                      if native_commit and action.operation == Operation.FILL and action.bound_value == '' else '')
+            return Receipt(action_id=action.id, status='ok', detail=detail)
 
         async def blur_input(self, obs, ref):
             self.calls.append(('blur', ref))
@@ -465,11 +468,11 @@ async def test_one_bounded_full_form_reselect_requires_company_readback(result, 
         fresh, repaired = await repair_derived_draft(browser, task, checkpoint, original, Observer())
         assert repaired and fresh.elements[1].value == 'TechVista'
         assert fresh.elements[0].value == original.elements[0].value
-        assert len(browser.calls) == 4
+        assert len(browser.calls) == (3 if native_commit else 4)
     else:
         with pytest.raises(ValueError, match='no replay|no retry'):
             await repair_derived_draft(browser, task, checkpoint, original, Observer())
-        assert len(browser.calls) == (1 if result == 'unknown' else 4)
+        assert len(browser.calls) == (1 if result == 'unknown' else 3 if native_commit else 4)
 
 
 @pytest.mark.parametrize('duplicate_labels', [False, True])

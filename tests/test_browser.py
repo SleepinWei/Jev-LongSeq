@@ -452,7 +452,8 @@ async def test_form_parameters_come_from_trusted_bindings():
         assert await browser.page.locator("select").input_value() == "pro"
 
 
-async def test_readonly_derived_display_required_star_and_grid_row_scope():
+@pytest.mark.parametrize("marker", ["*", " *", "\u00a0*"])
+async def test_readonly_derived_display_required_star_and_grid_row_scope(marker):
     from jev_browser.dynamic import generate_dynamic
     from jev_browser.protocol import Task
 
@@ -465,8 +466,10 @@ async def test_readonly_derived_display_required_star_and_grid_row_scope():
               <div class="control-value like-disabled-input" style="height:30px"></div></div>
             <div class="frappe-control" style="display:none"><label>Hidden</label>
               <div class="control-value like-disabled-input">secret</div></div>
+            <div class="frappe-control"><label>Optional</label><input></div>
             <div class="grid-row"><span>Row 1</span><label>Activity<input></label></div>
-            <div class="grid-row"><span>Row 2</span><label>Activity<input></label></div>''')
+            <div class="grid-row"><span>Row 2</span><label>Activity<input></label></div>'''
+            .replace("content: '*'", f'content: "{marker}"'))
         browser.errors = ['page_error:derived link failed'] + ['blocked_request:noise'] * 30
         obs = await browser.observe()
         company = next(e for e in obs.elements if e.name == 'Company')
@@ -474,6 +477,7 @@ async def test_readonly_derived_display_required_star_and_grid_row_scope():
         assert not company.enabled and not company.editable
         assert any(e.name == 'Derived Empty' and e.required and e.value == '' for e in obs.elements)
         assert not any(e.name == 'Hidden' for e in obs.elements)
+        assert not next(e for e in obs.elements if e.name == 'Optional').required
         assert not any(a.element_ref == company.id for a in generate_dynamic(obs, task))
         rows = [e for e in obs.elements if e.name == 'Activity']
         assert 'Row 1' in rows[0].context and 'Row 2' not in rows[0].context
@@ -481,7 +485,7 @@ async def test_readonly_derived_display_required_star_and_grid_row_scope():
         assert 'page_error:derived link failed' in obs.errors
 
 
-async def test_grounded_blur_commits_link_clear_without_clicking_an_option():
+async def test_explicit_link_clear_commits_on_native_blur_without_clicking_an_option():
     from jev_browser.dynamic import generate_dynamic
     from jev_browser.protocol import Task
 
@@ -493,10 +497,11 @@ async def test_grounded_blur_commits_link_clear_without_clicking_an_option():
         obs = await browser.observe()
         action = next(a for a in generate_dynamic(obs, task) if a.operation == Operation.FILL)
         action.bound_value = ''
-        await browser.execute(action)
+        receipt = await browser.execute(action)
+        assert receipt.status == 'ok' and 'explicit_empty_combobox_input' in receipt.detail
         assert (await browser.blur_input(obs, action.element_ref)).status == 'stale'
         fresh = await browser.observe()
-        assert (await browser.blur_input(fresh, fresh.elements[0].id)).status == 'ok'
+        assert (await browser.blur_input(fresh, fresh.elements[0].id)).status == 'rejected'
         assert await browser.page.locator('p').inner_text() == 'Cleared:'
 
 

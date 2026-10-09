@@ -202,7 +202,7 @@ async def replay_draft_step(browser, task, source, operation, value, observer, i
                     "description": candidate.description, "receipt": receipt.model_dump(),
                 })
                 if receipt.status == "ok":
-                    return
+                    return receipt
                 if receipt.status != "stale":
                     raise ValueError("recovery UI action was not confirmed; no replay: " + receipt.status)
         await asyncio.sleep(0.2)
@@ -241,15 +241,20 @@ async def repair_derived_draft(browser, task, checkpoint, fresh, observer):
         raise ValueError("required derived fields are blank; linked input is ambiguous")
     field, option = pairs[0]
     source = field.model_dump()
-    await replay_draft_step(browser, task, source, Operation.FILL, "", observer, "derived-reset")
-    # Clearing a link leaves its autocomplete open. Native Tab commits the clear
-    # and blurs it without selecting another option or submitting business data.
+    reset_receipt = await replay_draft_step(browser, task, source, Operation.FILL, "", observer, "derived-reset")
+    # Older backends retain link focus; newer ones already dispatch native Tab
+    # as part of an explicit empty input. Never dispatch that event twice.
     for _ in range(60):
         obs = await browser.observe()
         targets = [e for e in obs.elements if e.role == field.role and e.name == field.name
                    and e.editable and e.value == ""]
         if len(targets) != 1:
             raise ValueError("derived reset did not visibly clear the original input")
+        if {"automatic_blur=native_tab", "reason=explicit_empty_combobox_input"} <= set(
+                reset_receipt.detail.split("; ")):
+            observer.append("resume-bootstrap.jsonl", {"step": "derived-blur",
+                            "source": "reset_action_native_blur", "native_event_already_dispatched": True})
+            break
         receipt = await browser.blur_input(obs, targets[0].id)
         observer.append("resume-bootstrap.jsonl", {"step": "derived-blur",
                         "receipt": receipt.model_dump()})
