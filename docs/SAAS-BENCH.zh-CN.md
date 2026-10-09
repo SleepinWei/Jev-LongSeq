@@ -378,6 +378,29 @@ pending/unknown 写入。有效执行组仍走原批量路径，实际输入 hel
 macmini 全量 **1040 passed / 3 skipped**，Ruff 通过，137 个运行文件哈希核验一致；
 先 push，再自动启动同配置 fresh/no-checkpoint 的 hybrid-76，正式结果另记。
 
+hybrid-76（`d181c53`）已完成评分和清理：官方 **0/15、data_valid=true、strict_success=false**，
+32 actions / 40 cycles / 17 feedback calls，agent **185.16 秒**，setup 62.87 秒、
+verification 2.34 秒、总流程 277.48 秒；cleanup_error=null，进程退出、launcher 空闲、
+slot 0 清空，137 个文件运行前后哈希一致。与 75 实际 manifest 仅 code_hash 不同。
+
+cycle40 的官方 DS readback 被 **HTTP 402 Payment Required / Insufficient Balance** 拒绝。
+历史捕获响应 `model-artifacts/0de35aa663bc4b0b9f47fd90175dce32.response.json` 的
+`/data/body/error/message` 明确返回余额不足；这不是 context、任务预算或规划校验失败。
+因此当前有效复跑被 DS 账户余额这一外部依赖阻断，不更换已批准的 provider/model，
+不重复发送必然失败的请求，也不把其 0 分或更短耗时视为 harness 改善/退化证据。
+本轮 execution_groups_degraded、feedback_metadata_normalized、write_prerequisite_rejected
+均未触发，第三项机制仅获得回归验证，在线效果仍未验证。
+
+56 请求：DS 11 planning / 3 input / 3 readback，Jev 39；累计 latency 167.71 秒，
+1 次 HTTPStatusError，无 timeout。三项机制目前**没有官方有效评分或整项成功的提升
+证据**，不能用单元测试、格式容错或提前停止替代最终成功率结论。
+后续恢复 DS 余额后，保持本轮准确源码与原配置，用全新输出目录继续验证，直到观察到
+机制触发及业务效果；不得将本轮当成成功率样本，或为了完成测试悄悄切换模型/加预算。
+
+有界摘要（非完整运行产物）在 macmini 及本地 `/tmp/jev-hybrid74-final-summary.json`、
+`/tmp/jev-hybrid75-final-summary.json`、`/tmp/jev-hybrid76-final-summary.json`。报告保留
+grade_final、生命周期、评分、终止原因和调用统计；深入读取仍按诊断游标和 JSON 指针进行。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。
