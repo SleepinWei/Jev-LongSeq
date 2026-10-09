@@ -1441,8 +1441,32 @@ class DynamicController(Controller):
                             for c in feedback.stage_controls
                             if (e := next((e for e in obs.elements if e.id == c.element_ref), None))},
                     }
-                    if plan_errors := stage_plan_diagnostics(feedback, obs, self.task,
-                            consumed=self.consumed - self.reusable_menu_keys(obs, scope=preview_scope)):
+                    consumed = self.consumed - self.reusable_menu_keys(obs, scope=preview_scope)
+                    plan_errors = stage_plan_diagnostics(feedback, obs, self.task, consumed=consumed)
+                    entry_element = next((e for e in obs.elements
+                                          if feedback.stage_entry and e.id == feedback.stage_entry.element_ref), None)
+                    if (plan_errors and feedback.stage_entry and feedback.execution_groups and entry_element
+                            and entry_element.value != "[redacted]"
+                            and sum((p.name, p.grid_ref, p.row_ref) ==
+                                    (entry_element.name, entry_element.grid_ref, entry_element.row_ref)
+                                    for p in feedback.inputs) == 1
+                            and all(error["type"] == "group_input_requires_fresh_resolution"
+                                    for error in plan_errors)
+                            and feedback.stage_entry.operation in {"fill", "select"}
+                            and feedback.stage_entry.element_ref == feedback.execution_groups[0].actions[0].element_ref
+                            and feedback.stage_entry.operation == feedback.execution_groups[0].actions[0].operation):
+                        # Groups are optional acceleration. Keep the exact valid
+                        # first input and normal observation/readback; never fix
+                        # unsupported operations or expand the original scope.
+                        rejected_groups = len(feedback.execution_groups)
+                        feedback.execution_groups = []
+                        plan_errors = stage_plan_diagnostics(feedback, obs, self.task, consumed=consumed)
+                        if not plan_errors:
+                            self.log("execution_groups_degraded", diagnostic="group_input_requires_fresh_resolution",
+                                     groups=rejected_groups, mode="normal_observed_actions",
+                                     entry_action_changed=False, repair_call_skipped=True,
+                                     browser_action_dispatched=False)
+                    if plan_errors:
                         self.log("stage_plan_rejected", phase=phase, diagnostic=plan_errors,
                                  browser_action_dispatched=False)
                         raise InvalidStagePlan(plan_errors)

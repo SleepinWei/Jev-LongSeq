@@ -345,6 +345,39 @@ DS 15 planning / 6 input / 2 readback，Jev 36；59 请求累计 latency 314.10 
 macmini 全量 **1033 passed / 3 skipped**，Ruff 通过，136 个运行文件哈希一致；
 自动复跑目录为 `saas-longseq-business031-20261009-v11-hybrid-75`，结果另记。
 
+hybrid-75（`b03ff46`）官方 **0/15、data_valid=true、strict_success=false**，27 actions /
+95 cycles / 21 feedback calls，agent **541.09 秒**，setup 60.73 秒、verification 2.31 秒、
+总流程 633.64 秒；cleanup_error=null，进程退出、launcher 空闲、slot 0 清空，136 文件
+哈希前后一致。与 74 实际 manifest 仅 code_hash 不同、task_equal=true。
+两个新增事件（feedback_metadata_normalized/write_prerequisite_rejected）均未触发，
+**这次随机运行不能验证两项机制的在线收益，也没有提升官方评分或整项成功**。
+
+真正终止在 cycle95，两次规划均触发 group_input_requires_fresh_resolution：DS 将网格/
+链接输入装入执行组，即使收到一次针对性诊断仍重复。历史响应
+`e95954327fd94caa8aa2bd1195538567` 和 `0020ff6222cb4d7ab638eb4f0ccd8c84`
+的首动作均是有效的 Activity Name fill，但整个规划被不适合缓存的组拒绝。
+这属于明确的执行组规则未遵循，而不是“Company 未知是否必填”的歧义。
+58 请求（DS 17 planning / 3 input / 2 readback，Jev 36）累计 latency 409.29 秒。
+其中官方 DS cycle36 的相同 16,212 estimated-input-token 规划分别等待 90 秒和剩余
+29.49 秒后超时，随后进入既有 120 秒规划冷却；不是 context 超限，耗时比较受此干扰。
+有界最终摘要位于 macmini `/tmp/jev-hybrid75-final-summary.json`。
+
+### hybrid-76：不合规的执行组有限降级到普通观察执行
+
+保留前两项改动及原 provider/model、任务、恢复点和预算，只调整执行组加速的接受路径。
+当全部诊断都为 group_input_requires_fresh_resolution，首个 stage_entry 确实对应第一组
+首个输入、入口能力有效、原输入绑定唯一且未脱敏时，撤销整份执行组，保留原首动作、
+stage_controls、inputs 和目标，转入既有普通动作选择/输入解析/逐步读回流程。
+记录 execution_groups_degraded，不因这个可选加速失败再生成整份规划。
+
+错误入口、未知控件、缺失/模糊输入、脱敏值、重复动作、写入边界排序和其他诊断仍拒绝；
+不改 click 为 fill，不扩展授权、不沿用被拒绝的缓存值，不关闭保存前检查，也不清除
+pending/unknown 写入。有效执行组仍走原批量路径，实际输入 helper 和读回检查保留。
+这一项意在消除“合法第一步因为可选组格式被整体拒绝”的提前终止；在线是否改善必须
+看官方得分、整项成功及耗时，不能仅凭逐项回归通过断言成功率提高。
+macmini 全量 **1040 passed / 3 skipped**，Ruff 通过，137 个运行文件哈希核验一致；
+先 push，再自动启动同配置 fresh/no-checkpoint 的 hybrid-76，正式结果另记。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。
