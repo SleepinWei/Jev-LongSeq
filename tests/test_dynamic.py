@@ -411,7 +411,7 @@ async def test_feedback_wire_contract_and_call_ledger():
             response = {"value": "Ada"}
         elif content["phase"] == "step":
             assert "current_visible_evidence" not in content
-            assert set(content["schema"]["properties"]) == {"next_goal", "working_memory", "notes", "evidence_requests", "inputs", "verification", "stage_controls", "stage_entry", "input_sequence", "execution_groups"}
+            assert set(content["schema"]["properties"]) == {"next_goal", "working_memory", "notes", "evidence_requests", "inputs", "verification", "stage_controls", "stage_entry", "input_sequence", "execution_groups", "dependency_reviews"}
             response = {"next_goal": "Inspect", "working_memory": "Nothing completed yet",
                         "stage_entry": {"intent": "locate", "operation": "request_replan"}}
         else:

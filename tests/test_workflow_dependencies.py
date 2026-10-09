@@ -90,6 +90,8 @@ async def test_actual_projected_planner_payload_contains_scoped_requirements_and
         assert hint['read_only'] and hint['source']['observation_id'] == 'old'
         assert "even when the user did not name those fields" in payload['messages'][0]['content']
         assert 'guessed defaults' in payload['messages'][0]['content']
+        assert 'dependency_reviews' in content['schema']['properties']
+        assert 'An unresolved read-only field blocks the write.' in payload['messages'][0]['content']
         assert 'Company' not in payload['messages'][0]['content']  # No benchmark-specific instruction.
         return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps({
             'next_goal': 'Locate an observed source control to repair the required field.',

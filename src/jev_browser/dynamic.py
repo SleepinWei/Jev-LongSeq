@@ -160,6 +160,13 @@ class ExecutionGroup(Model):
     actions: list[GroupAction] = Field(min_length=1, max_length=8)
 
 
+class DependencyReview(Model):
+    element_ref: str = Field(min_length=1, max_length=200)
+    status: Literal["resolved", "unresolved", "not_applicable"]
+    evidence_quote: str = Field(default="", max_length=600)
+    reason: str = Field(min_length=1, max_length=600)
+
+
 class Feedback(Model):
     _note_diagnostics: list = PrivateAttr(default_factory=list)
     _local_readback: bool = PrivateAttr(default=False)
@@ -183,6 +190,7 @@ class Feedback(Model):
     stage_entry: StageEntry | None = None
     input_sequence: list[str] = Field(default_factory=list, max_length=4)
     execution_groups: list[ExecutionGroup] = Field(default_factory=list, max_length=4)
+    dependency_reviews: list[DependencyReview] = Field(default_factory=list, max_length=40)
 
 
 class InputValue(Model):
@@ -257,6 +265,7 @@ class StageGuidance(Model):
     stage_entry: StageEntry
     input_sequence: list[str] = Field(default_factory=list, max_length=4)
     execution_groups: list[ExecutionGroup] = Field(default_factory=list, max_length=4)
+    dependency_reviews: list[DependencyReview] = Field(default_factory=list, max_length=40)
 
 
 class CompressedMemory(Model):
@@ -528,7 +537,7 @@ def control_capabilities(obs, task):
     return {ref: sorted(operations) for ref, operations in capabilities.items()}
 
 
-def workflow_dependencies(obs, memory):
+def workflow_dependencies(obs, memory, *, bounded=True):
     """Expose UI requirements separately from user goals; never guess a value or dependency."""
     required = [{"element_ref": e.id, "name": e.name, "blank": not e.value.strip(),
                  "read_only": e.read_only, "grid_ref": e.grid_ref, "row_ref": e.row_ref}
@@ -558,10 +567,55 @@ def workflow_dependencies(obs, memory):
                 **({"element_ref": matches[0].id, "read_only": matches[0].read_only}
                    if len(matches) == 1 else {})})
     return {"visible_required_fields": required[:40], "required_fields_omitted": max(0, len(required) - 40),
-            "prior_refusals": refusals[:20], "prior_refusals_omitted": max(0, len(refusals) - 20),
+            "prior_refusals": refusals[:20] if bounded else refusals,
+            "prior_refusals_omitted": max(0, len(refusals) - 20) if bounded else 0,
             "blank_link_or_derived_controls": linked[:20], "blank_controls_omitted": max(0, len(linked) - 20),
             "scope": "UI prerequisites, not new user goals or proof of a business commit; "
                      "a blank linked/derived control alone is not evidence that it is mandatory"}
+
+
+def write_prerequisite_diagnostics(obs, memory, reviews):
+    """Fresh visible values or explicit optional labels, never advisory reassurance."""
+    hints = workflow_dependencies(obs, memory, bounded=False)
+    diagnostics = []
+    required_refs = {e.id for e in obs.elements if e.required}
+    for refusal in hints["prior_refusals"]:
+        if refusal["current_state"] != "populated":
+            ref = refusal.get("element_ref")
+            if ref:
+                required_refs.add(ref)
+            else:
+                diagnostics.append({"type": "write_prerequisite_not_observed_or_ambiguous",
+                                    "name": refusal["name"]})
+    # Inspect every observed field; planner hint caps must not weaken the gate.
+    for element in obs.elements:
+        if element.value.strip():
+            continue  # A visible value only; no persistence or link integrity claim.
+        if element.id in required_refs:
+            diagnostics.append({"type": "write_required_field_blank", "element_ref": element.id,
+                                "name": element.name})
+            continue
+        if not (element.name.strip() and element.read_only
+                and element.role in {"textbox", "combobox", "status"}):
+            continue
+        matches = [r for r in reviews if r.element_ref == element.id]
+        accepted = False
+        if len(matches) == 1 and matches[0].status == "not_applicable":
+            quote = grounded_quote(matches[0].evidence_quote, evidence_text(obs))
+            optional = r"(?:optional|not required|可选|非必填|非必須)"
+            name = re.escape(re.sub(rf"\s*[(（]\s*{optional}\s*[)）]\s*$", "",
+                                    element.name.strip(), flags=re.I))
+            # A field-specific visible optional label is affirmative evidence.
+            # required=false, an unrelated optional field, and planner prose are not.
+            accepted = bool(quote and re.fullmatch(
+                rf"(?:{name}\s*(?:is\s+)?[:：\-(（]?\s*{optional}\s*[)）]?|"
+                rf"{optional}\s*[:：\-]?\s*{name})", quote.strip(), re.I))
+        if not accepted:
+            diagnostics.append({"type": "write_derived_field_unresolved", "element_ref": element.id,
+                                "name": element.name,
+                                "repair": "Inspect observed source controls and reobserve a value, or quote "
+                                          "a current field-specific explicit optional label; no guessed default."})
+    return diagnostics
 
 
 def verification_location(url):
@@ -716,6 +770,14 @@ class JsonFeedback:
             "inspection hints only. Resolve blank known prerequisites before expensive dependent "
             "grid editing or Save. Do not leave editable prerequisites blank merely to advance from "
             "quick entry; opening another observed UI to inspect/repair them is allowed. "
+            "Before planning Save/Submit/Publish/Approve, provide dependency_reviews for blank read-only "
+            "fields: element_ref, status (resolved/unresolved/not_applicable), evidence_quote, reason. "
+            "Resolved requires a currently observed nonblank value; not_applicable requires a current "
+            "field-specific explicit optional label, e.g. 'Field Name (optional)'. A missing required "
+            "marker, 'not requested', or your own explanation is not evidence of optionality. "
+            "An unresolved read-only field blocks the write. Plan inspection of its visible source "
+            "controls first, then repair using task-grounded values and freshly observed options; "
+            "preserve the unsaved draft. Do not repeat a blocked write or invent defaults. "
             "If the field is read-only, inspect its "
             "visible source controls and use fresh observed options for a bounded repair; do not "
             "pretend it is optional, keep submitting, or assume Save will fix it. Preserve unresolved "
@@ -1371,6 +1433,14 @@ class DynamicController(Controller):
                         self.log("stage_plan_rejected", phase=phase, diagnostic=plan_errors,
                                  browser_action_dispatched=False)
                         raise InvalidStagePlan(plan_errors)
+                    entry = feedback.stage_entry
+                    target = next((e for e in obs.elements if entry and e.id == entry.element_ref), None)
+                    if (entry and entry.operation == "click" and target
+                            and write_boundary(target.model_dump())):
+                        if errors := write_prerequisite_diagnostics(obs, self.memory, feedback.dependency_reviews):
+                            self.log("write_prerequisite_rejected", phase=phase, diagnostic=errors,
+                                     browser_action_dispatched=False, pending_preserved=bool(self.pending))
+                            raise InvalidStagePlan(errors)
                 break
             except ContextBudgetExceeded:
                 raise  # A protected-context overflow cannot be repaired by regenerating JSON.
@@ -1436,6 +1506,7 @@ class DynamicController(Controller):
             for key in ("execution_groups", "execution_window"):
                 if key in previous_feedback:
                     self.memory.feedback[key] = previous_feedback[key]
+            self.memory.feedback["dependency_reviews"] = previous_feedback.get("dependency_reviews", [])
         elif feedback.stage_controls is not None:
             self.scope_generation += 1
             self.fresh_scope_required = False
@@ -1911,6 +1982,13 @@ class DynamicController(Controller):
                 not element.selectable or action.bound_value not in element.options
             ):
                 return "selection is not an observed option"
+        if action.operation == Operation.CLICK and element and write_boundary(element.model_dump()):
+            reviews = [DependencyReview.model_validate(r)
+                       for r in self.memory.feedback.get("dependency_reviews", [])]
+            if errors := write_prerequisite_diagnostics(obs, self.memory, reviews):
+                self.log("write_prerequisite_rejected", diagnostic=errors,
+                         browser_action_dispatched=False, pending_preserved=bool(self.pending))
+                return "write prerequisites unresolved; no write dispatched"
         key = action_key(action, obs)
         if (action.operation in {Operation.FILL, Operation.SELECT} and not self.pending
                 and not self.memory.pending_writes and element.value != "[redacted]"

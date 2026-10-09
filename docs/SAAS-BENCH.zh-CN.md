@@ -293,6 +293,29 @@ Company 空值作为提示，无法阻止规划跳过它。后续应验证源字
 部分报告：macmini `/tmp/jev-hybrid73-final-summary.json`、`/tmp/jev-hybrid73-vs72.json`；
 每份都由 bounded diagnostics 生成，原始运行产物不入 Git。
 
+### hybrid-74：结构化依赖检查与保存前校验
+
+保留 hybrid-73 的提供方、模型、任务、fresh/no-checkpoint、fixture 和预算。
+本轮增加 `dependency_reviews={element_ref,status,evidence_quote,reason}`，状态为
+resolved/unresolved/not_applicable；在原有规划请求中输出，不为每个字段新增模型请求。
+已知必填（当前 DOM 或同作用域历史明确拒绝）必须当前可见有值；空只读字段先检查
+观察到的源控件并修复，或引用该字段当前明确的“optional/非必填”标签。DOM 未标必填、
+用户未提及、模型自己的解释、旧页面 quote 都不能作为豁免证据。普通未标必填的
+可编辑链接字段不因此全部变成必填。当前值只证明 UI 状态，不证明链接解析或业务提交。
+
+保存规划在安装作用域前检查，拒绝诊断进入现有一次规划修复；执行组、旧作用域及
+派发前状态改变由实际 Save/Submit/Publish/Approve 派发入口再次检查。不新增无界重试，
+不清除 pending/unknown 写入，不猜默认值，不注入业务专用字段规则。内部检查覆盖完整
+观察与同作用域拒绝，规划提示的条数上限不削弱派发检查。
+
+这是偏保守的机制：没有明确可选标签的空只读字段可能阻止本来合法的保存，且未观察到的
+隐藏业务依赖仍无法推断。因此必须以官方有效得分、整项成功和耗时验证；仅减少无效
+保存或更快停止不能视为成功率提升。
+
+macmini 最终全量回归 **1024 passed / 3 skipped**，修改文件 Ruff 通过；启动前核验
+135 个源码、静态资源、测试、脚本及依赖配置文件与本地一致。先 push，再自动启动
+全新目录 `saas-longseq-business031-20261009-v11-hybrid-74`；官方评分与清理结果另记。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。

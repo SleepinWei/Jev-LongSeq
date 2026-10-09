@@ -117,7 +117,7 @@ async def test_compact_stages_never_replace_readback_or_final_review(phase, tran
     def respond(request):
         content = json.loads(json.loads(request.content)["messages"][-1]["content"])
         fields = content["schema"]["properties"]
-        assert (set(fields) == {"next_goal", "working_memory", "notes", "evidence_requests", "inputs", "verification", "stage_controls", "stage_entry", "input_sequence", "execution_groups"}) == compact
+        assert (set(fields) == {"next_goal", "working_memory", "notes", "evidence_requests", "inputs", "verification", "stage_controls", "stage_entry", "input_sequence", "execution_groups", "dependency_reviews"}) == compact
         if compact:
             assert "current_visible_evidence" not in content
             response = {"next_goal": "Search", "working_memory": "Pending all three",
