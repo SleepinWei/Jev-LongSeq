@@ -169,6 +169,7 @@ class DependencyReview(Model):
 
 class Feedback(Model):
     _note_diagnostics: list = PrivateAttr(default_factory=list)
+    _format_diagnostics: list = PrivateAttr(default_factory=list)
     _local_readback: bool = PrivateAttr(default=False)
     _planning_result: str = PrivateAttr(default="not_applied")
     _readback_next_cursor: int | None = PrivateAttr(default=None)
@@ -235,6 +236,13 @@ def validated_feedback(raw, schema=Feedback):
     """Isolate invalid advisory notes; completion and control fields stay strict."""
     data = feedback_json(raw)
     diagnostics = []
+    format_diagnostics = []
+    if (isinstance(data, dict) and data.get("type") == "json_object"
+            and schema in {Feedback, StageGuidance} and data.get("complete", False) is False):
+        # This exact redundant transport-format label cannot change a plan.
+        # Unknown extras, nested action fields and completion stay strict.
+        data = {key: value for key, value in data.items() if key != "type"}
+        format_diagnostics.append({"loc": ["type"], "type": "redundant_json_format_marker_removed"})
     if isinstance(data, dict) and data.get("complete", False) is False:
         notes = data.get("notes")
         if isinstance(notes, list) and len(notes) <= 12:
@@ -251,6 +259,7 @@ def validated_feedback(raw, schema=Feedback):
     parsed = schema.model_validate(data)
     feedback = parsed if isinstance(parsed, Feedback) else Feedback(**parsed.model_dump())
     feedback._note_diagnostics = diagnostics
+    feedback._format_diagnostics = format_diagnostics
     return feedback
 
 
@@ -1354,6 +1363,10 @@ class DynamicController(Controller):
                         self.memory.feedback["last_outcome"] = "unknown"
                         raise ReadbackUnresolved
                 corpus = evidence_text(obs)
+                if feedback._format_diagnostics:
+                    self.log("feedback_metadata_normalized", phase=phase,
+                             diagnostic=feedback._format_diagnostics, repair_call_skipped=True,
+                             action_or_evidence_changed=False)
                 if feedback._note_diagnostics:
                     self.log("feedback_notes_discarded", phase=phase,
                              diagnostic=feedback._note_diagnostics,

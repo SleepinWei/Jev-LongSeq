@@ -316,6 +316,35 @@ macmini 最终全量回归 **1024 passed / 3 skipped**，修改文件 Ruff 通�
 135 个源码、静态资源、测试、脚本及依赖配置文件与本地一致。先 push，再自动启动
 全新目录 `saas-longseq-business031-20261009-v11-hybrid-74`；官方评分与清理结果另记。
 
+hybrid-74（`d508919`）官方评分 **0/15、data_valid=true、strict_success=false**；
+28 actions / 39 cycles、23 feedback calls，agent **325.95 秒**，setup 63.14 秒、
+verification 2.24 秒、总流程 418.97 秒。进程已退出，
+cleanup_error=null，launcher 空闲，slot 0 清空；135 个运行文件前后哈希一致。
+实际 manifest 与 73 仅 code_hash 不同，task_equal=true。本轮未触发
+write_prerequisite_rejected，因此**无法从该次运行验证提交前检查的在线效果**，也没有
+提高最终有效评分或整项成功。模型对 Company 输出了 unresolved，说明提示被接收；
+它仍继续编辑子表，依赖尚未修复，未到保存阶段。
+
+真正终止在 cycle39：历史响应 `46682203818a4a888eb6df0acbb6b3b8` 为 User
+链接框给出了可执行 fill 规划，但顶层多输出 `type: "json_object"`，导致
+extra_forbidden。随后修复响应 `fa78edc76c1449ee87971225654ac039` 改成 click，
+当前控件只有 fill 能力，触发 control_operation_unavailable/stage_entry_not_executable，
+最终 `feedback failed schema/evidence checks after one repair; no action replayed`。
+DS 15 planning / 6 input / 2 readback，Jev 36；59 请求累计 latency 314.10 秒，
+没有 API timeout 或空响应。有限报告位于 macmini `/tmp/jev-hybrid74-final-summary.json`。
+
+### hybrid-75：避免冗余 JSON 格式标记触发重新规划
+
+保留 74 的依赖检查和全部实验配置，只在非完成规划解析时去掉精确的顶层
+`type: "json_object"`。这是无业务含义的格式标记，去除后动作、值、证据和依赖状态
+保持原样，并记录 feedback_metadata_normalized，避免无效的第二次规划请求。
+其他顶层字段、其他 type 值、嵌套动作字段及完成输出仍严格校验；不把 click 自动
+改成 fill，也不放宽无来源值、错误控件能力或保存前检查。
+通过实际投影后的模型响应路径验证有效 fill 只需一次请求，而不支持的 click 仍拒绝。
+按 macmini 检查、准确源码核验、push、同配置全新目录复跑流程验证最终得分与耗时。
+macmini 全量 **1033 passed / 3 skipped**，Ruff 通过，136 个运行文件哈希一致；
+自动复跑目录为 `saas-longseq-business031-20261009-v11-hybrid-75`，结果另记。
+
 ## 运行范围
 
 共有 **106 项任务**：商业 15、医疗 16、软件工程 31、团队协作 12、农业 12、媒体 20。
