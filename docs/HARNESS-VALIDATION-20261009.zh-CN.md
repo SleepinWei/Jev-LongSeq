@@ -76,16 +76,16 @@ fetch_if_empty=0。该证据仅供实验分析，没有提供给被测 agent。
    `/tmp/jev-link-clear-validation.json`。这是事件机制验证，尚未重建历史 Frappe
    内部状态，不能把模拟页面成功当作 benchmark 成功。
 
-当前配对实验期间保持远端源码冻结。必填标记 trim 和明确空 combobox 的原生
-提交修正暂存于开发 checkout；必须在配对完成、核对远端改动、同步并通过远端
+配对实验期间保持远端源码冻结。必填标记 trim 和明确空 combobox 的原生
+提交修正当时暂存于开发 checkout；在配对完成、核对远端改动、同步并通过远端
 检查后才可用于新的真实实验。非空 link 查询继续保留焦点；clear 的 receipt 不
 确认链接解析或持久化；原生 Tab 若失败必须返回 unknown，不能自动重试。
 
 第二项源码已在 macmini 临时副本 `/tmp/jev-company-native-check-20261009` 同步
 检查：150 passed，lint 通过；包含新旧 backend 的恢复兼容检查，新 backend
 显式 clear 已发送原生 Tab 时续跑逻辑不再重复发送。该副本使用项目测试脚本的
-JEV_REMOTE_ROOT 参数；正在运行的正式 checkout 没有改动。正式同步与在线
-rerun 仍等待第一项配对完成，不能把隔离测试成功写成真实 benchmark 成功。
+JEV_REMOTE_ROOT 参数；当时正在运行的正式 checkout 没有改动。隔离检查阶段
+尚未完成在线 rerun，不能把隔离测试成功写成真实 benchmark 成功。
 
 第一项配对完成评分和 cleanup 后，已检查正式 checkout 待修改文件与冻结
 基线一致，并同步上述五个源码/测试文件，核对 141 个文件哈希无差异。
@@ -97,6 +97,54 @@ rerun 仍等待第一项配对完成，不能把隔离测试成功写成真实 b
 `saas-longseq-business031-20261009-v11-hybrid-company-82/saas-bench-business_031`。
 其 provider/model、任务、slot、无恢复 checkpoint、memory 模式和全部预算
 与 hybrid-binding-81 相同；只改变必填标记提取和空链接输入提交/续跑兼容路径。
+修复提交 `df81e60` 已推送。
+
+### 第二项在线取证与最终结果
+
+hybrid-company-82 的员工源页面以及快速录入表单均出现 required=true；
+Company、Employee、日期的带空格 CSS 星号已在线正确提取。
+cycle 38 的 DS 原始响应明确把 TVS 当 Company 搜索词，并要求再观察选项。
+cycle 42 的真实 Jev 请求 `/data/state/untrusted_memory/brain_guidance` 保留
+该指导；`/data/questions/action/criteria/a6` 仍包含 click e3315（Open Link）。
+真实响应选择 a6，实际进入不存在的 `/desk/company/TVS`，没有选中有效公司。
+cycle 43 规划又把 Company=TVS 当作应保留的字段值；搜索串非空不能证明
+关联解析成功。观察修复不能解决候选导航过宽或搜索/已解析链接状态的混淆。
+相关捕获请求/响应 attempt 为 `f983f6cc6bcc4192a7f210e71c87bfca`，
+DS 规划 attempt 为 `450e231cb0294d4e8ac848ec2e34d7c7`；只读局部调用报告
+为 macmini `/tmp/jev-company82-step42-calls.json`，不使用最新 memory 代替历史输入。
+
+hybrid-company-82 已完成官方评分及 cleanup：**0/15，data_valid=true，
+strict_success=false**；78 actions / 99 cycles，1,003.32 秒（16.72 分钟）。
+停止原因为 `feedback failed schema/evidence checks after one repair; no action
+replayed`，不是耗尽 1,800 秒预算；cleanup_error=null，slot 已释放。
+运行源码 hash 为 `fd0541e63ace3df474d0d9001a530e2c96286e6cd1f5a6fcebfbc369cf8c33bf`。
+
+| 验证 | 官方有效分 | 整项成功 | agent 耗时 | 结论 |
+|---|---:|---|---:|---|
+| 全 DS 精确输入 binding-80 | 0/15 | 否 | 30.06 分钟 | 输入 helper 减少，未提升成绩 |
+| DS＋Jev 精确输入 binding-81 | 0/15 | 否 | 30.06 分钟 | helper 10→0，但总尝试增加，未提升成绩 |
+| DS＋Jev 必填/清空提交 company-82 | 0/15 | 否 | 16.72 分钟 | 必填提取生效；清空路径未触发；反馈校验失败提前结束 |
+
+本轮 134 个模型尝试：DS 规划 32、Jev 95、输入 1、读回 6；1 个 TimeoutError，
+累计调用耗时 969.83 秒，134 份请求/133 份响应已捕获，无空响应。
+精确阶段输入绑定 10 次、helper 1 次；明确空 combobox native Tab **0 次**，
+不能用这轮评分评价未触发路径的真实修复收益。Company 搜索流程绕行后仍未
+保存离职记录，三个应用任务都未获得官方有效分。
+
+最终 cycle 99：trajectory line 514 和 516 两次拒绝均为
+`stage_entry_not_executable`，element_ref=e438、operation=click；统一 reason
+为 missing control / missing stage authorization / consumed action。一次修复
+未改成可执行入口，随后停止，没有派发这两个被拒动作。这条统一诊断尚不能
+独立区分上述三种具体原因，不能把它直接说成 DOM ID 陈旧或模型没有看见页面。
+限定终态报告：macmini `/tmp/jev-company82-final-step99.json`，其初始页有 cursor；
+已按 `0:516` 续读最终拒绝与 result。限定对照：`/tmp/jev-company82-vs81-partial.json`，
+task_equal=true，配置差异只有 code_hash，两个官方 grade_final 均 true。
+
+这次只验证到观察质量与局部绑定能力，**没有证明成功率、完成效率或成本收益**。
+16.72 分钟是提前失败耗时，不能和成功完成耗时混淆。下一项应优先控制未完成
+阶段的导航候选、区分链接搜索串与已选记录，并让执行组降级保留前置依赖。
+先独立复现并限定修改，再用相同条件 fresh run 的官方终分、整项成功和耗时
+验证；不能通过放宽保存 guard、注入数据库答案或继续加预算宣布成功。
 
 ## 已发现、尚未纳入本轮修复的顺序问题
 
