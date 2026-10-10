@@ -467,3 +467,40 @@ opener 与 fresh owned options 回读，不降低置信度阈值、增加停滞�
 一致。在 91 cycle 33 的真实历史 observation 上离线运行新候选管线，命令框仅保留
 unbound FILL，不再提供 CLICK；0 模型调用、0 浏览器操作。该检查验证具体误候选被
 移除，最终业务收益仍需 fresh benchmark。运行前保持源码哈希核验和 slot 空闲检查。
+
+### 92 最终结果与搜索结果选择瓶颈
+
+92 完成正式评分及清理，grade_final=true、completion_confirmed=true、cleanup_error=null，
+启动器最终空闲检查通过：**有效 0/15、strict_success=false**。21 actions / 35 cycles，
+agent 164.985 秒、DS/Jev 13/34；setup 69.684 秒、verification 2.240 秒、总流程
+267.776 秒。47 次调用均保留请求/响应，DS 全部 finish_reason=stop，无空输出、
+transport 错误或长度截断。停止原因 `DS declined further recovery; no useful new probe`。
+
+本轮查询修复有在线证据：最终 cycle 35 观察（trajectory 零起始行 157）中命令输入值
+为 `Employee Separation`，搜索弹层含 7 个结果，包括 New Employee Separation。
+本轮未重现 91 的错误 combobox opener pending；这验证查询能进入实际可见状态，
+不证明选择结果、业务保存或任务成功。
+
+下一处停止机制：cycle 33（行 150–151）Jev 选择 a12=CLICK e4157，目标为
+New Employee Separation，confidence=0.48，低于原 0.5 门槛，未派发；随后同状态
+选择 confidence=0.41，再次未派发。两次普通 DS 求助额度用尽后，cycle 35 恢复请求
+仅含两个 SCROLL 候选，DS 返回 stop；没有 pending 写入被释放，也没有强制执行低
+置信度选择。实际 Jev 请求/响应为 `model-artifacts/ebad48bfbcae421ea5ac5aaeb86b7bb7`，
+其中 action choice=a12、confidence=0.48；报告概率 a12=0.51 不替代 action confidence。
+恢复历史请求/响应为 `model-artifacts/44bf3efb3e474859ad862601d7195b6d`，候选数组长度
+为 2，DS 明确说明滚动无法推进、目标不在恢复候选中。
+
+新发现的语义缺口：New Employee Separation、New Employee Separation Template 和
+Search for Employee Separation 的实际 href 都为当前 Employee 路径加 `#`，不能
+把它们当作指向业务表单的已知导航地址；其真实行为依赖命令点击处理。List/Report
+结果则有不同的明确同源路径。现有恢复导航仅允许静态页面，排除 query 输入及
+dialog，因此这些搜索结果没有进入恢复集合。后续应分别设计真实结果链接导航与
+命令动作的选择/回读，评估受限 DS 选择路径，不能简单降低 Jev 置信度门槛或把占位
+href 当成业务目标，也不能笼统地将所有弹层链接放行。
+
+与 91 的有界 compare：task_equal=true，模型、任务、预算、checkpoint、v1.1 环境
+一致；差异只有代码和 system prompt hash。两轮均有效 0/15、整项失败；agent 耗时
+由 197.257 秒到 164.985 秒，调用由 DS/Jev 13/37 到 13/34。停止位置不同，单次
+较短耗时不能据此宣称执行效率或成功率改善。92 source hash 为
+`bcfd196a9d381d0145979397c49e7ed3f5baafa4f5bd5754a9093e619421ed1d`。
+有界摘要及比较存于 macmini `/tmp/jev92-summary.json`、`/tmp/jev92-compare91.json`。
