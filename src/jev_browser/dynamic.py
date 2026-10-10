@@ -3633,7 +3633,7 @@ class DynamicController(Controller):
                 and 200 <= obs.http_status < 400
             ):
                 self.confirm_transition("confirmed", obs, "observed_navigation_destination")
-            if not self.pending:
+            if not self.pending and not trigger:
                 if self.fresh_scope_required:
                     trigger = "ui_checkpoint"
                 elif self.stage_review_due:
@@ -3664,7 +3664,8 @@ class DynamicController(Controller):
             signature = semantic_key(obs)
             visits[signature] = visits.get(signature, 0) + 1
             if (visits[signature] > self.budget.no_progress_limit and not self.pending
-                    and trigger not in {"write_checkpoint", "navigation_checkpoint", "ui_checkpoint"}):
+                    and (self.jev_led or trigger not in {
+                        "write_checkpoint", "navigation_checkpoint", "ui_checkpoint"})):
                 if signature in recovered_states:
                     return self.result("needs_attention", "repeated state after brain recovery")
                 visits[signature] = 0

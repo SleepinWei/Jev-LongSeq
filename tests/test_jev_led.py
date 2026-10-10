@@ -121,6 +121,42 @@ async def test_low_confidence_still_escalates_without_dispatch():
     assert [e["reason"] for e in agent.events if e["kind"] == "brain_requested"] == ["initial", "low_confidence"]
 
 
+@pytest.mark.parametrize("escalation", ["low_confidence", "jev_requested"])
+async def test_new_page_checkpoint_cannot_overwrite_explicit_upgrade(escalation):
+    agent = controller()
+    agent.backend.observe.side_effect = [page(), page(url="http://example.test/new", observation_id="second"),
+                                        page(url="http://example.test/new", observation_id="third")]
+
+    async def choose(task, obs, memory, contract, candidates):
+        if obs.url.endswith("/form"):
+            return Decision(choice=next(a.id for a in candidates if a.operation == Operation.WAIT), confidence=.9)
+        selected = next(a for a in candidates if a.element_ref == "save") if escalation == "low_confidence" else next(
+            a for a in candidates if a.operation == Operation.REPLAN)
+        return Decision(choice=selected.id, confidence=.29)
+
+    agent.policy.choose.side_effect = choose
+    await agent.run()
+    phases = [e["reason"] for e in agent.events if e["kind"] == "brain_requested"]
+    assert phases == ["initial", escalation]
+    assert agent.feedback_model.review.await_count == 2
+    assert all(call.args[0].operation == Operation.WAIT for call in agent.backend.execute.await_args_list)
+
+
+async def test_unchanged_new_page_still_reaches_no_progress_watchdog():
+    agent = controller()
+    agent.budget.max_cycles = 5
+    agent.budget.no_progress_limit = 2
+    agent.backend.observe.side_effect = [page()] + [page(url="http://example.test/new", observation_id=str(i))
+                                                   for i in range(4)]
+
+    async def choose(task, obs, memory, contract, candidates):
+        return Decision(choice=next(a.id for a in candidates if a.operation == Operation.WAIT), confidence=.9)
+
+    agent.policy.choose.side_effect = choose
+    await agent.run()
+    assert "no_progress" in [e["reason"] for e in agent.events if e["kind"] == "brain_requested"]
+
+
 async def test_local_failed_fill_can_be_released_once_without_confirmation():
     agent, obs = controller(), page()
     selected = action(agent, obs, "date", Operation.FILL)

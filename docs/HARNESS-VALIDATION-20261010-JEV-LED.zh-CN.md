@@ -64,4 +64,24 @@ macmini 相关回归 **429 passed**（45.70 秒），本轮源码/测试 lint �
 新弹窗执行、跳过普通规划、低置信度、有限字段修复、不释放提交及真实 Jev 请求字段。
 启动前核验 **144 个源码/测试/配置文件**。
 
-实跑结果完成后补充。
+## 首次试跑 84：发现升级请求被覆盖
+
+84 官方评分有效 **0/15，strict_success=false**，agent 291.660 秒，11 actions /
+600 cycles，因 decision cycle budget reached 停止。604 次调用：DS 5 次（1 planning、
+4 readback），Jev 599 次；无 transport 错误。setup 106.420 秒，verification 6.711 秒，
+全流程 446.726 秒；finished、grade_final=true、completion_confirmed=true，cleanup_error=null。
+
+cycle 65 在 People 页对 Employee 的 .42 候选被拦截，但下一轮 navigation_checkpoint
+覆盖了 low_confidence，然后新模式跳过这个 checkpoint，使原升级请求也丢失。
+同一 checkpoint 的存在还阻止 no_progress watchdog 触发。结果是在 People 页反复
+选择且没有实际前进。此缺陷使 84 不能用于判断正确 Jev 主导方案的效果；其低 DS
+调用数和较短时间不代表效率提升。完整源码在运行期间未修改，待它自然完成判分和
+清理后再同步修复。
+
+修复保留已经排队的显式 trigger，不被普通 checkpoint 覆盖；Jev-led 模式的
+no_progress 不再因一个本会跳过的 checkpoint 而被排除。增加跨页面低置信度、
+显式 NO ACTION 和跨页面无进展 watchdog 的端到端调度回归。
+修复后 macmini 同组回归 **432 passed**（50.11 秒），lint 通过。
+
+修复后的 fresh run 为 `saas-longseq-business031-20261010-v11-jev-led-85/saas-bench-business_031`，
+保持 84/83 的任务、模型、预算、无 checkpoint 和环境版本，最终结果完成后补充。
