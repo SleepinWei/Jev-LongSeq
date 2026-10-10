@@ -1196,6 +1196,14 @@ class JsonFeedback:
                 "Never invent a value, replay a write, claim persistence, or choose a useless repeat."},
                 {"role": "user", "content": json.dumps(content, ensure_ascii=False)}],
             "response_format": {"type": "json_object"}, "max_tokens": 2048}
+        endpoint = getattr(self.transport, "endpoint", "")
+        model = getattr(self.transport, "model", "")
+        if (isinstance(endpoint, str) and urlsplit(endpoint).hostname == "api.deepseek.com"
+                and model in {"deepseek-flash", "deepseek-pro"}):
+            # Official DS defaults to high-effort thinking. This request chooses
+            # a supplied probe/stop, rather than generating a business plan;
+            # spend the bounded output on the choice JSON, not hidden reasoning.
+            payload["thinking"] = {"type": "disabled"}
         data = await self.transport.post(payload, "dynamic_recovery_probe")
         if data["choices"][0].get("finish_reason") == "length":
             raise ValueError("recovery probe response truncated")

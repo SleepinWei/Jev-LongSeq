@@ -271,6 +271,29 @@ async def test_rejected_probe_choice_stops_without_retrying_model_or_action():
     agent.backend.execute.assert_not_awaited()
 
 
+@pytest.mark.parametrize("endpoint,model,disabled", [
+    ("https://api.deepseek.com/chat/completions", "deepseek-flash", True),
+    ("https://api.deepseek.com/v1/chat/completions", "deepseek-pro", True),
+    ("https://example.test/chat/completions", "deepseek-flash", False),
+    ("https://api.deepseek.com/chat/completions", "other-model", False),
+])
+async def test_only_official_ds_recovery_choice_disables_hidden_thinking(endpoint, model, disabled):
+    agent, obs = controller(), page()
+    transport = AsyncMock()
+    transport.endpoint, transport.model = endpoint, model
+    transport.post.return_value = {"choices": [{"message": {"content":
+        '{"choice":"stop","reason":"No useful probe"}'}, "finish_reason": "stop"}]}
+    result = await JsonFeedback(transport).inspect_recovery(
+        agent.task, obs, agent.memory, agent.recovery_candidates(obs), {})
+    payload, kind = transport.post.await_args.args
+    assert result.choice == "stop" and kind == "dynamic_recovery_probe"
+    assert payload["max_tokens"] == 2048
+    if disabled:
+        assert payload["thinking"] == {"type": "disabled"}
+    else:
+        assert "thinking" not in payload
+
+
 async def test_provider_probabilities_are_advisory_and_invalid_or_unknown_entries_discarded():
     agent, obs = controller(), page()
     candidates = generate_dynamic(obs, agent.task)

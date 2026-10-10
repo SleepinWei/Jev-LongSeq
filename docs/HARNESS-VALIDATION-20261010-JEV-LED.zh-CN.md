@@ -274,3 +274,30 @@ budget 仍走原有路径。远端针对性回归 23 passed，最终完整回归
 
 修正后以全新目录 `saas-longseq-business031-20261010-v11-jev-recovery-88` 重跑，
 任务、模型、无 checkpoint、预算及环境保持不变；最终评分和清理结果另行补充。
+
+### 88：有界停止验证与 DS 推理模式修正
+
+88 已完成有效官方评分和清理：**0/15、strict_success=false**，13 actions /
+25 cycles，agent 164.950 秒（2.75 分钟），DS 13 / Jev 24，cleanup_error=null，
+启动器最终空闲检查通过。cycle 16 的 DS feedback 包含禁用的额外字段，经原有
+有界修复继续；cycle 25 在命令面板作用域低置信度求助，两次同状态干预后进入
+dynamic_recovery_probe。响应 finish_reason=length、content 为空，2,048 output
+tokens 用于 reasoning_content；未形成可执行候选。新错误路径记录
+recovery_probe_invalid 并以 needs_attention 停止，0 个恢复动作、无重试。
+
+这是“不会继续无效调用”的在线证据，但不是成功率提升，也没有证明下拉修复
+在线有效；过早停止同样可能损失可恢复机会。原始恢复响应为
+`model-artifacts/34e070c62c02476a9eb996fc8ca4837e.response.json`。
+
+[DS 官方思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode) 当日确认
+默认 enabled/high，并支持 OpenAI 格式 `thinking: {type: disabled}`。后续仅对
+官方 api.deepseek.com 的 deepseek-flash/pro 的 **dynamic_recovery_probe** 请求
+关闭思考：保持同模型和 2,048 输出 token，避免有限候选选择把整个输出额度消耗
+于隐藏推理；常规规划/回读及其他 provider 不变。choice 和浏览器权限仍严格核验。
+未增加全局预算，也不接受 reasoning_content 中的动作建议。
+
+相关 macmini 回归 **79 passed（9.70 秒）**、本轮 lint 通过；覆盖官方 provider
+限定、其他 provider 不发送 DS 参数、原选择 schema/context 和捕获请求合同。
+历史 payload 的独立 API replay smoke 因自动审批拒绝再次外发上下文而取消，
+未调用 API、未做浏览器操作；实际效果用已授权的全新 89 benchmark 验证。
+新目录为 `saas-longseq-business031-20261010-v11-jev-recovery-89`，其余配置不变。
