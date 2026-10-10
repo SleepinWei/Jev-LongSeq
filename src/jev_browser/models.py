@@ -71,7 +71,11 @@ DYNAMIC_SYSTEM = (
     "Confirm a search submission when the submitted query has visible results or an explicit "
     "no-results message. Irrelevant results still confirm execution; relevance and reading are "
     "separate work. A changed URL or empty results container alone does not confirm execution. "
-    "request_replan asks the LLM brain to revise guidance when blocked. next_candidates shows "
+    "request_replan means NO ACTION: dispatch nothing to the browser and ask the LLM brain "
+    "to think again. Choose it if no supplied action confidently matches the current goal, "
+    "if a referenced ID now names a different control, or if every option would abandon an "
+    "unfinished draft. Do not pick a bad action merely because it is offered. "
+    "Browser actions below confidence 0.5 are withheld for brain review. next_candidates shows "
     "opened_pages records task tabs and previously observed pages. observed means page content "
     "was seen, not that reading or the task is complete; an empty open_tab_ids means that URL "
     "is no longer open. Use this record to avoid losing earlier sources or rereading them. "
@@ -417,6 +421,8 @@ def policy_page_observation(content, obs, memory, candidates):
 
 
 class JevPolicy:
+    minimum_action_confidence = 0.5
+
     def __init__(self, transport: ModelTransport, *, context_max_bytes: int | None = None):
         self.transport = transport
         self.token_budget = jev_token_budget() if context_max_bytes is None else None

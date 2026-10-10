@@ -207,6 +207,11 @@ async def run_trial(args, *, count=None, output=None):
     connection_tasks = []
     try:
         policy, planner, transports = adapters(args)
+        if task.control_mode == "dynamic" and hasattr(policy, "minimum_action_confidence"):
+            manifest["policy_decision_gate"] = {
+                "minimum_action_confidence": (budget.confidence_threshold
+                    if budget.confidence_threshold is not None else policy.minimum_action_confidence),
+                "abstain_operation": "request_replan", "review_before_browser_dispatch": True}
         manifest["models"] = {
             role: {"model": adapter.transport.model,
                    "transport": type(adapter.transport).__name__,

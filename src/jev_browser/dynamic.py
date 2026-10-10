@@ -469,7 +469,7 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppresse
         make(Operation.WAIT, "Wait for a visible update"),
         make(Operation.SCROLL, "Scroll down one viewport", bound_value="down"),
         make(Operation.SCROLL, "Scroll up one viewport", bound_value="up"),
-        make(Operation.REPLAN, "Ask the LLM brain for revised guidance when stuck or uncertain"),
+        make(Operation.REPLAN, "NO ACTION: do not operate the browser; ask the LLM brain to think again"),
     ]
     if obs.url != task.start_url:
         controls.append(make(Operation.BACK, "Back to the previous document"))
@@ -1227,6 +1227,7 @@ class DynamicController(Controller):
         self.memory.dynamic_mode = True
         self.memory.recent_evidence_limit = self.tuning.recent_evidence
         self.feedback_calls = 0
+        self.policy_abstention = None
         self.consumed: set[str] = set()
         self.reusable_menu_actions: dict[str, dict] = {}
         self.scope_generation = 0
@@ -3577,6 +3578,7 @@ class DynamicController(Controller):
                 "actions_since_brain": self.effective_actions - self.last_brain_action,
                 "attempts_since_brain": self.actions - self.last_brain_attempt,
                 "actions_remaining": self.budget.max_actions - self.actions,
+                **({"policy_abstention": self.policy_abstention} if self.policy_abstention else {}),
                 "same_value_inputs_suppressed": list(self.input_noops.values())
                     if self.input_suppression(obs) else [],
                 **({"runtime_recovery": {"required_blank_readonly_fields": self.runtime_fields(obs),
@@ -3644,6 +3646,24 @@ class DynamicController(Controller):
                 selected = next((a for a in candidates if a.id == decision.choice), None)
                 if selected is None:
                     return self.result("needs_attention", "policy returned unknown candidate")
+                threshold = self.budget.confidence_threshold
+                if threshold is None:
+                    threshold = getattr(self.policy, "minimum_action_confidence", None)
+                browser_operation = selected.operation not in {
+                    Operation.REPLAN, Operation.WAIT, Operation.MORE_CANDIDATES, Operation.FINISH}
+                uncertain = (threshold is not None and browser_operation and not refreshed
+                             and (decision.confidence is None or decision.confidence < threshold))
+                if selected.operation == Operation.REPLAN or uncertain:
+                    trigger = "low_confidence" if uncertain else "jev_requested"
+                    self.policy_abstention = {
+                        "reason": trigger, "operation": selected.operation.value,
+                        "element_ref": selected.element_ref, "description": selected.description,
+                        "confidence": decision.confidence, "threshold": threshold,
+                        "observation_id": obs.observation_id, "browser_action_dispatched": False,
+                        "pending_preserved": bool(self.pending)}
+                    self.log("policy_abstained", **self.policy_abstention)
+                    continue  # No input helper, close, switch, or browser dispatch precedes brain review.
+                self.policy_abstention = None
                 if self.pending:
                     if self.readback_dialog_close(obs, selected):
                         if reason := await self.close_for_readback(obs, selected):
@@ -3725,14 +3745,6 @@ class DynamicController(Controller):
                              pending_preserved=bool(self.pending))
                     self.fresh_scope_required = True
                     trigger = "jev_requested"
-                    continue
-                threshold = self.budget.confidence_threshold
-                if (
-                    threshold is not None
-                    and decision.confidence is not None
-                    and decision.confidence < threshold
-                ):
-                    trigger = "low_confidence"
                     continue
                 operation = selected.operation
             if operation == Operation.FINISH:
