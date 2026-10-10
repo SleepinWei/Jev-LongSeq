@@ -115,3 +115,18 @@ fresh run 为 `saas-longseq-business031-20261010-v11-jev-led-86/saas-bench-busin
 这是冷却与 DS 输出简化的组合修复，不是单项消融；结果完成后补充。
 macmini 最终相关回归 **448 passed**（41.86 秒），lint 通过；新增真实 DS schema/
 计划值绑定的请求测试。默认 checkpoint 模式仍通过原反馈与阶段交付回归。
+
+## 最终交付状态：86 被 DS 官方余额阻断
+
+实现先 push 为 `fb42552`，启动器通过全部 144 个源码/测试/配置哈希核验。
+随后 DS 官方 `/user/balance` 返回 `is_available=false`，启动预检以
+`DS official API insufficient balance` 阻断；`/tmp/jev-led-20261010-final-status.json`
+记录 phase=blocked、arms=[]。**86 没有启动，没有动作、模型执行或官方评分结果**。
+Studio launcher running=false、activities=[]；85 已完成正式 grading 与 cleanup。
+没有改用其他 provider、改任务或加预算，没有启动重复试验。
+
+当前修复版仍只得到远端回归验证，尚未得到有效实跑验证。已完成的 84/85 均为 0/15，
+严格未通过，且暴露了不同调度缺口；不能据其耗时减少声称 pipeline 提高效率或成功率。
+需要 DS 官方余额恢复后，用已保存的 `/tmp/jev-led-20261010-final.py --check` 核验
+模型/源码/slot，再以 `--run` 启动 fresh 86，继续跟踪到官方判分及清理。
+如果源码随后变化，应重新测试、生成 hash 清单并 push，不能复用旧哈希宣称 exact source。
