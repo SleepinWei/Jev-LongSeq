@@ -402,3 +402,43 @@ receipt 不证明完整任务或业务保存；本轮没有重放点击或冒险
 原始证据：90 trajectory.jsonl 的 51 行为新点击，56 行为停止观察，57/58 行为
 pending 停滞/停止（零起始）。使用 fresh 91 目录
 `saas-longseq-business031-20261010-v11-jev-navigation-91`，任务、模型、预算不变。
+
+### 91 最终结果：回读分支已执行，导航收益仍未验证
+
+91 已完成官方评分及环境清理：**0/15、data_valid=true、strict_success=false**，
+grade_final=true、completion_confirmed=true、cleanup_error=null，启动器最终空闲检查
+通过。26 actions / 38 cycles，agent 197.257 秒；DS 13 次（7 feedback、6 readback）、
+Jev 37 次。setup 257.466 秒、verification 3.081 秒、总流程 497.831 秒。全部 50 次
+调用保留请求/响应；DS 13 次均 finish_reason=stop，无 transport 错误、空输出或
+长度截断。停止原因为 `readback unresolved; no resubmission`，不是余额或 context
+不足。动作尝试数不能直接等同于有效业务动作数，本轮仍未完成官方计分义务。
+
+cycle 18、32 在线执行了新增 `jev_stall_pending_readback` 分支；cycle 32 的局部
+转换获得确认，之后到达 Employee 记录 `/desk/employee/HR-EMP-00007#exit`，标题为
+Ananya Reddy - HR-EMP-00007。轨迹与 90 不同，这验证了新回读分支的在线执行，
+不能声称直接复现并解决了 90 的同一 Frappe HR 点击。navigation recovery probe
+及 dispatch 均为 **0 次**，因此两次重跑均未验证新增导航恢复的业务收益。
+
+最终阻塞发生在命令搜索 combobox：cycle 33（trajectory 零起始行 165）点击
+`Search or type a command`，候选说明为 `Open observed combobox options`。
+之后没有观察到字段所属选项，输入值保持为空。cycle 38 的 Jev 选择 a8、confidence
+0.74，但该轮 a8 是 FILL（bound_value=null），与 cycle 33 的 a8=CLICK 不同；
+候选编号只在当前 cycle 有效。旧点击仍 pending，故新 FILL 没有派发，随后进入
+readback_deadline。最后 DS 实际返回 last_outcome=unknown，并引用四个观察证据；
+有限回读仍无法确认，因此保持 pending 并停止，没有重放点击或填写。
+
+这暴露出下一处候选语义缺口：命令/搜索 combobox 被提供了不适合的“打开下拉选项”
+动作。本轮尚未修复该问题；不能把它归因于缺少 Employee 的合法导航候选，也不能
+凭 browser receipt=ok 将点击视为完成业务要求。最后观察、决策、deadline、回读
+请求/反馈、结果分别在 trajectory 零起始行 179–183、186。最后 DS 历史输入/输出为
+`model-artifacts/ea722ec3c7194fc6be8d7904171b66e3.request.json` 和同名 response；
+最后 Jev 为 `model-artifacts/76d36ba06dc341d0adcb7605982094af` 对应请求/响应。
+
+与 89 的有界 compare 中 task_equal=true，配置差异仅 code_hash；provider/model、
+任务、预算、checkpoint、benchmark 配置一致。89 agent 71.383 秒、DS/Jev 7/18，
+91 agent 197.257 秒、DS/Jev 13/37；两者均有效 0/15、strict_success=false。
+91 局部推进更多，但耗时及调用增加，最终评分没有提升。这是单任务单次描述性
+比较，不是导航消融或套件成功率结论。最终测试源码 hash 为
+`308e159b29e4b6d0e4f4731d87e7176cdd627c7297ceefd1f0238cefbc0e80f7`。
+有界报告保存在 macmini `/tmp/jev91-summary.json`、`/tmp/jev91-step38.json`、
+`/tmp/jev91-compare89.json`；真实 run 产物不提交 Git。
