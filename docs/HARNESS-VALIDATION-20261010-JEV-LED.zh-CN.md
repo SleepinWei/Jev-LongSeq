@@ -116,7 +116,7 @@ fresh run 为 `saas-longseq-business031-20261010-v11-jev-led-86/saas-bench-busin
 macmini 最终相关回归 **448 passed**（41.86 秒），lint 通过；新增真实 DS schema/
 计划值绑定的请求测试。默认 checkpoint 模式仍通过原反馈与阶段交付回归。
 
-## 最终交付状态：86 被 DS 官方余额阻断
+## 86 启动前：DS 官方余额阻断
 
 实现先 push 为 `fb42552`，启动器通过全部 144 个源码/测试/配置哈希核验。
 随后 DS 官方 `/user/balance` 返回 `is_available=false`，启动预检以
@@ -125,8 +125,79 @@ macmini 最终相关回归 **448 passed**（41.86 秒），lint 通过；新增�
 Studio launcher running=false、activities=[]；85 已完成正式 grading 与 cleanup。
 没有改用其他 provider、改任务或加预算，没有启动重复试验。
 
-当前修复版仍只得到远端回归验证，尚未得到有效实跑验证。已完成的 84/85 均为 0/15，
+余额阻断时，修复版只得到远端回归验证，尚未得到有效实跑验证。已完成的 84/85 均为 0/15，
 严格未通过，且暴露了不同调度缺口；不能据其耗时减少声称 pipeline 提高效率或成功率。
 需要 DS 官方余额恢复后，用已保存的 `/tmp/jev-led-20261010-final.py --check` 核验
 模型/源码/slot，再以 `--run` 启动 fresh 86，继续跟踪到官方判分及清理。
 如果源码随后变化，应重新测试、生成 hash 清单并 push，不能复用旧哈希宣称 exact source。
+
+## 86：充值后继续验证
+
+用户确认充值后，启动器重新确认 DS available=true、144 个运行文件哈希一致、
+launcher/手动进程/slot 空闲，启动同一 fresh 86。2026-10-10 20:14:37（北京时间）
+进入 setup，20:15:46 开始 agent；没有更换 provider/model、恢复点或预算。
+与 83 的有界 compare 确认 task_equal=true，任务、模型、预算及 benchmark 环境
+配置没有差异；差异为 tuning.feedback_mode、system_prompt_hash 和 code_hash。
+以下是按需取得的历史证据，不以局部推进代替最终成绩。
+
+- cycle 15 的 DS 求助指导实际应用后，Jev 点击 Ananya Reddy，求助闭环已可达。
+- cycle 35 的快速创建弹窗存在 `fields_dict` / `refresh_field` 异常；cycle 54
+  已到无前端错误的完整 Employee Separation 表单。不能据此认定历史日期失败的根因。
+- cycle 59 的 Save 在 dispatch 前因 Company 必填项为空而被拒绝。cycle 61 的
+  实际 DS 响应要求重新选 Employee 下拉选项触发 Company，而非直接填只读字段。
+- cycle 65 的实际 Jev response：a4 / confidence=.36。a4 是 request_replan，
+  不是浏览器动作。其实际 request 保留 planned_inputs 中 Employee=HR-EMP-00007；
+  Employee 控件 e3719 亦显示该值、editable=true、popup_open=false。
+  当时 NO ACTION、Save、Employee fill 的概率分别约 .37/.23/.24。
+- 同一请求的 `untrusted_memory.loop` / `execution_feedback` 为 {}，
+  guidance_matches_current_scope=true。源码在每轮前写入本地循环状态，但
+  review 的 `memory.feedback = feedback.model_dump()` 会在随后选择前覆盖它；
+  这是实际输入缺口，尚未通过消融实验证明其对分数的影响。
+- `generate_dynamic` 不给 editable/selectable 控件生成 CLICK，Employee 有填入/
+  清空路径，缺少直接打开其下拉的候选；这与 DS 的修复指导不匹配。它不证明整个
+  表单不可操作，也不证明加入 CLICK 就必然解决 Company 派生问题。
+
+当前运行源码保持不变。后续应分别验证：允许有当前控件身份和能力依据的 combobox
+打开动作；在 DS 反馈替换后恢复当前本地循环/执行反馈；对重复 NO ACTION 建立有界
+恢复及停止判据。每项仍须比较官方有效评分、整项成功和耗时，不能把不再报错或
+求助可达当成成功率提升。
+
+历史取证引用：cycle 61 DS response 为
+`model-artifacts/5d3c7593867d4cfca675b8f58656550d.response.json`；cycle 65 Jev
+request/response 为 `model-artifacts/32ce1538fcd84510ab6b6efefe55e7ea.*.json`。
+有界 compare 保存于 macmini `/tmp/jev-led86-compare83.json`，原始产物保持在忽略的
+run 目录中，不提交 Git。
+
+### 86 最终结果
+
+2026-10-10 20:46:21（北京时间）完成官方判分与清理，启动器 phase=finished，
+grade_final=true、completion_confirmed=true、cleanup_error=null；启动器的最后
+check_idle 通过，launcher/手动 benchmark/slot 0 无残留。
+benchmark 子进程 exit_code=1 对应失败的任务结果，不代表漏做 grading 或 cleanup。
+
+| 指标 | abstain-83 | jev-led-86 |
+| --- | --- | --- |
+| 官方有效评分 | 0/15 | 0/15 |
+| strict_success | false | false |
+| Agent 耗时 | 939.753 秒（15.66 分钟） | 1,804.140 秒（30.07 分钟） |
+| DS 调用尝试 | 37 | 57（50 guidance、7 readback） |
+| Jev 调用 | 81 | 95 |
+| Actions / cycles | 59 / 139 | 36 / 100 |
+| 停止原因 | readback unresolved; no resubmission | budget_exhausted / TimeoutError |
+
+86 setup 65.718 秒、verification 3.062 秒、全环境流程 1,903.724 秒（31.73 分钟）。
+152 次模型尝试中仅最后一次 DS guidance 出现 TimeoutError；151 份响应均已捕获，
+DS 已完成响应的 finish_reason 全为 stop，无空响应，无 HTTP 余额不足错误。
+cycle 100 的 planning_scope_wait 为等待冷却，未调用 Jev/DS，也没有重放写入；
+因此 85 的冷却期间大量 Jev 空转现象没有在这个结尾重现。单个案例仍不能证明
+所有超时路径均已修好。
+
+全过程 16 份独立评分快照（含 baseline/final）都为 0/15；隐藏评分未反馈给 agent。
+最终 cycle 96 的 Save 仍被本地前置条件阻断，诊断列出 Company 和一个名为
+Open Link 的控件为空。后者是否被错误识别为必填字段需要单独核查其 role/DOM
+归属，不能把该控件名称当成真实业务字段。表单未产生可计分记录。
+
+结论：本轮完成了充值后修复版的有效实跑验证，但**没有提高分数或整项成功，
+且比 83 更慢、模型调用更多**。这不是成功的效率改进，也不构成套件成功率估计。
+NO ACTION 交给 DS 后仍允许重复规划同一状态，缺少下拉打开动作和干预后本地
+context 缺口，应优先作单项修复/消融，而不是增加预算。上述后续项尚未修改或重跑。
