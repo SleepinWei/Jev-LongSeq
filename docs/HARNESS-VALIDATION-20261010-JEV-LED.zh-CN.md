@@ -372,3 +372,33 @@ Employee 链接具有相同身份/目标，旧的歧义过滤会删除两者。�
 DS deepseek-flash、jev-latest、原 business_031、v1.1、无恢复 checkpoint、全部原
 预算及恢复 helper 的非思考模式。启动前核验 146 个源文件/测试/配置哈希、DS 可用，
 launcher/手动进程/slot 0 空闲。评分及清理结束后补充最终结果。
+
+### 90 最终结果与新动作回读额度缺口
+
+90 已完成官方评分和清理：**0/15、data_valid=true、strict_success=false**，
+8 actions / 13 cycles，agent 75.396 秒，DS 4 / Jev 12。setup 136.341 秒、verification
+2.892 秒、总流程 247.048 秒，cleanup_error=null；grade_final=true、
+completion_confirmed=true，启动器最终 check_idle 通过。新增 navigation probe **0 次**。
+因此不能用该分数证明导航机制有效或无效，也不能把提前结束当作效率提升。
+
+cycle 10/11 在同一 /desk 工作状态累计两次低置信度 DS 求助；cycle 11 随后成功
+dispatch Frappe HR 按钮（receipt=ok）。cycle 12/13 观察到新弹层，文本包含 Frappe HR、
+People 等工作区入口。cycle 13 已存在 pending，因旧工作状态额度用尽立即停止，
+该新派发动作没有得到任何 DS 回读机会。新增弹层属于信息变化，工作状态计数
+不重置是预期，但不能因此把新动作的回读机会也提前耗尽。
+
+停止观察中的错误均为被阻断的 localhost:9000 socket.io 请求，不是 page_error，
+不能把它们当成 Frappe HR 点击没有效果的证据。弹层可见仅证明 UI 局部变化，
+receipt 不证明完整任务或业务保存；本轮没有重放点击或冒险导航。
+
+为完成导航试验，随后仅修正这个相邻调度缺口：每个新 pending 动作具有独立的
+最多两轮 `action_readback` 求助额度（沿用原 intervention_limit），不消耗/重置
+页面规划计数，不授权 probe，不重放写入。仍无法确认则停止并保留 pending；
+存在独立未确认写入但无可回读动作时仍直接停止。原全局时间/调用预算不变。
+远端针对性回归 **46 passed（1.78 秒）**、lint 通过，覆盖旧规划额度已满时的新
+动作仍获得回读、有效局部回读释放 pending、未确认仍保持有界且不重放。最终完整
+远端回归 **1,161 passed、3 skipped（100.11 秒）**，本轮 lint 通过。
+
+原始证据：90 trajectory.jsonl 的 51 行为新点击，56 行为停止观察，57/58 行为
+pending 停滞/停止（零起始）。使用 fresh 91 目录
+`saas-longseq-business031-20261010-v11-jev-navigation-91`，任务、模型、预算不变。

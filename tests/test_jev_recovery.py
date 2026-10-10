@@ -111,6 +111,47 @@ async def test_no_recovery_probes_with_pending_write_and_no_resubmission():
     assert agent.backend.execute.await_count == 1
 
 
+async def test_new_dispatch_gets_bounded_readback_even_after_same_state_planning_exhausted():
+    agent, obs = controller(), workspace()
+    opener = Element(id="opener", role="button", name="Frappe HR")
+    obs.elements.append(opener)
+    agent.stall_guard.current(obs)["interventions"] = 2
+    click = next(a for a in generate_dynamic(obs, agent.task) if a.element_ref == "opener")
+    assert await agent.perform(click, obs) is None
+    pending = agent.pending
+    # Opening the workspace menu is new information, not a new work state.
+    fresh = workspace(observation_id="new", text="Frappe HR People", dialogs=["Frappe HR\nPeople"])
+    agent.backend.observe.return_value = fresh
+    assert work_signature(fresh) == work_signature(obs)
+    agent.initial_phase = "jev_requested"
+    result = await agent.run()
+    assert result.status == "needs_attention" and "unconfirmed action" in result.reason
+    assert agent.pending is pending and pending["stall_readback_reviews"] == 2
+    assert agent.feedback_model.review.await_count == 2
+    assert all(call.kwargs["phase"] == "action_readback" for call in agent.feedback_model.review.await_args_list)
+    agent.feedback_model.inspect_recovery.assert_not_awaited()
+    assert agent.backend.execute.await_count == 1  # Never replay opener or navigate.
+
+
+async def test_fresh_local_readback_releases_opener_without_business_confirmation():
+    agent, obs = controller(), workspace()
+    obs.elements.append(Element(id="opener", role="button", name="Frappe HR"))
+    agent.stall_guard.current(obs)["interventions"] = 2
+    click = next(a for a in generate_dynamic(obs, agent.task) if a.element_ref == "opener")
+    await agent.perform(click, obs)
+    agent.backend.observe.return_value = workspace(observation_id="fresh", text="Frappe HR People",
+                                                 dialogs=["Frappe HR\nPeople"])
+    agent.feedback_model.review.return_value = Feedback(next_goal="Choose observed People link",
+        last_outcome="confirmed", readback_quote="Frappe HR People")
+    agent.initial_phase = "jev_requested"
+    await agent.run()
+    assert agent.pending is None and not agent.memory.pending_writes
+    assert not agent.memory.write_checkpoints
+    assert agent.memory.confirmed_actions[-1]["business_commit_confirmed"] is False
+    assert agent.feedback_model.review.await_args_list[0].kwargs["phase"] == "action_readback"
+    assert agent.backend.execute.await_count == 1
+
+
 async def test_controller_local_context_survives_ds_feedback_replacement():
     agent, obs = controller(), page()
     agent.memory.feedback.update(jev_loop={"mode": "jev_led", "last_action": "open"},

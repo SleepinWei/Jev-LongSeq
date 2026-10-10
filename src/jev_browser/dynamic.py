@@ -3985,13 +3985,32 @@ class DynamicController(Controller):
             if trigger:
                 if self.jev_led and trigger not in {"initial", "resume"}:
                     stall = self.stall_guard.current(obs)
-                    if stall["interventions"] >= self.stall_guard.intervention_limit:
+                    if self.pending:
+                        # Planning attempts before this dispatch cannot consume
+                        # its readback allowance. These reviews cannot replay the
+                        # action or authorize an unrelated recovery probe.
+                        reviews = self.pending.get("stall_readback_reviews", 0)
+                        if reviews >= self.stall_guard.intervention_limit:
+                            reason = "repeated interventions with unconfirmed action; no resubmission"
+                            self.log("jev_stall_stopped", reason=reason, pending_preserved=True)
+                            return self.result("needs_attention", reason)
+                        self.pending["stall_readback_reviews"] = reviews + 1
+                        trigger = "action_readback"
+                        self.log("jev_stall_pending_readback", attempt=reviews + 1,
+                                 limit=self.stall_guard.intervention_limit,
+                                 pending_key=self.pending["key"], browser_action_dispatched=False)
+                    elif self.memory.pending_writes:
+                        reason = "repeated interventions with unconfirmed action; no resubmission"
+                        self.log("jev_stall_stopped", reason=reason, pending_preserved=True)
+                        return self.result("needs_attention", reason)
+                    elif stall["interventions"] >= self.stall_guard.intervention_limit:
                         if reason := await self.recover_stall(obs):
                             self.log("jev_stall_stopped", reason=reason, pending_preserved=bool(self.pending))
                             return self.result("needs_attention", reason)
                         trigger = ""
                         continue  # Observe the probe result; never dispatch an old Jev proposal.
-                    stall["interventions"] += 1
+                    else:
+                        stall["interventions"] += 1
                 if self.pending and trigger == "stage_budget":
                     self.pending["stage_readback_reviewed"] = True
                 self.log("brain_requested", reason=trigger)
