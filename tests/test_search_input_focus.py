@@ -4,7 +4,65 @@ from playwright.async_api import Error
 
 from jev_browser.browser import PlaywrightBackend
 from jev_browser.dynamic import generate_dynamic
-from jev_browser.protocol import Operation, Task
+from jev_browser.protocol import Element, Operation, Task, is_search_textbox
+
+
+@pytest.mark.parametrize("name,placeholder,kind", [
+    ("Search or type a command", None, "text"),
+    ("Command", "Search or type a command", "text"),
+    ("Search…", None, "text"),
+    ("Find", None, "search"),
+])
+def test_query_combobox_is_explicitly_identified(name, placeholder, kind):
+    assert is_search_textbox(Element(id="query", role="combobox", editable=True,
+        name=name, placeholder=placeholder, input_type=kind))
+
+
+@pytest.mark.parametrize("name,placeholder", [("Employee", "Search..."),
+    ("Account", "Search"), ("Search budget", None)])
+def test_named_record_or_business_field_is_not_a_query_input(name, placeholder):
+    assert not is_search_textbox(Element(id="record", role="combobox", editable=True,
+        name=name, placeholder=placeholder, input_type="text"))
+
+
+async def test_command_combobox_types_query_without_opener_or_automatic_submission():
+    task = Task(id="command-query", sandbox=True, control_mode="dynamic",
+                objective='Open "Employee Separation" using the observed command search.')
+    async with PlaywrightBackend(task) as browser:
+        await browser.load_html('''<input role="combobox" placeholder="Search or type a command"
+            onkeydown="if(event.key.length===1){this.dataset.open='yes'}"
+            oninput="if(this.dataset.open!=='yes'){this.value=''}
+              else{document.querySelector('#result').hidden=false}"
+            onblur="this.value='';document.querySelector('#result').hidden=true">
+            <div id="result" role="option" hidden>Employee Separation</div>''')
+        obs = await browser.observe()
+        field = next(e for e in obs.elements if e.editable)
+        candidates = generate_dynamic(obs, task)
+        assert not any(a.element_ref == field.id and a.operation == Operation.CLICK
+                       for a in candidates)
+        action = next(a for a in candidates if a.operation == Operation.FILL
+                      and a.element_ref == field.id and a.bound_value == "Employee Separation")
+        assert "Search query input" in action.description
+        receipt = await browser.execute(action)
+        assert receipt.status == "ok" and "input_method=native_keyboard" in receipt.detail
+        fresh = await browser.observe()
+        assert next(e for e in fresh.elements if e.editable).value == "Employee Separation"
+        assert any(e.role == "option" and e.name == "Employee Separation" for e in fresh.elements)
+        assert await browser.page.locator("input").evaluate("el => document.activeElement === el")
+        # Enter/Tab and result activation remain separate, explicitly chosen operations.
+        assert browser.page.url == obs.url
+
+
+async def test_command_combobox_rejects_enter_before_keyboard_dispatch():
+    task = Task(id="command-control", sandbox=True, control_mode="dynamic", objective="Find a form.")
+    async with PlaywrightBackend(task) as browser:
+        await browser.load_html('<input role="combobox" placeholder="Search or type a command" value="original">')
+        obs = await browser.observe()
+        action = next(a for a in generate_dynamic(obs, task)
+                      if a.operation == Operation.FILL and a.bound_value is None)
+        action.bound_value = "Employee Separation\n"
+        assert (await browser.execute(action)).status == "rejected"
+        assert await browser.page.locator("input").input_value() == "original"
 
 
 @pytest.mark.parametrize("name", ["Search...", "Search…", "Search", "搜索"])

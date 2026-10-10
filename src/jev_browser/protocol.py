@@ -68,9 +68,18 @@ class Element(Model):
 
 
 def is_search_textbox(element: Element) -> bool:
-    """An explicit rendered search name preserves focus, never grants actions."""
-    return bool(element.role == "textbox" and element.editable and re.fullmatch(
-        r"(?:search|搜索|搜尋)(?:\.{3}|…)?", element.name.strip(), re.I))
+    """An explicit query input (including a command combobox), not a record picker.
+
+    Generic Search placeholders on named link fields do not change their role.
+    This classification preserves keyboard focus; it never authorizes a query.
+    """
+    if not element or element.role not in {"textbox", "combobox"} or not element.editable:
+        return False
+    command = r"search or type (?:a )?command|搜索或输入命令|搜尋或輸入指令"
+    return bool(element.input_type == "search"
+        or re.fullmatch(r"(?:search|搜索|搜尋)(?:\.{3}|…)?", element.name.strip(), re.I)
+        or re.fullmatch(command, element.name.strip(), re.I)
+        or re.fullmatch(command, (element.placeholder or "").strip(), re.I))
 
 
 class GridCell(Model):

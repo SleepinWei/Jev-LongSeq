@@ -455,7 +455,8 @@ def identifiable_click(element):
 def combobox_opener(element):
     return bool(element.role == "combobox" and element.editable and element.enabled
                 and not element.read_only and not element.selectable and element.name.strip()
-                and element.value != "[redacted]" and element.popup_open is not True)
+                and element.value != "[redacted]" and element.popup_open is not True
+                and not is_search_textbox(element))
 
 
 def recovery_navigation_link(element, obs, task):
@@ -541,6 +542,8 @@ def generate_dynamic(obs, task, *, limit=250, offset=0, consumed=None, suppresse
         if element.role == "menuitem" and element.name.endswith(" (icon control)") and not element.href:
             continue  # An icon asset alone is not an observed business choice.
         description = control_description(element, obs)
+        if is_search_textbox(element):
+            description = "Search query input (typing is not result selection) | " + description
         if combobox_opener(element):
             regular.append(make(Operation.CLICK, "Open observed combobox options | " + description,
                                 element_ref=element.id))

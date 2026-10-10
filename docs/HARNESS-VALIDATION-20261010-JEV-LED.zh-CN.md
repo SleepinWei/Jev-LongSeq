@@ -442,3 +442,28 @@ readback_deadline。最后 DS 实际返回 last_outcome=unknown，并引用四�
 `308e159b29e4b6d0e4f4731d87e7176cdd627c7297ceefd1f0238cefbc0e80f7`。
 有界报告保存在 macmini `/tmp/jev91-summary.json`、`/tmp/jev91-step38.json`、
 `/tmp/jev91-compare89.json`；真实 run 产物不提交 Git。
+
+## 92：区分命令查询输入与关联字段下拉（2026-10-11）
+
+针对 91 cycle 33 的命令框误派发，本轮将已有搜索输入分类扩展到 editable combobox：
+依据明确的 Search/搜索名称、`type=search` 或完整 `Search or type a command` 名称/
+placeholder。Employee/Account 等命名字段上的普通 Search placeholder 不足以改变
+其关联字段分类；不通过任务名称猜测控件身份。命令查询不再生成下拉 opener，FILL
+说明标出 query 输入，Jev/DS 提示区分输入查询与选择结果。查询值仍受原输入绑定及
+fresh observation 核验约束，未绑定 FILL 继续求助 DS，不直接派发任意字符串。
+
+查询执行复用已有单次 native keyboard 输入、不发送 Enter/Tab、不自动点击结果；
+只回读查询值，输入成功不证明结果选择、导航或业务完成。普通关联字段仍保留 click
+opener 与 fresh owned options 回读，不降低置信度阈值、增加停滞额度或重放未知写入。
+新增回归覆盖命令查询的真实 keydown/输入值/焦点/可见结果、无 opener、无自动提交，
+以及 Enter 控制字符派发前拒绝和命名关联字段不误分类。
+
+使用 fresh `saas-longseq-business031-20261011-v11-jev-query-92` 自动重跑。保持 91 的
+官方 deepseek-flash、jev-latest、business_031、v1.1、无恢复 checkpoint 及全部预算。
+最终以官方有效评分、strict_success、agent 耗时及清理状态衡量，修复局部错误不等于
+任务成功率提升。回归及重跑结果将在评分/清理完成后补充。
+
+远端完整回归 **1,170 passed、3 skipped（91.23 秒）**，修改文件 lint 通过、同步哈希
+一致。在 91 cycle 33 的真实历史 observation 上离线运行新候选管线，命令框仅保留
+unbound FILL，不再提供 CLICK；0 模型调用、0 浏览器操作。该检查验证具体误候选被
+移除，最终业务收益仍需 fresh benchmark。运行前保持源码哈希核验和 slot 空闲检查。
