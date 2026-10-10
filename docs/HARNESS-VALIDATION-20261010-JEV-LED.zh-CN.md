@@ -343,3 +343,32 @@ Save/Submit 盲试与任意字段猜值。不能只提高停滞阈值并恢复�
 `model-artifacts/31b6aca509484509b9d4fd2982dda3d2.request.json`；恢复派发事件位于
 trajectory.jsonl 的 77/86 行，停止事件为 94 行（零起始）。有界部分报告保存于
 macmini `/tmp/jev89-summary.json` 和 `/tmp/jev89-compare86.json`，不提交真实 run 产物。
+
+## 90：将静态页面导航加入停滞恢复
+
+用户确认加入导航后，本轮仅扩大恢复候选的导航范围，不提高置信度容忍、停滞额度
+或总预算。允许当前可见、命名明确、enabled 的 role=link，目标必须为 task 已允许
+的同源 HTTP(S) URL，且不同于当前 URL。排除字段/子表链接、对话框、editable /
+selectable 表单（已有明确 page-size 控件例外）、Not Saved/unsaved 标记、可用的
+Save/Submit 等写边界以及明显删除/登出/确认/API 动作链接。pending / pending_writes
+仍整体禁止恢复。只依据可见结构采取保守门禁，不宣称已检测所有隐藏的 dirty 状态。
+
+候选说明携带实际 href；DS 只选择一个当前候选或 stop。延迟后重新观察，链接目标
+加入 probe identity，语义/目标改变即不执行旧选择。派发继续走普通 perform 与
+navigation readback，只确认抵达观察到的目标，不建立 business checkpoint。
+返回旧路由仍沿用原停滞计数，不能靠 A/B 跳转或 DS 新说明无限重置额度。
+
+离线核查 89 cycle 21 的实际 observation 发现另一个候选缺口：侧栏与工作区的
+Employee 链接具有相同身份/目标，旧的歧义过滤会删除两者。静态导航改为等价目标
+保留一个新鲜代表，尝试记录共享；其他歧义字段/菜单/业务按钮仍排除。最终完整
+候选管线在该观察保留 a16=Employee → `/desk/employee`，共 14 个恢复候选；该核查
+0 模型调用、0 浏览器动作，不是新的 benchmark 得分。
+
+最终源码在 macmini 完整回归 **1,159 passed、3 skipped（103.99 秒）**，本轮 lint
+通过；覆盖导航目标身份、等价链接去重、fresh handle 派发、目标变化不派发、
+未保存表单/对话框/跨源/业务动作链接排除以及导航不建立业务保存 checkpoint。
+
+新试验目录为 `saas-longseq-business031-20261010-v11-jev-navigation-90`，保留官方
+DS deepseek-flash、jev-latest、原 business_031、v1.1、无恢复 checkpoint、全部原
+预算及恢复 helper 的非思考模式。启动前核验 146 个源文件/测试/配置哈希、DS 可用，
+launcher/手动进程/slot 0 空闲。评分及清理结束后补充最终结果。

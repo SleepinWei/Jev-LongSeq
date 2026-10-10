@@ -458,6 +458,32 @@ def combobox_opener(element):
                 and element.value != "[redacted]" and element.popup_open is not True)
 
 
+def recovery_navigation_link(element, obs, task):
+    """Explore an observed same-origin route only from a static page.
+
+    Absence of an editable form plus unsaved/write indicators is a conservative
+    navigation gate, not a claim that the page contains no business data.
+    """
+    if (element.role != "link" or not element.href or not element.name.strip()
+            or not element.enabled or element.read_only or element.editable or element.selectable
+            or element.grid_ref or element.row_ref or element.href == obs.url
+            or not allowed_url(element.href, task) or obs.dialogs or obs.loading or obs.challenge):
+        return False
+    target, current = urlsplit(element.href), urlsplit(obs.url)
+    if (target.scheme, target.netloc) != (current.scheme, current.netloc):
+        return False
+    if (re.search(r"\b(?:not saved|unsaved)\b|未保存|未儲存", obs.text, re.I)
+            or any((e.editable or e.selectable) and not list_page_size_control(e)
+                   for e in obs.elements)
+            or any(write_boundary(e.model_dump()) for e in obs.elements if e.enabled)):
+        return False
+    # Navigation candidates must not masquerade as a mutating/confirmation API.
+    dangerous = r"\b(?:save|submit|publish|delete|remove|logout|sign out|approve|confirm|pay|send)\b|保存|提交|删除|登出|确认"
+    return not (re.search(dangerous, element.name, re.I)
+                or re.search(dangerous, target.path + "?" + target.query, re.I)
+                or target.path.startswith("/api/"))
+
+
 def control_description(element, obs):
     """One current-control identity for candidate generation and input validation."""
     description = f"{element.role}: {element.name} | {element.context} | value={element.value}"
@@ -1191,7 +1217,9 @@ class JsonFeedback:
                 "Return only the schema JSON. Choose one supplied candidate, or stop. "
                 "Do not produce another plan. Reported probabilities show ambiguity, not permissions. "
                 "Candidates exclude Save/Submit, arbitrary field writes and uncertain pending actions. "
-                "Opening a named combobox/menu or scrolling can reveal new information. "
+                "Opening a named combobox/menu, scrolling, or following a supplied observed same-origin "
+                "navigation link from a static page can reveal new information. "
+                "Navigation does not save data or complete the task; never invent a destination. "
                 "A supplied exact field-owned option can resolve its locally planned value. "
                 "Never invent a value, replay a write, claim persistence, or choose a useless repeat."},
                 {"role": "user", "content": json.dumps(content, ensure_ascii=False)}],
@@ -3709,6 +3737,11 @@ class DynamicController(Controller):
         for action in self.generate_stage_candidates(obs, limit=self.budget.candidate_limit, offset=0):
             element = next((e for e in obs.elements if e.id == action.element_ref), None)
             allowed = action.operation == Operation.SCROLL
+            if action.operation == Operation.CLICK and element and element.href:
+                allowed = recovery_navigation_link(element, obs, self.task)
+                if allowed:
+                    action = action.model_copy(update={"description":
+                        "Open observed navigation link | " + action.description + " | destination=" + element.href})
             if action.operation == Operation.CLICK and element and not element.href:
                 allowed = combobox_opener(element) or (
                     element.popup_kind == "menu" and element.popup_open is not True
@@ -3727,9 +3760,18 @@ class DynamicController(Controller):
             if (allowed and action.operation in self.task.allowed_operations
                     and probe_key(action, obs) not in record["tried"]):
                 result.append(action)
-        # Ambiguous identical control identities cannot be re-bound after DS latency.
+        # Equivalent static navigation links (e.g. sidebar and workspace cards)
+        # are one destination probe. Keep one fresh representative instead of
+        # discarding the route. Other ambiguous control identities remain excluded.
         keys = [probe_key(a, obs) for a in result]
-        return [a for a, key in zip(result, keys, strict=True) if keys.count(key) == 1]
+        unique, seen = [], set()
+        for action, key in zip(result, keys, strict=True):
+            element = next((e for e in obs.elements if e.id == action.element_ref), None)
+            if key not in seen and (keys.count(key) == 1 or (
+                    element and recovery_navigation_link(element, obs, self.task))):
+                unique.append(action)
+            seen.add(key)
+        return unique
 
     async def recover_stall(self, obs):
         record = self.stall_guard.current(obs)

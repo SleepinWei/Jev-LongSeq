@@ -13,7 +13,7 @@ from jev_browser.dynamic import (
     planning_location,
     write_prerequisite_diagnostics,
 )
-from jev_browser.jev_recovery import StallGuard, work_signature
+from jev_browser.jev_recovery import StallGuard, probe_key, work_signature
 from jev_browser.memory import Memory
 from jev_browser.models import JevPolicy
 from jev_browser.protocol import (
@@ -207,6 +207,108 @@ async def test_probe_reobserves_and_does_not_execute_an_old_ds_choice():
     assert await agent.recover_stall(obs) is None
     agent.backend.execute.assert_not_awaited()
     assert any(e["kind"] == "recovery_probe_stale" for e in agent.events)
+
+
+def workspace(**updates):
+    return page(url="http://example.test/desk/people", title="People", text="People Employee",
+        elements=[Element(id="employee-link", role="link", name="Employee",
+                          href="http://example.test/desk/employee")]).model_copy(update=updates, deep=True)
+
+
+def test_static_workspace_exposes_navigation_and_destination_is_part_of_probe_identity():
+    agent, obs = controller(), workspace()
+    obs.elements.append(Element(id="second", role="link", name="Employee",
+                                href="http://example.test/desk/employee-separation"))
+    links = [a for a in agent.recovery_candidates(obs) if a.element_ref]
+    assert {a.element_ref for a in links} == {"employee-link", "second"}
+    assert all("destination=" in a.description for a in links)
+    assert probe_key(links[0], obs) != probe_key(links[1], obs)
+    agent.stall_guard.current(obs)["tried"].add(probe_key(links[0], obs))
+    fresh = obs.model_copy(deep=True)
+    fresh.elements[0].id = "new-handle"
+    assert {a.element_ref for a in agent.recovery_candidates(fresh) if a.element_ref} == {"second"}
+
+
+async def test_equivalent_sidebar_and_workspace_links_remain_one_fresh_navigation_probe():
+    agent, obs = controller(), workspace()
+    obs.elements.append(obs.elements[0].model_copy(update={"id": "workspace-link"}))
+    links = [a for a in agent.recovery_candidates(obs) if a.element_ref]
+    assert len(links) == 1 and links[0].element_ref == "employee-link"
+    async def choose(task, current, memory, candidates, diagnostic):
+        return RecoveryProbe(choice=next(a.id for a in candidates if a.element_ref), reason="Open Employee list")
+    agent.feedback_model.inspect_recovery.side_effect = choose
+    fresh = obs.model_copy(update={"observation_id": "fresh"}, deep=True)
+    fresh.elements[0].id, fresh.elements[1].id = "new-sidebar", "new-card"
+    agent.backend.observe.return_value = fresh
+    assert await agent.recover_stall(obs) is None
+    assert agent.backend.execute.await_args.args[0].element_ref == "new-sidebar"
+    agent.pending = None
+    agent.memory.pending_writes.clear()
+    assert not any(a.element_ref for a in agent.recovery_candidates(fresh))
+
+
+@pytest.mark.parametrize("change", ["editable", "selectable", "save", "unsaved", "dialog",
+    "disabled", "readonly", "row", "same_url", "cross_origin", "javascript", "mutating", "api"])
+def test_navigation_probe_cannot_abandon_form_or_dispatch_non_navigation(change):
+    agent, obs = controller(), workspace()
+    link = obs.elements[0]
+    if change in {"editable", "selectable"}:
+        obs.elements.append(Element(id="field", role="textbox", name="Draft value", **{change: True}))
+    elif change == "save":
+        obs.elements.append(Element(id="save", role="button", name="Save"))
+    elif change == "unsaved":
+        obs.text += " Not Saved"
+    elif change == "dialog":
+        obs.dialogs = ["Confirm leaving"]
+    elif change == "disabled":
+        link.enabled = False
+    elif change == "readonly":
+        link.read_only = True
+    elif change == "row":
+        link.grid_ref, link.row_ref = "grid", "draft-row"
+    elif change == "same_url":
+        link.href = obs.url
+    elif change == "cross_origin":
+        agent.task.allowed_origins.append("http://other.test")
+        link.href = "http://other.test/desk/employee"
+    elif change == "javascript":
+        link.href = "javascript:deleteRecord()"
+    elif change == "mutating":
+        link.name, link.href = "Delete Employee", "http://example.test/delete/employee"
+    elif change == "api":
+        link.href = "http://example.test/api/method/action"
+    assert not any(a.element_ref for a in agent.recovery_candidates(obs))
+
+
+async def test_ds_selected_navigation_uses_fresh_handle_and_confirms_only_destination():
+    agent, obs = controller(), workspace()
+    async def choose(task, current, memory, candidates, diagnostic):
+        return RecoveryProbe(choice=next(a.id for a in candidates if a.element_ref), reason="Open Employee list")
+    agent.feedback_model.inspect_recovery.side_effect = choose
+    fresh = workspace(observation_id="fresh")
+    fresh.elements[0].id = "fresh-link"
+    agent.backend.observe.return_value = fresh
+    assert await agent.recover_stall(obs) is None
+    action = agent.backend.execute.await_args.args[0]
+    assert action.element_ref == "fresh-link" and action.observation_id == "fresh"
+    assert agent.pending["navigation_target"] == "http://example.test/desk/employee"
+    arrived = workspace(observation_id="arrived", url="http://example.test/desk/employee")
+    assert agent.transition_is_observed(arrived)
+    assert agent.confirm_transition("confirmed", arrived, "observed_navigation_destination")
+    assert not agent.memory.write_checkpoints
+    assert not agent.memory.confirmed_actions[-1]["business_commit_confirmed"]
+
+
+async def test_changed_navigation_destination_after_ds_choice_is_not_dispatched():
+    agent, obs = controller(), workspace()
+    async def choose(task, current, memory, candidates, diagnostic):
+        return RecoveryProbe(choice=next(a.id for a in candidates if a.element_ref), reason="Open observed link")
+    agent.feedback_model.inspect_recovery.side_effect = choose
+    fresh = workspace(observation_id="new")
+    fresh.elements[0].href = "http://example.test/desk/other"
+    agent.backend.observe.return_value = fresh
+    assert await agent.recover_stall(obs) is None
+    agent.backend.execute.assert_not_awaited()
 
 
 async def test_ds_probe_schema_only_accepts_supplied_candidates_and_rejects_truncation():

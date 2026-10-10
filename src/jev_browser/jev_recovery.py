@@ -23,7 +23,7 @@ def probe_key(action, obs):
     element = next((e for e in obs.elements if e.id == action.element_ref), None)
     owner = next((e for e in obs.elements if element and e.id == element.option_owner), None)
     def identity(e):
-        return ([e.role, e.name, e.value, e.context, e.grid_ref, e.row_ref,
+        return ([e.role, e.name, e.value, e.context, e.href, e.grid_ref, e.row_ref,
                  e.editable, e.selectable, e.read_only, e.popup_kind, e.popup_open] if e else None)
     return digest([work_signature(obs), action.operation, action.bound_value,
                    identity(element), identity(owner)])
