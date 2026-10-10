@@ -786,7 +786,7 @@ def project_chat_request(payload, *, max_bytes, purpose, token_budget=None):
     quotes and the full final notebook remain protected, never silently omitted.
     """
     original = json.loads(payload["messages"][-1]["content"])
-    if purpose in {"dynamic_readback", "dynamic_readback_inspection"} and "untrusted_observation" not in original:
+    if purpose in {"dynamic_readback", "dynamic_readback_inspection", "dynamic_recovery_probe"} and "untrusted_observation" not in original:
         # Scoped readback already contains only exact current evidence and the
         # action contract. Do not reintroduce advisory state or excerpt proof.
         projected = copy.deepcopy(payload)

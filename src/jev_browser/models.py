@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import time
@@ -385,6 +386,8 @@ def dynamic_policy_options(obs, candidates):
                **({"target": a.element_ref} if a.element_ref else {"description": a.description}),
                **({"description": "Grid column header, not a row field input"}
                   if a.element_ref in headers else {}),
+               **({"meaning": "Open this observed combobox to expose options; no value is selected or saved."}
+                  if a.description.startswith("Open observed combobox options") else {}),
                **({"value": a.bound_value} if a.bound_value is not None else {}),
                **({"requires_ds_value": True, "meaning": "NO ACTION: prepare value before fresh selection"}
                   if a.description.startswith("NO ACTION: ask DS") else {})}
@@ -515,7 +518,15 @@ class JevPolicy:
                     or assessment.get("choice") not in questions["outcome"]["criteria"]):
                 raise ValueError("Jev returned an invalid outcome assessment")
             outcome = assessment["choice"]
-        return Decision(choice=answer["choice"], confidence=answer["confidence"], outcome=outcome)
+        # Preserve only provider-reported known-choice probabilities. They never
+        # bypass the controller's confidence gate or authorize a browser action.
+        reported = answer.get("probabilities", {})
+        probabilities = ({key: float(value) for key, value in reported.items()
+                          if key in options and isinstance(value, (int, float))
+                          and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= 1}
+                         if isinstance(reported, dict) else {})
+        return Decision(choice=answer["choice"], confidence=answer["confidence"], outcome=outcome,
+                        probabilities=probabilities)
 
 
 class JsonPolicy:

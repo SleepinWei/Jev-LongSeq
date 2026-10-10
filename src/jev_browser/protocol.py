@@ -271,6 +271,7 @@ class Decision(Model):
     choice: str
     confidence: float | None = Field(default=None, ge=0, le=1)
     outcome: Literal["none", "confirmed", "pending", "unknown", "not_applied"] | None = None
+    probabilities: dict[str, float] = Field(default_factory=dict)
 
 
 class Receipt(Model):
@@ -303,6 +304,8 @@ class AgentTuning(Model):
     excerpt_chars: int = Field(default=2400, ge=600, le=4000)
     prompt_variant: Literal["balanced", "compact", "coverage"] = "balanced"
     feedback_mode: Literal["checkpoint", "jev_led"] = "checkpoint"
+    jev_stall_interventions: int = Field(default=2, ge=1, le=4)
+    jev_recovery_probes: int = Field(default=3, ge=0, le=6)
     search_readback_grace_s: float = Field(default=3.0, ge=0, le=10)
 
 

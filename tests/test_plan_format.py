@@ -57,7 +57,7 @@ def test_unknown_extras_action_fields_and_completion_remain_strict(case):
         validated_feedback(json.dumps(raw), schema)
 
 
-@pytest.mark.parametrize("operation", ["fill", "click"])
+@pytest.mark.parametrize("operation", ["fill", "click", "select"])
 async def test_actual_model_response_skips_repair_only_for_valid_action(operation):
     calls = []
 
@@ -75,9 +75,9 @@ async def test_actual_model_response_skips_repair_only_for_valid_action(operatio
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         brain = JsonFeedback(ModelTransport("https://model.test", "test-key", "test", client=client))
         controller = DynamicController(task, AsyncMock(), AsyncMock(), feedback=brain)
-        if operation == "fill":
+        if operation in {"fill", "click"}:
             result = await controller.review(obs, phase="ui_checkpoint")
-            assert result.stage_entry.operation == "fill" and len(calls) == 1
+            assert result.stage_entry.operation == operation and len(calls) == 1
             assert result.inputs[0].value == "Rajesh Kumar"
             assert any(e["kind"] == "feedback_metadata_normalized" for e in controller.events)
             assert not any(e["kind"] == "invalid_feedback" for e in controller.events)
@@ -87,7 +87,7 @@ async def test_actual_model_response_skips_repair_only_for_valid_action(operatio
             assert len(calls) == 2
             diagnostic = json.loads(calls[-1]["messages"][-1]["content"])["schema_error"][0]
             assert diagnostic["type"] == "control_operation_unavailable"
-            assert diagnostic["requested_operations"] == ["click"]
-            assert diagnostic["available_operations"] == ["fill"]
+            assert diagnostic["requested_operations"] == ["select"]
+            assert diagnostic["available_operations"] == ["click", "fill"]
         controller.backend.execute.assert_not_awaited()
         assert not controller.pending and not controller.memory.pending_writes

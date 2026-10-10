@@ -19,6 +19,11 @@ JEV_LED_SYSTEM = (
     "Task progress distinguishes local effects from persisted business records. Follow "
     "the original task's dependencies, do not invent new ordering constraints, and do "
     "not abandon an unfinished draft. Request finish only after all requested work has evidence."
+    " For an editable combobox, use its click candidate (Open observed combobox options) to reveal "
+    "fresh field-owned choices; typing a label is not selecting a record. Examine loop.stall_recovery "
+    "and execution_feedback: repeating NO ACTION or same-value fill without new information is "
+    "not progress. Save is not an exploratory probe. DS may select a bounded information probe "
+    "after repeated abstentions, and the controller may stop the stalled state."
 )
 
 JEV_BRAIN_SYSTEM = (

@@ -153,10 +153,13 @@ SNAPSHOT = r"""selector => {
     const editable = !readOnly && (tag === 'textarea' || el.isContentEditable ||
       (tag === 'input' && ['text','search','email','url','tel','password','number'].includes(el.type)));
     const row = el.closest('.grid-row,tr,[role="row"],fieldset,form');
-    const required = !!el.required || el.getAttribute('aria-required') === 'true' ||
+    const fieldLike = editable || tag === 'select' ||
+      (readOnly && ['textbox','combobox','status'].includes(role)) ||
+      (tag === 'input' && !['button','submit','reset','file','hidden'].includes(el.type));
+    const required = fieldLike && (!!el.required || el.getAttribute('aria-required') === 'true' ||
       /\*\s*$/.test(labels || implicitLabel) ||
       [...(el.closest('.frappe-control') || el.parentElement).querySelectorAll('label')]
-        .some(label => visible(label) && getComputedStyle(label, '::after').content.replace(/["']/g, '').trim() === '*');
+        .some(label => visible(label) && getComputedStyle(label, '::after').content.replace(/["']/g, '').trim() === '*'));
     const navigation = el.closest('nav,header,[role="navigation"],[role="banner"]');
     const context = row ? labelText(row) : navigation ? 'Navigation: ' + labelText(navigation).slice(0, 240) : '';
     return {index, role, name:name.trim().replace(/\s*\*$/, ''), value:el.type === 'password' ? (el.value ? '[redacted]' : '') : (display ? labelText(el) : el.value || ''),
