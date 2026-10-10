@@ -301,3 +301,45 @@ recovery_probe_invalid 并以 needs_attention 停止，0 个恢复动作、无�
 历史 payload 的独立 API replay smoke 因自动审批拒绝再次外发上下文而取消，
 未调用 API、未做浏览器操作；实际效果用已授权的全新 89 benchmark 验证。
 新目录为 `saas-longseq-business031-20261010-v11-jev-recovery-89`，其余配置不变。
+
+### 89 最终结果：停止有效，任务成功尚未改善
+
+89 已走完官方评分和清理，grade_final=true、completion_confirmed=true、
+data_valid=true、cleanup_error=null；启动器最终 check_idle 通过。
+
+| 指标 | jev-led-86 | recovery-87 | recovery-88 | recovery-89 |
+| --- | --- | --- | --- | --- |
+| 官方有效评分 | 0/15 | 0/15 | 0/15 | 0/15 |
+| strict_success | false | false | false | false |
+| Agent 秒数 | 1,804.140 | 550.715 | 164.950 | 71.383 |
+| DS / Jev 次数 | 57 / 95 | 28 / 69 | 13 / 24 | 7 / 18 |
+| Actions / cycles | 36 / 100 | 40 / 71 | 13 / 25 | 13 / 21 |
+| 停止原因 | 时间预算耗尽 | 恢复 reason 解析错误 | 恢复响应截断 | 无新的 grounded probe |
+
+89 setup 81.487 秒、verification 2.546 秒、总环境流程 186.977 秒。25 次调用全部
+保留请求/响应，7 次 DS 全部 finish_reason=stop，无空输出或 transport 错误。
+cycle 17/19 的恢复请求实际含 `thinking.type=disabled`；分别 2,627/2,491 input
+tokens、84/77 output tokens，耗时 0.876/0.926 秒。没有改成另一模型或增加总预算。
+
+cycle 17 选择 scroll down，cycle 19 选择 scroll up；fresh observation 核验后各执行
+一次，未把滚动开合当作任务进展，旧状态计数保留。cycle 21 在同一 People 工作区
+无新探测候选，以 needs_attention 停止，没有第三次重复规划或重放原 Jev 提案。
+模型称此前 Employee 链接 stale，但这是说明，实际状态以各次 receipt/observe
+取证为准。最终仍未完成任何官方计分义务。
+
+比较 86 的有界 compare：task_equal=true；provider/model、budget、checkpoint、
+benchmark 环境无差异；变化为 tuning 中两项停滞参数、system prompt、code hash。
+这是描述性单任务比较，非消融或套件成功率估计。**短耗时代表提前退出，不能据此
+声称任务执行更高效；分数/整项成功均未提升。** 两次有限选择快速合法、无效循环
+有界终止已获得在线证据，Company 派生与下拉选择的业务收益仍未验证。
+
+当前恢复范围的缺口很明确：workspace 中导航被排除，命令面板中任意 FILL 被排除，
+因此可能在仍可通过新导航或确切查询推进时过早停止。后续应验证具备当前链接/输入
+依据、无未确认写入及无未保存表单时的窄范围导航或任务已授权查询分支；继续排除
+Save/Submit 盲试与任意字段猜值。不能只提高停滞阈值并恢复原有循环。
+
+历史证据：89 cycle 17/19 请求为
+`model-artifacts/55491d00b7c541d3ae2ffd9a2319ba81.request.json` 和
+`model-artifacts/31b6aca509484509b9d4fd2982dda3d2.request.json`；恢复派发事件位于
+trajectory.jsonl 的 77/86 行，停止事件为 94 行（零起始）。有界部分报告保存于
+macmini `/tmp/jev89-summary.json` 和 `/tmp/jev89-compare86.json`，不提交真实 run 产物。
