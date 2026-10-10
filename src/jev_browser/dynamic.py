@@ -9,7 +9,7 @@ import time
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, PrivateAttr, ValidationError
+from pydantic import Field, PrivateAttr, ValidationError, field_validator
 
 from .candidates import allowed_url
 from .context_budget import ContextBudgetExceeded, archive_ref
@@ -237,6 +237,13 @@ class ReadbackInspection(Model):
 class RecoveryProbe(Model):
     choice: str
     reason: str = Field(max_length=500)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def bound_advisory_reason(cls, value):
+        # Captured response retains full evidence. Prose is not execution authority;
+        # an overlong explanation must not invalidate an otherwise exact choice.
+        return value[:500] if isinstance(value, str) else value
 
 
 def validated_feedback(raw, schema=Feedback):
@@ -3730,9 +3737,14 @@ class DynamicController(Controller):
             return "Jev/DS stalled; no new grounded recovery probe available"
         record["probes"] += 1  # Bound requests even when declined, stale or malformed.
         self.charge_feedback()
-        verdict = await self.observer.measure("brain.recovery_probe", inspector,
-            self.task.model_copy(deep=True), obs, self.memory, candidates, diagnostic)
-        verdict = RecoveryProbe.model_validate(verdict)
+        try:
+            verdict = await self.observer.measure("brain.recovery_probe", inspector,
+                self.task.model_copy(deep=True), obs, self.memory, candidates, diagnostic)
+            verdict = RecoveryProbe.model_validate(verdict)
+        except (ValueError, KeyError, TypeError) as exc:
+            self.log("recovery_probe_invalid", diagnostic=str(exc)[:500],
+                     browser_action_dispatched=False, attempt=record["probes"])
+            return "Jev/DS recovery returned invalid choice/schema; no action dispatched"
         self.log("recovery_probe_selected", choice=verdict.choice, reason=verdict.reason,
                  attempt=record["probes"], business_commit_confirmed=False)
         if verdict.choice == "stop":

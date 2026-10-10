@@ -245,3 +245,32 @@ Studio launcher、手动 benchmark 和 slot 0 空闲。新目录为
 保留 v1.1、business_031 原任务、官方 deepseek-flash、jev-latest、无恢复 checkpoint、
 600 actions / 1,800 秒及其余原预算。最终结果待评分和清理后记录；目前不能声称
 提高分数或整项成功。
+
+### 87 最终结果与恢复解析修正
+
+87 已完成官方评分和环境清理：**0/15、data_valid=true、strict_success=false**，
+40 actions / 71 cycles，agent 550.715 秒（9.18 分钟），DS 28 / Jev 69。
+setup 77.994 秒、verification 2.981 秒、全流程 671.716 秒；grade_final=true、
+completion_confirmed=true、cleanup_error=null，启动器最终空闲检查通过。
+
+cycle 68 的 Save 因真正的 Company 空值被拦截；没有再次列出 Open Link 假必填。
+Activities 已有局部填写并不说明 Company 阻塞解除或记录已保存。cycle 71 在同一
+工作状态累计两次 DS 干预后触发 jev_stall_detected，切换 dynamic_recovery_probe。
+实际 DS 返回 choice=a29，候选为打开 Employee combobox；没有执行该动作，因为
+reason 超过 schema 的 500 字符导致 ValidationError。模型说明中的“Save was
+dispatched”与浏览器前置拦截证据冲突，不能把说明当作 dispatch 事实。
+
+实际响应与候选证据为 `model-artifacts/74cb7663ffc6434e92a3455db77f6b50.*.json`。
+cycle 32 另有一次 readback length/空 content，pending 保留后继续核查；本轮全部
+97 次尝试都有请求/响应捕获，无 transport 错误。87 的较短耗时源于解析错误提前
+结束，**不能声称有效率或成功率提升**，恢复动作在线效果还未得到验证。
+
+后续仅修正恢复响应处理：reason 是非授权说明，解析时保留前 500 字符，完整原文
+仍在 captured response；choice、额外字段、类型和候选范围继续严格验证。非法/
+截断恢复响应有界地返回 needs_attention 并记录 recovery_probe_invalid，不派发、
+不额外重试、不因日志说明错误把整个控制器变成未处理异常。模型 timeout/global
+budget 仍走原有路径。远端针对性回归 23 passed，最终完整回归
+**1,138 passed、3 skipped（125.34 秒）**，本轮 lint 通过。
+
+修正后以全新目录 `saas-longseq-business031-20261010-v11-jev-recovery-88` 重跑，
+任务、模型、无 checkpoint、预算及环境保持不变；最终评分和清理结果另行补充。

@@ -230,6 +230,47 @@ async def test_ds_probe_schema_only_accepts_supplied_candidates_and_rejects_trun
         await JsonFeedback(transport).inspect_recovery(agent.task, obs, agent.memory, candidates, {})
 
 
+async def test_long_advisory_reason_does_not_invalidate_exact_probe_choice():
+    agent, obs = controller(), page()
+    candidates = agent.recovery_candidates(obs)
+    opener = next(a for a in candidates if a.element_ref == "employee")
+    transport = AsyncMock()
+    transport.post.return_value = {"choices": [{"message": {"content": json.dumps(
+        {"choice": opener.id, "reason": "Open observed Employee options. " * 25})},
+        "finish_reason": "stop"}]}
+    verdict = await JsonFeedback(transport).inspect_recovery(agent.task, obs, agent.memory, candidates, {})
+    assert verdict.choice == opener.id and len(verdict.reason) == 500
+    assert RecoveryProbe.model_json_schema()["properties"]["reason"]["maxLength"] == 500
+    transport.post.return_value["choices"][0]["message"]["content"] = json.dumps(
+        {"choice": "save", "reason": "Try writing. " * 100})
+    with pytest.raises(ValueError, match="unknown candidate"):
+        await JsonFeedback(transport).inspect_recovery(agent.task, obs, agent.memory, candidates, {})
+
+
+@pytest.mark.parametrize("response", [
+    {"choice": "stop", "reason": []}, {"choice": "stop"},
+    {"choice": "stop", "reason": "Stop", "value": "invented"},
+])
+async def test_invalid_probe_schema_stops_without_dispatch_or_retry(response):
+    agent, obs = controller(), page()
+    agent.feedback_model.inspect_recovery.return_value = response
+    reason = await agent.recover_stall(obs)
+    assert "invalid choice/schema" in reason
+    agent.backend.execute.assert_not_awaited()
+    agent.backend.observe.assert_not_awaited()
+    assert agent.feedback_model.inspect_recovery.await_count == 1
+    assert agent.stall_guard.current(obs)["probes"] == 1
+    assert any(e["kind"] == "recovery_probe_invalid" for e in agent.events)
+
+
+async def test_rejected_probe_choice_stops_without_retrying_model_or_action():
+    agent, obs = controller(), page()
+    agent.feedback_model.inspect_recovery.side_effect = ValueError("unknown candidate")
+    assert "invalid choice/schema" in await agent.recover_stall(obs)
+    agent.feedback_model.inspect_recovery.assert_awaited_once()
+    agent.backend.execute.assert_not_awaited()
+
+
 async def test_provider_probabilities_are_advisory_and_invalid_or_unknown_entries_discarded():
     agent, obs = controller(), page()
     candidates = generate_dynamic(obs, agent.task)
