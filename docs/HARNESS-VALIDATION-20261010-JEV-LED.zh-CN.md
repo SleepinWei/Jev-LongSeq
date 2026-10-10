@@ -85,3 +85,33 @@ no_progress 不再因一个本会跳过的 checkpoint 而被排除。增加跨�
 
 修复后的 fresh run 为 `saas-longseq-business031-20261010-v11-jev-led-85/saas-bench-business_031`，
 保持 84/83 的任务、模型、预算、无 checkpoint 和环境版本，最终结果完成后补充。
+
+## 第二轮 85：升级可达，但超时冷却空转
+
+85 官方评分有效 **0/15，strict_success=false**，agent 725.156 秒（12.09 分钟），
+23 actions / 600 cycles，decision cycle budget reached。294 次尝试：DS 28 次
+（18 planning、9 readback、1 input），Jev 266 次；4 次 DS TimeoutError。setup 79.410 秒，
+verification 1.965 秒，全流程 843.294 秒；finished、grade_final=true、
+completion_confirmed=true、cleanup_error=null。
+
+cycle 21/34 的 jev_requested 已实际触发 DS；cycle 193 的 Jev 实际请求为
+`model-artifacts/9bf1d2c7920f4f89bc228e8f4ae56c65.request.json`，选项返回 request_replan
+confidence=.79。但 DS 超时后的 planning_retry_after 仍有效，Jev-led 每轮清除
+fresh_scope_required，越过了已有的冷却等待。结果是大量重复 NO ACTION 和降级规划，
+消耗 cycles / Jev 请求，没有业务进展。85 同样不能用短于 83 的耗时宣称效率提升。
+
+第三轮修复：冷却期间明确等待，不再调用 Jev/DS、不操作浏览器；截止后先重试已经
+排队的 DS 干预，再恢复 Jev 选择。低置信度等规划超时在新模式下保持待处理范围状态。
+新增等待不调用模型、冷却到期先干预及低置信度降级状态回归。
+
+同时把新模式的 DS assistance schema 改为 next_goal、working_memory、inputs、
+notes、evidence_requests、dependency_reviews，去除 stage_entry、stage_controls、
+execution_groups 等 DOM 动作计划输出。实际当前能力仍供 DS 识别字段；计划输入只
+能绑定到当次文档/弹窗内唯一匹配的 editable/selectable 控件，Jev 从新观测选择动作。
+checkpoint 默认模式仍使用原 schema，最终复核/未知写入读回仍使用原证据要求。
+这样避免新模式仍在生成和验证不会采用的旧动作计划。
+
+fresh run 为 `saas-longseq-business031-20261010-v11-jev-led-86/saas-bench-business_031`。
+这是冷却与 DS 输出简化的组合修复，不是单项消融；结果完成后补充。
+macmini 最终相关回归 **448 passed**（41.86 秒），lint 通过；新增真实 DS schema/
+计划值绑定的请求测试。默认 checkpoint 模式仍通过原反馈与阶段交付回归。

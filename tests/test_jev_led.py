@@ -1,11 +1,18 @@
 """Policy-led execution changes scheduling without releasing uncertain submissions."""
+import json
 import time
 from unittest.mock import AsyncMock
 
 import pytest
 
 from jev_browser.browser import PlaywrightBackend
-from jev_browser.dynamic import DynamicController, Feedback, generate_dynamic, planning_location
+from jev_browser.dynamic import (
+    DynamicController,
+    Feedback,
+    JsonFeedback,
+    generate_dynamic,
+    planning_location,
+)
 from jev_browser.jev_loop import input_context_key, policy_context
 from jev_browser.models import JevPolicy, state
 from jev_browser.protocol import (
@@ -157,6 +164,42 @@ async def test_unchanged_new_page_still_reaches_no_progress_watchdog():
     assert "no_progress" in [e["reason"] for e in agent.events if e["kind"] == "brain_requested"]
 
 
+async def test_intervention_cooldown_waits_without_repeating_jev_or_ds(monkeypatch):
+    agent, obs = controller(), page()
+    agent.initial_phase = ""
+    agent.planning_retry_after[planning_location(obs)] = time.monotonic() + 120
+    agent.backend.observe.return_value = obs
+    monkeypatch.setattr("jev_browser.dynamic.asyncio.sleep", AsyncMock())
+    await agent.run()
+    agent.policy.choose.assert_not_awaited()
+    agent.feedback_model.review.assert_not_awaited()
+    agent.backend.execute.assert_not_awaited()
+    assert sum(e["kind"] == "planning_scope_wait" for e in agent.events) == 3
+
+
+async def test_expired_cooldown_retries_queued_ds_intervention_before_next_choice():
+    agent, obs = controller(), page()
+    agent.initial_phase = ""
+    agent.budget.max_cycles = 1
+    agent.planning_retry_after[planning_location(obs)] = time.monotonic() - 1
+    agent.backend.observe.return_value = obs
+
+    async def choose(task, current, memory, contract, candidates):
+        assert agent.feedback_model.review.await_count == 1
+        return Decision(choice=next(a.id for a in candidates if a.operation == Operation.WAIT), confidence=.9)
+
+    agent.policy.choose.side_effect = choose
+    await agent.run()
+    assert agent.feedback_model.review.await_args.kwargs["phase"] == "jev_requested"
+    assert planning_location(obs) not in agent.planning_retry_after
+
+
+def test_degraded_low_confidence_review_preserves_queued_intervention():
+    agent = controller()
+    agent.degraded_planning(page(), "low_confidence", "optional planning call timed out")
+    assert agent.fresh_scope_required
+
+
 async def test_local_failed_fill_can_be_released_once_without_confirmation():
     agent, obs = controller(), page()
     selected = action(agent, obs, "date", Operation.FILL)
@@ -250,3 +293,31 @@ async def test_actual_jev_request_exposes_local_failure_choice_and_keeps_origina
     candidates = agent.generate_stage_candidates(obs, limit=250, offset=0)
     decision = await policy.choose(agent.task, obs, agent.memory, None, candidates)
     assert decision.outcome == "not_applied"
+
+
+async def test_ds_intervention_schema_omits_dom_action_plan_and_binds_scoped_input():
+    agent, obs = controller(), page()
+    transport = AsyncMock()
+    transport.model, transport.observer = "deepseek-flash", None
+
+    async def respond(payload, kind):
+        assert kind == "dynamic_feedback"
+        content = json.loads(payload["messages"][1]["content"])
+        properties = content["schema"]["properties"]
+        assert "stage_entry" not in properties and "stage_controls" not in properties
+        assert "execution_groups" not in properties
+        assert content["trusted_goal"] == agent.task.objective
+        answer = {"next_goal":"Fill date, then continue other requested work",
+                  "working_memory":"No business record persisted; other work pending",
+                  "inputs":[{"name":"Date", "value":"2026-06-30"}]}
+        return {"choices":[{"message":{"content":json.dumps(answer)}}]}
+
+    transport.post.side_effect = respond
+    agent.feedback_model = JsonFeedback(transport, agent.tuning)
+    await agent.review(obs, phase="jev_requested")
+    selected = action(agent, obs, "date", Operation.FILL)
+    await agent.bind_input(selected, obs)
+    assert selected.bound_value == "2026-06-30"
+    assert not agent.input_preparation_deferred
+    assert agent.events[-1]["source"]["kind"] == "validated_stage_input"
+    transport.post.assert_awaited_once()
