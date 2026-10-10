@@ -15,6 +15,7 @@ from .candidates import allowed_url
 from .context_budget import ContextBudgetExceeded, archive_ref
 from .controller import Controller
 from .input_bindings import quoted_inputs
+from .jev_loop import input_context_key
 from .memory import all_checks
 from .models import state
 from .observability import ModelCallTimeout
@@ -960,7 +961,15 @@ class JsonFeedback:
                         + (" This is the final review: do not regenerate working_memory. "
                            "Put the useful result in answer and only the necessary exact supporting "
                            "quotes in notes. If incomplete, state remaining work in next_goal."
-                           if phase == "finish" else ""),
+                           if phase == "finish" else "")
+                        + (" Jev leads local execution and requests your intervention only for "
+                           "uncertainty, missing inputs or no progress. Plan reusable goals with "
+                           "exact inputs and explicit task dependencies. Keep all remaining original "
+                           "requirements in working_memory, distinguishing draft effects from "
+                           "persisted records. Do not demand another planning call after ordinary "
+                           "navigation or a successful field. For failed date inputs inspect the "
+                           "current placeholder and validation_message; never invent a date format."
+                           if self.tuning.feedback_mode == "jev_led" else ""),
                     },
                     {"role": "user", "content": json.dumps(content, ensure_ascii=False)},
                 ],
@@ -1222,6 +1231,12 @@ class DynamicController(Controller):
         super().__init__(task, backend, policy, mode="flat", budget=budget, output=output,
                          observer=observer)
         self.tuning = tuning or AgentTuning(brain_interval=self.budget.brain_interval)
+        self.jev_led = self.tuning.feedback_mode == "jev_led"
+        self.memory.policy_loop_mode = self.tuning.feedback_mode
+        self.jev_inputs = {}
+        self.local_fill_failures = {}
+        self.input_preparation_deferred = False
+        self.last_local_fill_failure = None
         self.budget = self.budget.model_copy(update={"brain_interval": self.tuning.brain_interval})
         self.feedback_model = feedback
         self.memory.dynamic_mode = True
@@ -1794,12 +1809,20 @@ class DynamicController(Controller):
         return True
 
     def planned_input(self, obs, element):
+        if self.jev_led:
+            scope = self.memory.feedback.get("execution_scope", {})
+            if scope.get("dialogs", []) != obs.dialogs:
+                return None
         entries = self.memory.feedback.get("inputs", [])
         matches = [p for p in entries if p["name"] == element.name
                    and p.get("grid_ref") == element.grid_ref and p.get("row_ref") == element.row_ref]
         return matches[0] if len(matches) == 1 and self.last_brain_location == planning_location(obs) else None
 
     def stage_action_allowed(self, action, obs):
+        if self.jev_led:
+            # Live DOM capabilities, task permissions, confidence, prerequisites,
+            # deduplication and pending-write guards still run before dispatch.
+            return True
         if self.fresh_scope_required and not self.pending:
             return action.operation in {Operation.WAIT, Operation.REPLAN}
         if self.execution_groups and not self.pending:
@@ -1903,7 +1926,8 @@ class DynamicController(Controller):
 
     def generate_stage_candidates(self, obs, *, limit, offset):
         handoff = self.memory.feedback.get("planning_handoff")
-        navigating = (handoff and handoff["environment_id"] == self.memory.environment_id)
+        navigating = (not self.jev_led and handoff
+                      and handoff["environment_id"] == self.memory.environment_id)
         removed = 0
         def eligible(action):
             nonlocal removed
@@ -1919,6 +1943,16 @@ class DynamicController(Controller):
         if removed:
             self.log("stage_candidates_guarded", removed=removed, allowed_candidates=len(candidates),
                      before_pagination=True, browser_action_dispatched=False)
+        if self.jev_led and not self.pending:
+            for action in candidates:
+                if action.operation not in {Operation.FILL, Operation.SELECT} or action.bound_value is not None:
+                    continue
+                element = next(e for e in obs.elements if e.id == action.element_ref)
+                prepared = self.jev_inputs.get(input_context_key(self.memory, obs, element))
+                if prepared:
+                    action.bound_value = prepared["value"]
+                elif self.scoped_planned_input(action, obs, element) is None:
+                    action.description = "NO ACTION: ask DS for an input value. " + action.description
         return candidates
 
     async def observe_dynamic(self, *, finish=False):
@@ -1996,7 +2030,7 @@ class DynamicController(Controller):
 
     async def perform(self, action, obs):
         handoff = self.memory.feedback.get("planning_handoff")
-        if (not self.pending and handoff
+        if (not self.jev_led and not self.pending and handoff
                 and handoff["environment_id"] == self.memory.environment_id
                 and not handoff_navigation(action, obs)):
             return "write checkpoint needs fresh planning before another form mutation"
@@ -2252,6 +2286,16 @@ class DynamicController(Controller):
 
     async def bind_input(self, action, obs):
         element = next(e for e in obs.elements if e.id == action.element_ref)
+        self.input_preparation_deferred = False
+        prepared_key = input_context_key(self.memory, obs, element)
+        prepared = self.jev_inputs.get(prepared_key) if self.jev_led else None
+        if prepared and action.bound_value == prepared["value"]:
+            if action.operation == Operation.SELECT and action.bound_value not in element.options:
+                raise InvalidInputValue("unobserved_select_option")
+            self.log("input_binding", action=action.model_dump(),
+                     source={"kind": "ds_prepared_after_no_action", "scope_key": prepared_key},
+                     input_model_call_skipped=True)
+            return
         if (self.execution_groups and not self.pending
                 and (step := self.group_action(action, obs)) is not None):
             value = InputValue(value=step["value"]).value
@@ -2308,6 +2352,14 @@ class DynamicController(Controller):
         else:
             self.input_retry = None
             diagnostic = None
+            if self.jev_led:
+                self.policy_abstention = {
+                    "reason": "input_value_required", "operation": action.operation.value,
+                    "element_ref": element.id, "description": action.description,
+                    "observation_id": obs.observation_id, "browser_action_dispatched": False,
+                    "pending_preserved": bool(self.pending)}
+                self.log("policy_abstained", **self.policy_abstention)
+                self.memory.feedback.setdefault("execution_feedback", {})["policy_abstention"] = self.policy_abstention
             for attempt in range(2):
                 self.charge_feedback()
                 try:
@@ -2338,6 +2390,11 @@ class DynamicController(Controller):
             # must be regenerated when that evidence changes.
             if action.bound_value and action.bound_value in self.task.objective:
                 self.input_retry = (key, action.bound_value)
+            if self.jev_led:
+                self.jev_inputs[prepared_key] = {"value": action.bound_value, "name": element.name}
+                self.input_preparation_deferred = True
+                self.log("input_prepared", scope_key=prepared_key, name=element.name,
+                         browser_action_dispatched=False, fresh_policy_selection_required=True)
         self.log("input_binding", action=action.model_dump())
 
     async def _loop(self):
@@ -2658,16 +2715,16 @@ class DynamicController(Controller):
                     self.log("stage_candidates_guarded", removed=original - len(candidates),
                              allowed_candidates=len(candidates), browser_action_dispatched=False)
             handoff = self.memory.feedback.get("planning_handoff")
-            if (not self.pending and handoff
+            if (not self.jev_led and not self.pending and handoff
                     and handoff["environment_id"] == self.memory.environment_id):
                 original = len(candidates)
                 candidates = [a for a in candidates if handoff_navigation(a, obs)]
                 self.log("handoff_candidates_guarded", removed=original - len(candidates),
                          checkpoint_key=handoff["action_key"], pending_preserved=False,
                          browser_action_dispatched=False)
-            if decision := self.stage_entry_decision(obs, candidates):
+            if not self.jev_led and (decision := self.stage_entry_decision(obs, candidates)):
                 return decision, candidates, limit
-            if decision := self.input_sequence_decision(obs, candidates):
+            if not self.jev_led and (decision := self.input_sequence_decision(obs, candidates)):
                 return decision, candidates, limit
             try:
                 decision = await self.observer.measure(
@@ -3466,6 +3523,46 @@ class DynamicController(Controller):
                  pending_preserved=True, action_confirmed=False, action_replayed=False)
         return changed
 
+    def release_unapplied_local_fill(self, obs):
+        """A bounded editable-text repair, never release an uncertain business commit."""
+        p = self.pending
+        if not self.jev_led or not p or p.get("dispatch_status") != "ok":
+            return False
+        action, target = p["action"], p.get("input_target", {})
+        if (action["operation"] != "fill" or target.get("role") != "textbox"
+                or action.get("bound_value") in {None, "", "[redacted]"}
+                or target.get("input_type") == "password"
+                or obs.loading or obs.challenge or obs.observation_id == action["observation_id"]
+                or obs.tab_id != p["before"]["tab_id"] or obs.url != p["before"]["url"]
+                or obs.dialogs != p["before_dialogs"]
+                or obs.document_id != p.get("before_document_id")
+                or time.monotonic() - self.pending_started < 1):
+            return False
+        matches = [e for e in obs.elements if e.id == target.get("id")
+                   and all(getattr(e, k) == target.get(k) for k in
+                           ("role", "name", "context", "grid_ref", "row_ref"))
+                   and e.enabled and e.editable and not e.read_only]
+        if len(matches) != 1 or matches[0].value != "" or target.get("value") != "":
+            return False  # Nonempty/normalized values or replaced controls are ambiguous.
+        field = digest([self.memory.environment_id, obs.tab_id, obs.url, obs.document_id,
+                        obs.dialogs, target.get("name"), target.get("grid_ref"), target.get("row_ref")])
+        if self.local_fill_failures.get(field, 0) >= 1:
+            return False
+        self.local_fill_failures[field] = 1
+        self.last_local_fill_failure = {
+            "name": target["name"], "attempted_value": action["bound_value"],
+            "visible_value": "", "scope": "local field population only; no business submission",
+            "observation_id": obs.observation_id, "repair_allowance": 1}
+        self.jev_inputs.pop(input_context_key(self.memory, obs, matches[0]), None)
+        self.input_retry = None
+        self.memory.pending_writes.pop(p["key"], None)
+        self.last_transition = {**p, "resolved": True, "outcome": "not_applied",
+                                "basis": "fresh_same_empty_textbox"}
+        self.pending = None
+        self.log("local_fill_not_applied", **self.last_local_fill_failure,
+                 action_confirmed=False, business_commit_released=False, action_replayed=False)
+        return True
+
     async def dynamic_loop(self):
         visits: dict[str, int] = {}
         previous_evidence = frozenset()
@@ -3478,6 +3575,9 @@ class DynamicController(Controller):
             self.observer.context["cycle"] = self.cycles
             obs = await self.observe_dynamic()
             self.refresh_stage_bindings(obs)
+            if self.jev_led and not self.pending:
+                self.fresh_scope_required = False
+                self.memory.feedback.pop("planning_handoff", None)
             candidate_limit = self.candidate_page_limits.get(planning_location(obs), self.budget.candidate_limit)
             if reason := self.blocked(obs):
                 return self.result("needs_attention", reason)
@@ -3570,6 +3670,8 @@ class DynamicController(Controller):
                 visits[signature] = 0
                 trigger = "no_progress"
             self.memory.feedback["execution_feedback"] = {
+                **({"last_local_fill_failure": self.last_local_fill_failure}
+                   if self.jev_led and self.last_local_fill_failure else {}),
                 "fresh_visible_grid_rows": [
                     {"grid_id": g.id, "name": g.name, "row_keys": [r.key for r in g.rows],
                      "scope": "current visible draft only; not saved business data"}
@@ -3587,9 +3689,31 @@ class DynamicController(Controller):
                                 "never replay an uncertain write or invent a field value."}}
                    if self.runtime_fields(obs) else {}),
             }
+            if self.jev_led:
+                self.memory.feedback["jev_loop"] = {
+                    "mode": "jev_led", "current_location": list(planning_location(obs)),
+                    "last_action": (self.pending or self.last_transition or {}).get("action"),
+                    "last_local_fill_failure": self.last_local_fill_failure,
+                    "ds_intervention": self.policy_abstention,
+                    "checkpoint_rule": "Local fill/click effects are not business persistence.",
+                    "prepared_inputs": [v for e in obs.elements
+                        if (v := self.jev_inputs.get(input_context_key(self.memory, obs, e)))],
+                }
             if (self.effective_actions - self.last_brain_action >= self.budget.brain_interval
                     and (not self.pending or not self.pending.get("stage_readback_reviewed"))):
                 trigger = trigger or "stage_budget"
+            if self.jev_led and trigger in {
+                    "stage_budget", "write_checkpoint", "navigation_checkpoint", "ui_checkpoint", "draft_row_added"}:
+                if runtime_step != "review":
+                    self.log("brain_checkpoint_skipped", reason=trigger, driver="jev_led",
+                             pending_preserved=bool(self.pending))
+                    trigger = ""
+                else:
+                    self.log("policy_abstained", reason="required_field_runtime_error",
+                             browser_action_dispatched=False, forced_by_controller=True)
+            if self.jev_led and trigger in {"no_progress", "stale_target_changed"}:
+                self.log("policy_abstained", reason=trigger, browser_action_dispatched=False,
+                         forced_by_controller=True, pending_preserved=bool(self.pending))
             if trigger:
                 if self.pending and trigger == "stage_budget":
                     self.pending["stage_readback_reviewed"] = True
@@ -3676,7 +3800,14 @@ class DynamicController(Controller):
                         continue
                     outcome = decision.outcome
                     guidance_changed = False
+                    if self.jev_led and outcome == "not_applied":
+                        if self.release_unapplied_local_fill(obs):
+                            continue
+                        outcome = "unknown"
                     if outcome in {None, "none", "unknown"}:
+                        if self.jev_led:
+                            self.log("policy_abstained", reason="uncertain_outcome",
+                                     browser_action_dispatched=False, pending_preserved=True)
                         self.log("brain_requested", reason="uncertain_outcome")
                         assessment = await self.review(obs, phase="uncertain_outcome")
                         guidance_changed = True
@@ -3713,6 +3844,10 @@ class DynamicController(Controller):
                         if self.pending["waits"] >= self.budget.readback_waits:
                             if not self.pending.get("readback_reviewed"):
                                 self.pending["readback_reviewed"] = True
+                                if self.jev_led:
+                                    self.log("policy_abstained", reason="readback_deadline",
+                                             browser_action_dispatched=False, forced_by_controller=True,
+                                             pending_preserved=True)
                                 self.log("brain_requested", reason="action_readback")
                                 assessment = await self.review(obs, phase="action_readback")
                                 if self.confirm_transition(assessment.last_outcome, obs,
@@ -3789,6 +3924,15 @@ class DynamicController(Controller):
             offset = 0
             if operation in {Operation.FILL, Operation.SELECT}:
                 await self.bind_input(selected, obs)
+                if self.jev_led and self.input_preparation_deferred:
+                    continue  # DS supplied data only; Jev must select again on a fresh observation.
             if reason := await self.perform(selected, obs):
+                if self.jev_led and reason == "write prerequisites unresolved; no write dispatched":
+                    self.policy_abstention = {"reason": "write_prerequisite_unresolved",
+                        "description": reason, "observation_id": obs.observation_id,
+                        "browser_action_dispatched": False, "pending_preserved": bool(self.pending)}
+                    self.log("policy_abstained", **self.policy_abstention, forced_by_controller=True)
+                    trigger = "jev_requested"
+                    continue
                 return self.result("needs_attention", reason)
         return self.result("budget_exhausted", "decision cycle budget reached")

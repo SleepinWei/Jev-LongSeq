@@ -111,6 +111,7 @@ async def test_scoped_link_field_allows_fresh_owned_options_but_not_another_rows
 async def test_out_of_stage_proposal_is_discarded_after_pending_ui_readback():
     from jev_browser.protocol import Budget, Receipt
     controller = await planned_controller([StageControl(element_ref='quick', operations=['click'])])
+    controller.policy.minimum_action_confidence = None  # Generic mock policy, not JevPolicy.
     before = form()
     controller.backend.execute.return_value = Receipt(action_id='quick', status='ok')
     opener = next(a for a in generate_dynamic(before, definition()) if a.element_ref == 'quick')
@@ -120,7 +121,8 @@ async def test_out_of_stage_proposal_is_discarded_after_pending_ui_readback():
     controller.backend.observe.return_value = after
     async def choose(task, obs, memory, contract, candidates):
         # The outcome head confirms an old UI click while the action head proposes a wrong fill.
-        return Decision(choice=next(a.id for a in candidates if a.element_ref == 'email'), outcome='confirmed')
+        return Decision(choice=next(a.id for a in candidates if a.element_ref == 'email'),
+                        confidence=.9, outcome='confirmed')
     controller.policy.choose.side_effect = choose
     controller.initial_phase = ''
     controller.budget = Budget(max_cycles=1)

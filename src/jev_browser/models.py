@@ -21,6 +21,7 @@ from .context_budget import (
     project_chat_request,
     project_request,
 )
+from .jev_loop import JEV_LED_SYSTEM, policy_context
 from .memory import Memory
 from .observability import ModelCallTimeout, ResourceLimit, payload_sizes
 from .protocol import Action, Contract, Decision, Observation, Plan, Task, digest, now
@@ -384,7 +385,9 @@ def dynamic_policy_options(obs, candidates):
                **({"target": a.element_ref} if a.element_ref else {"description": a.description}),
                **({"description": "Grid column header, not a row field input"}
                   if a.element_ref in headers else {}),
-               **({"value": a.bound_value} if a.bound_value is not None else {})}
+               **({"value": a.bound_value} if a.bound_value is not None else {}),
+               **({"requires_ds_value": True, "meaning": "NO ACTION: prepare value before fresh selection"}
+                  if a.description.startswith("NO ACTION: ask DS") else {})}
         for a in candidates
     }
 
@@ -443,8 +446,10 @@ class JevPolicy:
         options = {a.id: a.model_dump(mode="json") for a in candidates}
         if task.control_mode == "dynamic":
             options = dynamic_policy_options(obs, candidates)
+        led = getattr(memory, "policy_loop_mode", "checkpoint") == "jev_led"
         questions = {
-            "action": {"type": "choice", "instructions": instructions(task), "criteria": options}
+            "action": {"type": "choice", "instructions": instructions(task) + (JEV_LED_SYSTEM if led else ""),
+                       "criteria": options}
         }
         if task.control_mode == "dynamic" and memory.pending_writes:
             questions["outcome"] = {
@@ -470,7 +475,14 @@ class JevPolicy:
                     "unknown": "Result is ambiguous or unexpected; consult the LLM brain",
                 },
             }
-        payload = {"model": self.transport.model, "state": state(task, obs, memory, contract),
+            if led:
+                questions["outcome"]["criteria"]["not_applied"] = (
+                    "Ordinary text fill remains visibly blank/unchanged after settling; "
+                    "never use for Save/Submit, linked selection or ambiguous writes")
+        content = state(task, obs, memory, contract)
+        if led:
+            content = policy_context(memory, obs, content)
+        payload = {"model": self.transport.model, "state": content,
                    "questions": questions}
         if task.control_mode == "dynamic":
             observer = getattr(self.transport, "observer", None)

@@ -123,12 +123,13 @@ async def test_unproven_errors_retain_pending_and_consumed_save(case):
 
 async def test_loop_replans_from_visible_error_before_policy_can_close_and_confirm_save():
     agent, _ = await saved_attempt()
+    agent.policy.minimum_action_confidence = None  # Generic mock policy, not JevPolicy.
     agent.budget = Budget(max_cycles=1)
     agent.backend.observe.return_value = rejection()
     agent.feedback_model.review.return_value = Feedback(next_goal="Close the validation message",
         stage_controls=[StageControl(element_ref="close", operations=["click"])])
     agent.policy.choose.side_effect = lambda task, obs, memory, contract, candidates: Decision(
-        choice=next(a.id for a in candidates if a.element_ref == "close"), outcome="confirmed")
+        choice=next(a.id for a in candidates if a.element_ref == "close"), confidence=.9, outcome="confirmed")
     await agent.dynamic_loop()
     assert agent.feedback_model.review.await_args.kwargs["phase"] == "ui_checkpoint"
     assert any(e["kind"] == "form_validation_rejected" for e in agent.events)

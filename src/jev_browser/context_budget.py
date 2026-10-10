@@ -29,6 +29,7 @@ CONTROL_DEFAULTS = {
     "activation_key": None,
     "grid_ref": None, "row_ref": None,
     "option_owner": None, "popup_open": None, "popup_kind": None, "menu_owner": None,
+    "input_type": None, "placeholder": None, "validation_message": None,
 }
 
 

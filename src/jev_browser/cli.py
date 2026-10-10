@@ -19,6 +19,7 @@ from .controller import Controller
 from .dynamic import DynamicController, JsonFeedback
 from .evaluation import calibration, efficiency_profile, summarize
 from .fixture import RulePlanner, RulePolicy, catalog_html, demo_task
+from .jev_loop import JEV_LED_SYSTEM
 from .models import JevPolicy, JsonPlanner, JsonPolicy, ModelTransport, Pricing, instructions
 from .observability import Observer, save_analysis
 from .protocol import AgentTuning, Budget, RunResult, Task, digest, now
@@ -30,7 +31,8 @@ def resolve_tuning(args):
         args._tuning = (
             AgentTuning.model_validate_json(Path(args.tuning).read_text())
             if getattr(args, "tuning", None)
-            else AgentTuning(brain_interval=args.brain_interval)
+            else AgentTuning(brain_interval=args.brain_interval,
+                             feedback_mode=os.environ.get("JEV_FEEDBACK_MODE", "checkpoint"))
         )
     return args._tuning
 
@@ -178,7 +180,11 @@ async def run_trial(args, *, count=None, output=None):
         "platform": platform.platform(),
         "playwright": importlib.metadata.version("playwright"),
         "viewport": {"width": 1280, "height": 900},
-        "system_prompt_hash": digest(instructions(task)),
+        "system_prompt_hash": digest(instructions(task) + (
+            JEV_LED_SYSTEM if args.mode == "dynamic" and args.policy == "jev"
+            and tuning.feedback_mode == "jev_led" else "")),
+        "policy_context_profile": ("jev_led_v1" if args.mode == "dynamic"
+                                   and tuning.feedback_mode == "jev_led" else "checkpoint"),
         "benchmark": "offline-catalog-v1" if is_demo and not custom_goal else "user-task-ungraded",
         "fixture": {
             "records": count or args.records,

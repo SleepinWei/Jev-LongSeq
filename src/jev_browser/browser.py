@@ -163,6 +163,8 @@ SNAPSHOT = r"""selector => {
       enabled:!display && !el.matches(':disabled') && !el.closest('[aria-disabled="true"]'),
       editable, read_only:readOnly, required, selectable:tag === 'select' && !readOnly,
       checked: ['checkbox','radio'].includes(role) ? (el.checked ?? el.getAttribute('aria-checked') === 'true') : null,
+      input_type:tag === 'input' ? el.type : null,
+      placeholder:el.getAttribute('placeholder'), validation_message:el.validationMessage || null,
       context, href:tag === 'a' ? el.href : null,
       options:tag === 'select' ? [...el.options].filter(x => !x.disabled && !x.hidden).map(x => x.value) : []};
   }).filter(Boolean);

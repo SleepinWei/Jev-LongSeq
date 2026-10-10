@@ -62,6 +62,9 @@ class Element(Model):
     popup_open: bool | None = None
     popup_kind: Literal["menu"] | None = None
     menu_owner: str | None = None
+    input_type: str | None = None
+    placeholder: str | None = None
+    validation_message: str | None = None
 
 
 def is_search_textbox(element: Element) -> bool:
@@ -267,7 +270,7 @@ class Action(Model):
 class Decision(Model):
     choice: str
     confidence: float | None = Field(default=None, ge=0, le=1)
-    outcome: Literal["none", "confirmed", "pending", "unknown"] | None = None
+    outcome: Literal["none", "confirmed", "pending", "unknown", "not_applied"] | None = None
 
 
 class Receipt(Model):
@@ -299,6 +302,7 @@ class AgentTuning(Model):
     recent_evidence: int = Field(default=4, ge=1, le=8)
     excerpt_chars: int = Field(default=2400, ge=600, le=4000)
     prompt_variant: Literal["balanced", "compact", "coverage"] = "balanced"
+    feedback_mode: Literal["checkpoint", "jev_led"] = "checkpoint"
     search_readback_grace_s: float = Field(default=3.0, ge=0, le=10)
 
 

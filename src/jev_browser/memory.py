@@ -226,6 +226,7 @@ class Memory:
             pages = list(self.page_registry.values())[-24:]
             history = history_view(self.events)
             return {
+                **({"jev_loop": self.feedback["jev_loop"]} if self.feedback.get("jev_loop") else {}),
                 **({"unresolved_verifications": self.unresolved_verifications}
                    if self.unresolved_verifications else {}),
                 **({"verification_ledger": self.verification_ledger} if self.verification_ledger else {}),
